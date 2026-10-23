@@ -1,0 +1,5 @@
+<resources>
+    <!-- Базова тема для Android TV (без ActionBar) -->
+    <style name="Theme.TvPlayer" parent="@style/Theme.Leanback">
+    </style>
+</resources>
