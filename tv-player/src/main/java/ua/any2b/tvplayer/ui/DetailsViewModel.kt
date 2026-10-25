@@ -105,11 +105,35 @@ class DetailsViewModel(
             val results = anitubeClient.search(query)
             val matched = TitleMatcher.match(details.title, results)
             val best = matched.firstOrNull()
+            // AniTube often returns Ukrainian titles, so several search hits can have no
+            // text match against AniList's romaji/English names at all.
+            val needsYearSearch = results.size > 1 && (
+                best == null || best.score < 0.65 ||
+                    (matched.size > 1 && best.score - matched[1].score <= 0.1)
+                )
             when {
+                needsYearSearch -> {
+                    val refinedResults = details.seasonYear?.let { year ->
+                        try {
+                            anitubeClient.search("$query $year")
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (_: Exception) {
+                            emptyList()
+                        }
+                    }.orEmpty()
+
+                    if (refinedResults.size == 1) {
+                        loadVoices(refinedResults.single())
+                    } else {
+                        val candidates = (results + refinedResults).distinctBy { it.newsId }
+                        updateReady { it.copy(videoSource = VideoSourceState.Ambiguous(candidates)) }
+                    }
+                }
                 best == null -> updateReady {
                     it.copy(videoSource = VideoSourceState.Error("Відповідний реліз не знайдено", results))
                 }
-                best.score < 0.65 || (matched.size > 1 && best.score - matched[1].score <= 0.1) -> updateReady {
+                best.score < 0.65 -> updateReady {
                     it.copy(videoSource = VideoSourceState.Ambiguous(results))
                 }
                 else -> loadVoices(best.result)

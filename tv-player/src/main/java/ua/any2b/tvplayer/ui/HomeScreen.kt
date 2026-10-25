@@ -87,36 +87,41 @@ fun HomeScreen(
 ) {
     val context = LocalContext.current
 
-    Row(modifier = Modifier.fillMaxSize()) {
-        // Left Navigation Island (Острівець з меню)
-        NavigationIsland(
-            onSearchClick = {
-                val intent = Intent(context, ua.any2b.tvplayer.SearchActivity::class.java)
-                context.startActivity(intent)
-            },
-            onHistoryClick = {
-                val intent = Intent(context, ua.any2b.tvplayer.HistoryActivity::class.java)
-                context.startActivity(intent)
-            },
-            onFavoritesClick = {
-                android.widget.Toast.makeText(context, "Обране", android.widget.Toast.LENGTH_SHORT).show()
-            },
-            onSettingsClick = {
-                val intent = Intent(context, ua.any2b.tvplayer.SettingsActivity::class.java)
-                context.startActivity(intent)
-            }
-        )
+    when (state) {
+        HomeState.Loading -> {
+            AnimariumLoadingScreen()
+        }
+        is HomeState.Error, is HomeState.Ready -> {
+            Row(modifier = Modifier.fillMaxSize()) {
+                NavigationIsland(
+                    onSearchClick = {
+                        val intent = Intent(context, ua.any2b.tvplayer.SearchActivity::class.java)
+                        context.startActivity(intent)
+                    },
+                    onHistoryClick = {
+                        val intent = Intent(context, ua.any2b.tvplayer.HistoryActivity::class.java)
+                        context.startActivity(intent)
+                    },
+                    onFavoritesClick = {
+                        android.widget.Toast.makeText(context, "Обране", android.widget.Toast.LENGTH_SHORT).show()
+                    },
+                    onSettingsClick = {
+                        val intent = Intent(context, ua.any2b.tvplayer.SettingsActivity::class.java)
+                        context.startActivity(intent)
+                    }
+                )
 
-        // Main Catalog Content (shifted right)
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxHeight()
-        ) {
-            when (state) {
-                HomeState.Loading -> AnimariumLoadingScreen()
-                is HomeState.Error -> ErrorBlock(state.message, onRetry)
-                is HomeState.Ready -> Rows(state.rows, onOpen)
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                ) {
+                    when (state) {
+                        is HomeState.Error -> ErrorBlock(state.message, onRetry)
+                        is HomeState.Ready -> Rows(state.rows, onOpen)
+                        else -> {}
+                    }
+                }
             }
         }
     }
@@ -183,8 +188,8 @@ private fun AnimariumLoadingScreen() {
         contentAlignment = Alignment.Center
     ) {
         AsyncImage(
-            model = R.drawable.standby,
-            contentDescription = "Standby",
+            model = R.drawable.animarium_splash,
+            contentDescription = "Splash",
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize()
         )
