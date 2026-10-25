@@ -115,6 +115,13 @@ fun SearchScreen(
                 )
             }
 
+            Text(
+                text = "Поки що пошук працює лише за англійською назвою або ромадзі. Кирилиця не підтримується.",
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = IbmPlexMono,
+                color = Color(0xFF94A3B8)
+            )
+
             // Results as Title Row
             if (isLoading) {
                 Box(

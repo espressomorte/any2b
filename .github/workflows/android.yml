@@ -1,0 +1,51 @@
+name: Android APK
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
+          log-accepted-android-sdk-licenses: false
+
+      - name: Install Android packages
+        run: sdkmanager "platforms;android-35" "build-tools;34.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Test and build APK
+        shell: bash
+        run: |
+          chmod +x gradlew
+          ./gradlew \
+            "-Dorg.gradle.java.home=$JAVA_HOME" \
+            --no-daemon --max-workers=2 \
+            :core:test :tv-player:assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: any2b-debug
+          path: tv-player/build/outputs/apk/debug/tv-player-debug.apk
+          if-no-files-found: error
+          retention-days: 14

@@ -18,6 +18,8 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
@@ -84,92 +86,64 @@ fun HomeScreen(
     state: HomeState,
     onRetry: () -> Unit,
     onOpen: (AnimeCard) -> Unit,
+    onMore: (HomeRow) -> Unit,
 ) {
     val context = LocalContext.current
 
-    Row(modifier = Modifier.fillMaxSize()) {
-        // Left Navigation Island (Острівець з меню)
-        NavigationIsland(
-            onSearchClick = {
-                val intent = Intent(context, ua.any2b.tvplayer.SearchActivity::class.java)
-                context.startActivity(intent)
-            },
-            onHistoryClick = {
-                val intent = Intent(context, ua.any2b.tvplayer.HistoryActivity::class.java)
-                context.startActivity(intent)
-            },
-            onFavoritesClick = {
-                android.widget.Toast.makeText(context, "Обране", android.widget.Toast.LENGTH_SHORT).show()
-            },
-            onSettingsClick = {
-                val intent = Intent(context, ua.any2b.tvplayer.SettingsActivity::class.java)
-                context.startActivity(intent)
+    when (state) {
+        HomeState.Loading -> AnimariumLoadingScreen()
+        is HomeState.Error, is HomeState.Ready -> {
+            Column(modifier = Modifier.fillMaxSize().background(Color(0xFF0A0B0E))) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 20.dp, end = 48.dp),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    HomeActionButton(FaIcons.SEARCH, "Пошук") {
+                        val intent = Intent(context, ua.any2b.tvplayer.SearchActivity::class.java)
+                        context.startActivity(intent)
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    HomeActionButton(FaIcons.COG, "Налаштування") {
+                        val intent = Intent(context, ua.any2b.tvplayer.SettingsActivity::class.java)
+                        context.startActivity(intent)
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                ) {
+                    when (state) {
+                        is HomeState.Error -> ErrorBlock(state.message, onRetry)
+                        is HomeState.Ready -> Rows(state.rows, state.catalogError, onRetry, onOpen, onMore)
+                        else -> {}
+                    }
+                }
             }
-        )
-
-        // Main Catalog Content (shifted right)
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxHeight()
-        ) {
-            when (state) {
-                HomeState.Loading -> AnimariumLoadingScreen()
-                is HomeState.Error -> ErrorBlock(state.message, onRetry)
-                is HomeState.Ready -> Rows(state.rows, onOpen)
-            }
-        }
-    }
-}
-
-@Composable
-private fun NavigationIsland(
-    onSearchClick: () -> Unit,
-    onHistoryClick: () -> Unit,
-    onFavoritesClick: () -> Unit,
-    onSettingsClick: () -> Unit,
-) {
-    Box(
-        modifier = Modifier
-            .width(88.dp)
-            .fillMaxHeight()
-            .padding(vertical = 24.dp, horizontal = 12.dp)
-            .clip(RoundedCornerShape(24.dp))
-            .background(Color(0xFF15171E).copy(alpha = 0.85f))
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(vertical = 24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterVertically)
-        ) {
-            NavIconItem(icon = "🔍", onClick = onSearchClick)
-            NavIconItem(icon = "🕒", onClick = onHistoryClick)
-            NavIconItem(icon = "❤️", onClick = onFavoritesClick)
-            NavIconItem(icon = "⚙️", onClick = onSettingsClick)
         }
     }
 }
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun NavIconItem(icon: String, onClick: () -> Unit) {
+private fun HomeActionButton(icon: String, label: String, onClick: () -> Unit) {
     var isFocused by remember { mutableStateOf(false) }
 
     Surface(
         onClick = onClick,
         modifier = Modifier
-            .size(56.dp)
+            .size(48.dp)
+            .semantics { contentDescription = label }
             .onFocusChanged { isFocused = it.isFocused },
-        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(16.dp)),
+        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp)),
         colors = ClickableSurfaceDefaults.colors(
-            containerColor = if (isFocused) Color(0xFF4F378B).copy(alpha = 0.6f) else Color.Transparent,
+            containerColor = if (isFocused) Color(0xFF4F378B).copy(alpha = 0.6f) else Color(0xFF20232D),
             focusedContainerColor = Color(0xFF4F378B).copy(alpha = 0.8f)
         )
     ) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(text = icon, fontSize = 22.sp, fontFamily = IbmPlexMono)
+            FontAwesomeIcon(icon)
         }
     }
 }
@@ -183,8 +157,8 @@ private fun AnimariumLoadingScreen() {
         contentAlignment = Alignment.Center
     ) {
         AsyncImage(
-            model = R.drawable.standby,
-            contentDescription = "Standby",
+            model = R.drawable.animarium_splash,
+            contentDescription = "Splash",
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize()
         )
@@ -192,8 +166,14 @@ private fun AnimariumLoadingScreen() {
 }
 
 @Composable
-private fun Rows(rows: List<HomeRow>, onOpen: (AnimeCard) -> Unit) {
-    val firstCardId = rows.firstOrNull()?.items?.firstOrNull()?.id
+private fun Rows(
+    rows: List<HomeRow>,
+    catalogError: String?,
+    onRetry: () -> Unit,
+    onOpen: (AnimeCard) -> Unit,
+    onMore: (HomeRow) -> Unit,
+) {
+    val firstCardId = rows.firstNotNullOfOrNull { it.items.firstOrNull()?.id }
     val focusRequester = remember { FocusRequester() }
 
     LaunchedEffect(rows) {
@@ -204,9 +184,17 @@ private fun Rows(rows: List<HomeRow>, onOpen: (AnimeCard) -> Unit) {
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(top = 32.dp, bottom = 48.dp, start = 24.dp, end = 48.dp),
+        contentPadding = PaddingValues(top = 24.dp, bottom = 48.dp, start = 36.dp, end = 48.dp),
         verticalArrangement = Arrangement.spacedBy(32.dp),
     ) {
+        if (catalogError != null) {
+            item(key = "catalog_error") {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(catalogError, color = Color(0xFFFFB4AB))
+                    Button(onClick = onRetry) { Text("Повторити завантаження каталогу") }
+                }
+            }
+        }
         items(rows, key = { it.id }) { row ->
             Column {
                 Text(
@@ -219,13 +207,16 @@ private fun Rows(rows: List<HomeRow>, onOpen: (AnimeCard) -> Unit) {
                     contentPadding = PaddingValues(horizontal = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(20.dp),
                 ) {
-                    items(row.items, key = { it.id }) { card ->
+                    items(row.items.take(13), key = { it.id }) { card ->
                         val isFirst = card.id == firstCardId
                         PosterCard(
                             item = card,
                             modifier = if (isFirst) Modifier.width(160.dp).focusRequester(focusRequester) else Modifier.width(160.dp),
                             onClick = { onOpen(card) }
                         )
+                    }
+                    item(key = "more_${row.id}") {
+                        MoreCard(onClick = { onMore(row) })
                     }
                 }
             }
@@ -235,7 +226,29 @@ private fun Rows(rows: List<HomeRow>, onOpen: (AnimeCard) -> Unit) {
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun PosterCard(item: AnimeCard, modifier: Modifier = Modifier, onClick: () -> Unit) {
+fun MoreCard(onClick: () -> Unit) {
+    Column(modifier = Modifier.width(160.dp)) {
+        Card(onClick = onClick, modifier = Modifier.fillMaxWidth().aspectRatio(2f / 3f)) {
+            Box(
+                modifier = Modifier.fillMaxSize().background(Color(0xFF20232D)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("Більше", color = Color(0xFFD0BCFF), fontFamily = IbmPlexMono, fontWeight = FontWeight.Bold)
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text("Усі тайтли", color = Color(0xFF94A3B8), fontFamily = IbmPlexMono)
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+fun PosterCard(
+    item: AnimeCard,
+    modifier: Modifier = Modifier,
+    showRelatedBadge: Boolean = false,
+    onClick: () -> Unit,
+) {
     var isFocused by remember { mutableStateOf(false) }
     val textColor = if (isFocused) Color(0xFFD0BCFF) else Color(0xFF94A3B8)
     val scale = if (isFocused) 1.05f else 1.0f
@@ -251,12 +264,24 @@ private fun PosterCard(item: AnimeCard, modifier: Modifier = Modifier, onClick: 
                 .fillMaxWidth()
                 .aspectRatio(2f / 3f),
         ) {
-            AsyncImage(
-                model = item.cover,
-                contentDescription = item.title.display,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
+            Box(Modifier.fillMaxSize()) {
+                AsyncImage(
+                    model = item.cover,
+                    contentDescription = item.title.display,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                if (showRelatedBadge) {
+                    Box(
+                        modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
+                            .clip(RoundedCornerShape(8.dp)).background(Color(0xDD15171E))
+                            .padding(7.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        FontAwesomeIcon(FaIcons.LINK, color = Color(0xFFD0BCFF), size = 13.sp)
+                    }
+                }
+            }
         }
         Spacer(Modifier.height(8.dp))
         Text(

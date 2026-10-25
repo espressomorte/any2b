@@ -13,8 +13,9 @@
 
     <application
         android:allowBackup="true"
-        android:banner="@drawable/app_banner"
-        android:icon="@drawable/ic_launcher"
+        android:banner="@drawable/animarium_launcher_banner"
+        android:icon="@drawable/animarium_icon"
+        android:roundIcon="@drawable/animarium_icon"
         android:label="@string/app_name"
         android:theme="@style/Theme.TvPlayer">
 
@@ -33,6 +34,10 @@
         <activity
             android:name=".DetailsActivity"
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
+            android:exported="false" />
+
+        <activity
+            android:name=".CategoryActivity"
             android:exported="false" />
 
         <!-- Історія переглядів -->

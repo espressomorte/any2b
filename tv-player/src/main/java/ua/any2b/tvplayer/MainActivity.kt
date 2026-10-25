@@ -1,7 +1,7 @@
 package ua.any2b.tvplayer
 
 import android.os.Bundle
-import android.widget.Toast
+import android.content.Intent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
@@ -23,13 +23,24 @@ class MainActivity : ComponentActivity() {
                     state = state,
                     onRetry = viewModel::load,
                     onOpen = { card ->
-                        val intent = android.content.Intent(this, DetailsActivity::class.java).apply {
+                        val intent = Intent(this, DetailsActivity::class.java).apply {
                             putExtra("ANIME_ID", card.id)
                         }
                         startActivity(intent)
                     },
+                    onMore = { row ->
+                        startActivity(Intent(this, CategoryActivity::class.java).apply {
+                            putExtra(CategoryActivity.EXTRA_CATEGORY_ID, row.id)
+                            putExtra(CategoryActivity.EXTRA_CATEGORY_TITLE, row.title)
+                        })
+                    },
                 )
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        viewModel.refreshLocalRows()
     }
 }
