@@ -39,23 +39,38 @@ jobs:
       - name: Install Android packages
         run: sdkmanager "platforms;android-35" "build-tools;34.0.0"
 
+      - name: Restore release keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/keystore"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/keystore/release.jks"
+          ls -l "$RUNNER_TEMP/keystore/release.jks"
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Test and build APK
+      - name: Build release APK
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/keystore/release.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         shell: bash
         run: |
           chmod +x gradlew
           ./gradlew \
             "-Dorg.gradle.java.home=$JAVA_HOME" \
             --no-daemon --max-workers=2 \
-            :core:test :tv-player:assembleDebug
+            :core:test :tv-player:assembleRelease
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: any2b-debug
-          path: tv-player/build/outputs/apk/debug/tv-player-debug.apk
+          name: any2b-release
+          path: tv-player/build/outputs/apk/release/tv-player-release.apk
           if-no-files-found: error
           retention-days: 14
 
@@ -68,5 +83,5 @@ jobs:
         run: |
           set -euo pipefail
           gh release upload "$RELEASE_TAG" \
-            tv-player/build/outputs/apk/debug/tv-player-debug.apk \
+            tv-player/build/outputs/apk/release/tv-player-release.apk \
             --clobber
