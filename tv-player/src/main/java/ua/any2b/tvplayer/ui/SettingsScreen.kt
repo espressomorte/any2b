@@ -1,8 +1,11 @@
 package ua.any2b.tvplayer.ui
 
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -13,12 +16,20 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
+import ua.any2b.core.update.AppRelease
+import ua.any2b.tvplayer.UpdateState
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     autoPlayNext: Boolean,
+    currentVersion: String,
+    updateState: UpdateState,
     onAutoPlayChanged: (Boolean) -> Unit,
+    onCheckUpdates: () -> Unit,
+    onDownloadUpdate: (AppRelease) -> Unit,
+    onInstallUpdate: (Uri) -> Unit,
+    onOpenRelease: (String) -> Unit,
     onBack: () -> Unit,
 ) {
     Box(
@@ -28,7 +39,7 @@ fun SettingsScreen(
             .padding(32.dp)
     ) {
         Column(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
             Text(
@@ -100,6 +111,59 @@ fun SettingsScreen(
                                 Text("✓", color = Color(0xFF21005D), fontWeight = FontWeight.Bold, fontSize = 18.sp)
                             }
                         }
+                    }
+                }
+            }
+
+            Column(
+                modifier = Modifier.fillMaxWidth()
+                    .background(Color(0xFF15171E), RoundedCornerShape(16.dp))
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    "Оновлення",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontFamily = IbmPlexMono,
+                    color = Color(0xFFD0BCFF),
+                )
+                Text("Поточна версія: $currentVersion", color = Color(0xFF94A3B8))
+                when (updateState) {
+                    UpdateState.Idle -> Button(onClick = onCheckUpdates) { Text("Перевірити оновлення") }
+                    UpdateState.Checking -> Text("Перевіряємо GitHub Releases...", color = Color(0xFF94A3B8))
+                    UpdateState.UpToDate -> {
+                        Text("Встановлено останню версію", color = Color.White)
+                        Button(onClick = onCheckUpdates) { Text("Перевірити ще раз") }
+                    }
+                    UpdateState.NoReleases -> {
+                        Text("Опублікованих релізів поки немає", color = Color.White)
+                        Button(onClick = onCheckUpdates) { Text("Перевірити ще раз") }
+                    }
+                    is UpdateState.Available -> {
+                        Text("Доступна нова версія: ${updateState.release.tag}", color = Color.White)
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Button(onClick = { onDownloadUpdate(updateState.release) }) { Text("Оновити") }
+                            Button(onClick = { onOpenRelease(updateState.release.pageUrl) }) { Text("Сторінка релізу") }
+                        }
+                    }
+                    is UpdateState.MissingApk -> {
+                        Text("Є реліз ${updateState.release.tag}, але APK ще не додано до Assets", color = Color.White)
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Button(onClick = { onOpenRelease(updateState.release.pageUrl) }) { Text("Сторінка релізу") }
+                            Button(onClick = onCheckUpdates) { Text("Перевірити ще раз") }
+                        }
+                    }
+                    is UpdateState.Downloading -> Text(
+                        "Завантаження ${updateState.release.tag}: ${updateState.progress?.let { "$it%" } ?: "очікування"}",
+                        color = Color.White,
+                    )
+                    is UpdateState.ReadyToInstall -> {
+                        Text("Версію ${updateState.release.tag} завантажено", color = Color.White)
+                        Button(onClick = { onInstallUpdate(updateState.uri) }) { Text("Встановити") }
+                    }
+                    is UpdateState.Error -> {
+                        Text(updateState.message, color = Color(0xFFFFB4AB))
+                        Button(onClick = onCheckUpdates) { Text("Повторити перевірку") }
                     }
                 }
             }

@@ -8,12 +8,20 @@ android {
     namespace = "ua.any2b.tvplayer"
     compileSdk = 35
 
+    val githubTag = providers.environmentVariable("GITHUB_REF_TYPE").orNull
+        .takeIf { it == "tag" }
+        ?.let { providers.environmentVariable("GITHUB_REF_NAME").orNull }
+
     defaultConfig {
         applicationId = "ua.any2b.tvplayer"
         minSdk = 21          // Android 5 — покриває всі Android TV
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = providers.gradleProperty("appVersionCode").orNull?.toIntOrNull()
+            ?: githubTag?.let { providers.environmentVariable("GITHUB_RUN_NUMBER").orNull?.toIntOrNull() }
+            ?: 1
+        versionName = providers.gradleProperty("appVersionName").orNull
+            ?: githubTag?.removePrefix("v")
+            ?: "0.1.0-alpha.1"
     }
 
     buildTypes {
