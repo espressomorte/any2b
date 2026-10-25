@@ -15,21 +15,25 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.tv.material3.*
 import androidx.compose.ui.tooling.preview.Preview
 import coil.compose.AsyncImage
 import ua.any2b.core.anilist.AnimeDetails
 import ua.any2b.core.anilist.Title
 import ua.any2b.core.anitube.AnitubeEpisode
+import ua.any2b.core.anitube.AnitubeSearchResult
 import ua.any2b.core.anitube.AnitubeVoice
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun DetailsScreen(
     state: DetailsState,
     onRetry: () -> Unit,
+    onRetryVideoSource: () -> Unit,
+    onSelectRelease: (AnitubeSearchResult) -> Unit,
     onSelectVoice: (Int) -> Unit,
     onSelectEpisode: (Int) -> Unit,
     onWatchClick: () -> Unit,
@@ -58,6 +62,12 @@ fun DetailsScreen(
                 }
             }
             is DetailsState.Ready -> {
+                var showReleaseDialog by remember(state.details.id) { mutableStateOf(false) }
+                val releaseCandidates = when (val source = state.videoSource) {
+                    is VideoSourceState.Ambiguous -> source.candidates
+                    is VideoSourceState.Error -> source.candidates
+                    else -> emptyList()
+                }
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
@@ -125,21 +135,24 @@ fun DetailsScreen(
                                     }
                                 }
 
-                                val buttonText = when {
-                                    state.resolvingStream -> "Підготовка..."
-                                    state.historyEntry != null -> "Продовжити (Серія ${state.selectedEpisodeIndex + 1})"
-                                    else -> "Дивитися"
-                                }
-
-                                Button(
-                                    onClick = onWatchClick,
-                                    colors = ButtonDefaults.colors(
-                                        containerColor = Color(0xFFD0BCFF),
-                                        contentColor = Color(0xFF21005D)
-                                    ),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Text(buttonText, fontWeight = FontWeight.Bold)
+                                if (state.videoSource is VideoSourceState.Success) {
+                                    val buttonText = when {
+                                        state.resolvingStream -> "Підготовка..."
+                                        state.historyEntry != null -> "Продовжити (Серія ${state.selectedEpisodeIndex + 1})"
+                                        else -> "Дивитися"
+                                    }
+                                    Button(
+                                        onClick = onWatchClick,
+                                        enabled = !state.resolvingStream && state.voices.getOrNull(state.selectedVoiceIndex)
+                                            ?.episodes?.getOrNull(state.selectedEpisodeIndex) != null,
+                                        colors = ButtonDefaults.colors(
+                                            containerColor = Color(0xFFD0BCFF),
+                                            contentColor = Color(0xFF21005D)
+                                        ),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(buttonText, fontWeight = FontWeight.Bold)
+                                    }
                                 }
 
                                 Row(
@@ -214,11 +227,12 @@ fun DetailsScreen(
 
                             // Genres
                             if (state.details.genres.isNotEmpty()) {
-                                Row(
+                                FlowRow(
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    state.details.genres.take(5).forEach { genre ->
+                                    state.details.genres.forEach { genre ->
                                         Box(
                                             modifier = Modifier
                                                 .clip(RoundedCornerShape(8.dp))
@@ -232,13 +246,13 @@ fun DetailsScreen(
                             }
 
                             // Synopsis
-                            val cleanDesc = state.details.description?.replace(Regex("<[^>]+>"), "") ?: "Опис відсутній."
+                            val cleanDesc = state.details.description
+                                ?.replace(Regex("<[^>]+>"), "")
+                                ?.takeIf { it.isNotBlank() } ?: "Опис відсутній."
                             Text(
                                 text = cleanDesc,
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = Color(0xFFB0B3C1),
-                                maxLines = 6,
-                                overflow = TextOverflow.Ellipsis
                             )
                             // Footer Panel: Audio Studios & Episodes
                             Column(
@@ -247,43 +261,67 @@ fun DetailsScreen(
                                     .padding(top = 8.dp),
                                 verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                // Audio Studios / Voices Horizontal Chips (Smaller size)
-                                if (state.isLoadingVoices) {
-                                    Text("Завантаження озвучень з AniTube...", color = Color.Gray, fontSize = 13.sp)
-                                } else if (state.voices.isNotEmpty()) {
-                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                        Text("Озвучення / Студії:", color = Color(0xFFCCC2DC), fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                                        LazyRow(
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                        ) {
-                                            itemsIndexed(state.voices) { index, voice ->
-                                                val isSelected = index == state.selectedVoiceIndex
-                                                val bg = if (isSelected) Color(0xFFA855F7) else Color(0xFF20232D)
-                                                val textColor = if (isSelected) Color.White else Color(0xFF94A3B8)
-
+                                when (val source = state.videoSource) {
+                                    VideoSourceState.Loading -> Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                    ) {
+                                        Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                                            listOf(92.dp, 66.dp).forEach { width ->
                                                 Box(
-                                                    modifier = Modifier
-                                                        .clip(RoundedCornerShape(16.dp))
-                                                        .background(bg)
-                                                        .clickable { onSelectVoice(index) }
-                                                        .padding(horizontal = 12.dp, vertical = 6.dp)
-                                                ) {
-                                                    Text(
-                                                        text = voice.name.ifBlank { voice.category },
-                                                        color = textColor,
-                                                        fontSize = 11.sp,
-                                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                                                    )
+                                                    modifier = Modifier.width(width).height(7.dp)
+                                                        .clip(RoundedCornerShape(4.dp))
+                                                        .background(Color(0xFF45405A))
+                                                )
+                                            }
+                                        }
+                                        Text("Шукаємо озвучки на AniTube...", color = Color(0xFFCCC2DC), fontSize = 13.sp)
+                                    }
+                                    is VideoSourceState.Ambiguous -> VideoSourceNotice(
+                                        message = "Знайдено кілька схожих релізів, виберіть потрібний",
+                                        action = "Вибрати реліз",
+                                        onClick = { showReleaseDialog = true }
+                                    )
+                                    is VideoSourceState.Error -> VideoSourceNotice(
+                                        message = "Не вдалося завантажити відео з AniTube",
+                                        detail = source.message,
+                                        action = if (source.candidates.isNotEmpty()) "Вибрати вручну" else "Повторити спробу",
+                                        onClick = if (source.candidates.isNotEmpty()) {
+                                            { showReleaseDialog = true }
+                                        } else onRetryVideoSource
+                                    )
+                                    is VideoSourceState.Success -> {
+                                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                            Text("Озвучення / Студії:", color = Color(0xFFCCC2DC), fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                itemsIndexed(source.voices) { index, voice ->
+                                                    val isSelected = index == state.selectedVoiceIndex
+                                                    val bg = if (isSelected) Color(0xFFA855F7) else Color(0xFF20232D)
+                                                    val textColor = if (isSelected) Color.White else Color(0xFF94A3B8)
+
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .clip(RoundedCornerShape(16.dp))
+                                                            .background(bg)
+                                                            .clickable { onSelectVoice(index) }
+                                                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                                                    ) {
+                                                        Text(
+                                                            text = voice.name.ifBlank { voice.category },
+                                                            color = textColor,
+                                                            fontSize = 11.sp,
+                                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                                        )
+                                                    }
                                                 }
                                             }
                                         }
-                        }
-                    }
-
-
-
+                                    }
+                                }
                                 // Episodes for selected voice (~25% smaller chips)
-                                val currentVoice = state.voices.getOrNull(state.selectedVoiceIndex)
+                                val currentVoice = if (state.videoSource is VideoSourceState.Success) {
+                                    state.voices.getOrNull(state.selectedVoiceIndex)
+                                } else null
                                 val watchedEpIndex = state.historyEntry?.episodeIndex ?: -1
                                 if (currentVoice != null && currentVoice.episodes.isNotEmpty()) {
                                     Spacer(Modifier.height(4.dp))
@@ -327,7 +365,70 @@ fun DetailsScreen(
                         }
                     }
                 }
+                if (showReleaseDialog && releaseCandidates.isNotEmpty()) {
+                    ReleaseSelectionDialog(
+                        candidates = releaseCandidates,
+                        onDismiss = { showReleaseDialog = false },
+                        onSelect = { candidate ->
+                            showReleaseDialog = false
+                            onSelectRelease(candidate)
+                        }
+                    )
+                }
             }
+        }
+    }
+}
+
+@Composable
+private fun VideoSourceNotice(
+    message: String,
+    action: String,
+    onClick: () -> Unit,
+    detail: String? = null,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0xFF20232D))
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Text(message, color = Color.White, style = MaterialTheme.typography.titleSmall)
+        if (!detail.isNullOrBlank()) Text(detail, color = Color(0xFFB0B3C1), fontSize = 12.sp)
+        Button(onClick = onClick) { Text(action) }
+    }
+}
+
+@Composable
+private fun ReleaseSelectionDialog(
+    candidates: List<AnitubeSearchResult>,
+    onDismiss: () -> Unit,
+    onSelect: (AnitubeSearchResult) -> Unit,
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .width(620.dp)
+                .heightIn(max = 600.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .background(Color(0xFF15171E))
+                .padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Text("Виберіть реліз AniTube", color = Color.White, style = MaterialTheme.typography.titleLarge)
+            Column(
+                modifier = Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                candidates.forEach { candidate ->
+                    Button(onClick = { onSelect(candidate) }, modifier = Modifier.fillMaxWidth()) {
+                        Text(candidate.title, maxLines = 2)
+                    }
+                }
+            }
+            OutlinedButton(onClick = onDismiss) { Text("Скасувати") }
         }
     }
 }
@@ -454,11 +555,13 @@ private fun DetailsScreenPreview() {
         DetailsScreen(
             state = DetailsState.Ready(
                 details = sampleAnimeDetails,
-                voices = sampleVoices,
+                videoSource = VideoSourceState.Success(sampleVoices),
                 selectedVoiceIndex = 0,
                 selectedEpisodeIndex = 0
             ),
             onRetry = {},
+            onRetryVideoSource = {},
+            onSelectRelease = {},
             onSelectVoice = {},
             onSelectEpisode = {},
             onWatchClick = {},

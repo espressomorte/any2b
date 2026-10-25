@@ -36,6 +36,8 @@ class DetailsActivity : ComponentActivity() {
                 DetailsScreen(
                     state = state,
                     onRetry = viewModel::loadDetails,
+                    onRetryVideoSource = viewModel::retryVideoSource,
+                    onSelectRelease = viewModel::selectRelease,
                     onSelectVoice = viewModel::selectVoice,
                     onSelectEpisode = viewModel::selectEpisode,
                     onWatchClick = {
