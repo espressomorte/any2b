@@ -38,7 +38,12 @@ data class AnimeDetails(
     val seasonYear: Int?,
     val genres: List<String>,
     val studios: List<String>,
+    val related: List<AnimeCard> = emptyList(),
+    val recommendations: List<AnimeCard> = emptyList(),
+    val recommendationsHasMore: Boolean = false,
 )
+
+data class AnimeCardPage(val items: List<AnimeCard>, val hasNextPage: Boolean)
 
 /** Один горизонтальний ряд на головній. */
 data class HomeRow(

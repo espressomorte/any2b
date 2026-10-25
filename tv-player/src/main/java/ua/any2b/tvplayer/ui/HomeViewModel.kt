@@ -1,6 +1,7 @@
 package ua.any2b.tvplayer.ui
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -8,16 +9,22 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import ua.any2b.core.anilist.AniListClient
 import ua.any2b.core.anilist.HomeRow
+import ua.any2b.core.anilist.AnimeCard
+import ua.any2b.core.anilist.Title
+import ua.any2b.tvplayer.data.FavoritesManager
+import ua.any2b.tvplayer.data.WatchHistoryManager
 
 sealed interface HomeState {
     data object Loading : HomeState
-    data class Ready(val rows: List<HomeRow>) : HomeState
+    data class Ready(val rows: List<HomeRow>, val catalogError: String? = null) : HomeState
     data class Error(val message: String) : HomeState
 }
 
-class HomeViewModel(
-    private val client: AniListClient = AniListClient(),
-) : ViewModel() {
+class HomeViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val client = AniListClient()
+    private val favoritesManager = FavoritesManager(application)
+    private val historyManager = WatchHistoryManager(application)
 
     private val _state = MutableStateFlow<HomeState>(HomeState.Loading)
     val state: StateFlow<HomeState> = _state
@@ -30,12 +37,38 @@ class HomeViewModel(
         _state.value = HomeState.Loading
         viewModelScope.launch {
             _state.value = try {
-                HomeState.Ready(client.homeRows())
+                HomeState.Ready(rowsWithLocal(client.homeRows(perRow = 13)))
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                HomeState.Error(e.message ?: "Не вдалося завантажити каталог")
+                HomeState.Ready(rowsWithLocal(emptyList()), e.message ?: "Не вдалося завантажити каталог")
             }
         }
+    }
+
+    fun refreshLocalRows() {
+        val current = _state.value as? HomeState.Ready ?: return
+        val catalogRows = current.rows.filterNot { it.id == "favorites" || it.id == "history" }
+        _state.value = current.copy(rows = rowsWithLocal(catalogRows))
+    }
+
+    private fun rowsWithLocal(catalogRows: List<HomeRow>): List<HomeRow> {
+        val history = historyManager.getHistory().map { entry ->
+            AnimeCard(
+                id = entry.animeId,
+                title = Title(entry.romaji, entry.english, entry.native),
+                cover = entry.cover,
+                score = entry.score,
+                episodes = entry.episodes,
+                format = entry.format,
+                status = entry.status,
+                seasonYear = entry.seasonYear,
+                nextEpisode = null,
+            )
+        }
+        return (listOf(HomeRow("history", "Історія переглядів", history)) +
+            catalogRows +
+            HomeRow("favorites", "Обране", favoritesManager.getFavorites()))
+            .filter { it.items.isNotEmpty() }
     }
 }

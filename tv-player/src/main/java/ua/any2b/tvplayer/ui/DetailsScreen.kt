@@ -7,14 +7,25 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -22,6 +33,7 @@ import androidx.tv.material3.*
 import androidx.compose.ui.tooling.preview.Preview
 import coil.compose.AsyncImage
 import ua.any2b.core.anilist.AnimeDetails
+import ua.any2b.core.anilist.AnimeCard
 import ua.any2b.core.anilist.Title
 import ua.any2b.core.anitube.AnitubeEpisode
 import ua.any2b.core.anitube.AnitubeSearchResult
@@ -34,10 +46,16 @@ fun DetailsScreen(
     onRetry: () -> Unit,
     onRetryVideoSource: () -> Unit,
     onSelectRelease: (AnitubeSearchResult) -> Unit,
+    onManualSearch: (String) -> Unit,
+    onResetManualSearch: () -> Unit,
+    onToggleFavorite: () -> Unit,
     onSelectVoice: (Int) -> Unit,
     onSelectEpisode: (Int) -> Unit,
     onWatchClick: () -> Unit,
     onBackClick: () -> Unit,
+    onOpenRelated: (AnimeCard) -> Unit,
+    onMoreRelated: () -> Unit,
+    onMoreRecommendations: () -> Unit,
 ) {
     Box(
         modifier = Modifier
@@ -63,6 +81,8 @@ fun DetailsScreen(
             }
             is DetailsState.Ready -> {
                 var showReleaseDialog by remember(state.details.id) { mutableStateOf(false) }
+                var showManualDialog by remember(state.details.id) { mutableStateOf(false) }
+                var isDescriptionExpanded by rememberSaveable(state.details.id) { mutableStateOf(false) }
                 val releaseCandidates = when (val source = state.videoSource) {
                     is VideoSourceState.Ambiguous -> source.candidates
                     is VideoSourceState.Error -> source.candidates
@@ -160,14 +180,14 @@ fun DetailsScreen(
                                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
                                     OutlinedButton(
-                                        onClick = { /* TODO: Favorite */ },
+                                        onClick = onToggleFavorite,
                                         colors = OutlinedButtonDefaults.colors(
                                             containerColor = Color(0xFF15171E),
                                             contentColor = Color(0xFFD0BCFF)
                                         ),
                                         modifier = Modifier.weight(1f)
                                     ) {
-                                        Text("В обране", fontSize = 11.sp)
+                                        Text(if (state.isFavorite) "В обраному" else "В обране", fontSize = 11.sp)
                                     }
 
                                     OutlinedButton(
@@ -249,18 +269,62 @@ fun DetailsScreen(
                             val cleanDesc = state.details.description
                                 ?.replace(Regex("<[^>]+>"), "")
                                 ?.takeIf { it.isNotBlank() } ?: "Опис відсутній."
-                            Text(
-                                text = cleanDesc,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = Color(0xFFB0B3C1),
-                            )
+                            val hasDescription = cleanDesc != "Опис відсутній."
+                            Column(
+                                modifier = Modifier.fillMaxWidth().then(
+                                    if (hasDescription) Modifier.clickable { isDescriptionExpanded = !isDescriptionExpanded }
+                                    else Modifier
+                                ),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    text = cleanDesc,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = Color(0xFFB0B3C1),
+                                    maxLines = if (isDescriptionExpanded) Int.MAX_VALUE else 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                if (hasDescription) {
+                                    Text(
+                                        text = if (isDescriptionExpanded) "Згорнути опис" else "Читати повністю",
+                                        color = Color(0xFFD0BCFF),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+                            }
                             // Footer Panel: Audio Studios & Episodes
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(top = 8.dp),
+                                    .padding(top = 8.dp)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(Color(0xFF15171E))
+                                    .padding(16.dp),
                                 verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
+                                val releaseTitle = (state.videoSource as? VideoSourceState.Success)
+                                    ?.release?.title ?: "Реліз ще не вибрано"
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text("AniTube · українська назва", color = Color(0xFF94A3B8), fontSize = 11.sp)
+                                        Text(releaseTitle, color = Color.White, style = MaterialTheme.typography.titleMedium)
+                                    }
+                                    OutlinedButton(
+                                        onClick = {
+                                            onResetManualSearch()
+                                            showManualDialog = true
+                                        },
+                                        modifier = Modifier.size(48.dp)
+                                            .semantics { contentDescription = "Змінити реліз" }
+                                    ) {
+                                        FontAwesomeIcon(FaIcons.PENCIL)
+                                    }
+                                }
                                 when (val source = state.videoSource) {
                                     VideoSourceState.Loading -> Row(
                                         verticalAlignment = Alignment.CenterVertically,
@@ -364,6 +428,26 @@ fun DetailsScreen(
                             }
                         }
                     }
+                    if (state.details.related.isNotEmpty()) {
+                        DetailsTitleRow(
+                            title = "Пов’язані релізи",
+                            items = state.details.related,
+                            showRelatedBadge = true,
+                            showMore = state.details.related.size > 13,
+                            onOpen = onOpenRelated,
+                            onMore = onMoreRelated,
+                        )
+                    }
+                    if (state.details.recommendations.isNotEmpty()) {
+                        DetailsTitleRow(
+                            title = "Рекомендації",
+                            items = state.details.recommendations,
+                            showRelatedBadge = false,
+                            showMore = state.details.recommendations.size > 13 || state.details.recommendationsHasMore,
+                            onOpen = onOpenRelated,
+                            onMore = onMoreRecommendations,
+                        )
+                    }
                 }
                 if (showReleaseDialog && releaseCandidates.isNotEmpty()) {
                     ReleaseSelectionDialog(
@@ -375,7 +459,120 @@ fun DetailsScreen(
                         }
                     )
                 }
+                if (showManualDialog) {
+                    ManualReleaseSearchDialog(
+                        searchState = state.manualReleaseSearch,
+                        initialQuery = (state.videoSource as? VideoSourceState.Success)?.release?.title.orEmpty(),
+                        onSearch = onManualSearch,
+                        onDismiss = { showManualDialog = false },
+                        onSelect = { candidate ->
+                            showManualDialog = false
+                            onSelectRelease(candidate)
+                        }
+                    )
+                }
             }
+        }
+    }
+}
+
+@Composable
+private fun DetailsTitleRow(
+    title: String,
+    items: List<AnimeCard>,
+    showRelatedBadge: Boolean,
+    showMore: Boolean,
+    onOpen: (AnimeCard) -> Unit,
+    onMore: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Text(title, style = MaterialTheme.typography.titleLarge, fontFamily = IbmPlexMono)
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+            itemsIndexed(items.take(13), key = { _, card -> card.id }) { _, card ->
+                PosterCard(
+                    item = card,
+                    modifier = Modifier.width(160.dp),
+                    showRelatedBadge = showRelatedBadge,
+                    onClick = { onOpen(card) },
+                )
+            }
+            if (showMore) item(key = "more") { MoreCard(onClick = onMore) }
+        }
+    }
+}
+
+@Composable
+private fun ManualReleaseSearchDialog(
+    searchState: ManualReleaseSearchState,
+    initialQuery: String,
+    onSearch: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onSelect: (AnitubeSearchResult) -> Unit,
+) {
+    var query by remember(initialQuery) { mutableStateOf(initialQuery) }
+    val focusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    LaunchedEffect(Unit) { focusRequester.requestFocus() }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .width(620.dp)
+                .heightIn(max = 600.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .background(Color(0xFF15171E))
+                .padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Text("Змінити реліз AniTube", color = Color.White, style = MaterialTheme.typography.titleLarge)
+            Text("Введіть українську назву. Пошук виконується на AniTube.", color = Color(0xFF94A3B8), fontSize = 13.sp)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color(0xFF20232D))
+                    .padding(horizontal = 14.dp),
+                contentAlignment = Alignment.CenterStart
+            ) {
+                if (query.isBlank()) Text("Назва українською", color = Color(0xFF94A3B8))
+                BasicTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    singleLine = true,
+                    textStyle = androidx.compose.ui.text.TextStyle(color = Color.White, fontSize = 16.sp),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = {
+                        keyboardController?.hide()
+                        onSearch(query)
+                    }),
+                    modifier = Modifier.fillMaxWidth().focusRequester(focusRequester)
+                )
+            }
+            Button(onClick = { onSearch(query) }, enabled = query.isNotBlank()) { Text("Шукати на AniTube") }
+            Column(
+                modifier = Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                when (searchState) {
+                    ManualReleaseSearchState.Idle -> Unit
+                    ManualReleaseSearchState.Loading -> Text("Шукаємо релізи...", color = Color(0xFFCCC2DC))
+                    is ManualReleaseSearchState.Error -> Text(searchState.message, color = Color(0xFFFFB4AB))
+                    is ManualReleaseSearchState.Results -> {
+                        if (searchState.candidates.isEmpty()) {
+                            Text("На AniTube нічого не знайдено", color = Color(0xFFCCC2DC))
+                        } else {
+                            searchState.candidates.forEach { candidate ->
+                                Button(onClick = { onSelect(candidate) }, modifier = Modifier.fillMaxWidth()) {
+                                    Text(candidate.title, maxLines = 2)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            OutlinedButton(onClick = onDismiss) { Text("Скасувати") }
         }
     }
 }
@@ -555,17 +752,26 @@ private fun DetailsScreenPreview() {
         DetailsScreen(
             state = DetailsState.Ready(
                 details = sampleAnimeDetails,
-                videoSource = VideoSourceState.Success(sampleVoices),
+                videoSource = VideoSourceState.Success(
+                    AnitubeSearchResult(3106, "Ковбой Бібоп", "https://anitube.in.ua/3106-kovboy-bbop.html"),
+                    sampleVoices
+                ),
                 selectedVoiceIndex = 0,
                 selectedEpisodeIndex = 0
             ),
             onRetry = {},
             onRetryVideoSource = {},
             onSelectRelease = {},
+            onManualSearch = {},
+            onResetManualSearch = {},
+            onToggleFavorite = {},
             onSelectVoice = {},
             onSelectEpisode = {},
             onWatchClick = {},
-            onBackClick = {}
+            onBackClick = {},
+            onOpenRelated = {},
+            onMoreRelated = {},
+            onMoreRecommendations = {},
         )
     }
 }

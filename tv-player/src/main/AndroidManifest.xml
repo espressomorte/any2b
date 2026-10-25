@@ -36,6 +36,10 @@
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
             android:exported="false" />
 
+        <activity
+            android:name=".CategoryActivity"
+            android:exported="false" />
+
         <!-- Історія переглядів -->
         <activity
             android:name=".HistoryActivity"

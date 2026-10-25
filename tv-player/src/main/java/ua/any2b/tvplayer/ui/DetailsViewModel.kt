@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -17,14 +18,22 @@ import ua.any2b.core.anitube.AnitubeVoice
 import ua.any2b.core.extractor.StreamResolver
 import ua.any2b.core.matcher.TitleMatcher
 import ua.any2b.tvplayer.data.VoiceCache
+import ua.any2b.tvplayer.data.FavoritesManager
 import ua.any2b.tvplayer.data.WatchHistoryEntry
 import ua.any2b.tvplayer.data.WatchHistoryManager
 
 sealed interface VideoSourceState {
     data object Loading : VideoSourceState
-    data class Success(val voices: List<AnitubeVoice>) : VideoSourceState
+    data class Success(val release: AnitubeSearchResult, val voices: List<AnitubeVoice>) : VideoSourceState
     data class Ambiguous(val candidates: List<AnitubeSearchResult>) : VideoSourceState
     data class Error(val message: String, val candidates: List<AnitubeSearchResult> = emptyList()) : VideoSourceState
+}
+
+sealed interface ManualReleaseSearchState {
+    data object Idle : ManualReleaseSearchState
+    data object Loading : ManualReleaseSearchState
+    data class Results(val candidates: List<AnitubeSearchResult>) : ManualReleaseSearchState
+    data class Error(val message: String) : ManualReleaseSearchState
 }
 
 sealed interface DetailsState {
@@ -32,6 +41,8 @@ sealed interface DetailsState {
     data class Ready(
         val details: AnimeDetails,
         val videoSource: VideoSourceState = VideoSourceState.Loading,
+        val manualReleaseSearch: ManualReleaseSearchState = ManualReleaseSearchState.Idle,
+        val isFavorite: Boolean = false,
         val selectedVoiceIndex: Int = 0,
         val selectedEpisodeIndex: Int = 0,
         val resolvingStream: Boolean = false,
@@ -51,6 +62,8 @@ class DetailsViewModel(
 ) : ViewModel() {
 
     private val historyManager = WatchHistoryManager(context)
+    private val favoritesManager = FavoritesManager(context)
+    private var manualSearchJob: Job? = null
 
     private val _state = MutableStateFlow<DetailsState>(DetailsState.Loading)
     val state: StateFlow<DetailsState> = _state
@@ -78,6 +91,7 @@ class DetailsViewModel(
                     details = details,
                     selectedVoiceIndex = initialVoiceIndex,
                     selectedEpisodeIndex = initialEpisodeIndex,
+                    isFavorite = favoritesManager.isFavorite(animeId),
                     historyEntry = historyEntry
                 )
                 searchVideoSource(details)
@@ -87,6 +101,12 @@ class DetailsViewModel(
                 _state.value = DetailsState.Error(e.message ?: "Не вдалося завантажити деталі")
             }
         }
+    }
+
+    fun toggleFavorite() {
+        val current = _state.value as? DetailsState.Ready ?: return
+        val isFavorite = favoritesManager.toggle(current.details)
+        updateReady { it.copy(isFavorite = isFavorite) }
     }
 
     fun retryVideoSource() {
@@ -112,6 +132,7 @@ class DetailsViewModel(
                     (matched.size > 1 && best.score - matched[1].score <= 0.1)
                 )
             when {
+                results.size == 1 -> loadVoices(results.single())
                 needsYearSearch -> {
                     val refinedResults = details.seasonYear?.let { year ->
                         try {
@@ -145,6 +166,31 @@ class DetailsViewModel(
         }
     }
 
+    fun resetManualReleaseSearch() {
+        manualSearchJob?.cancel()
+        updateReady { it.copy(manualReleaseSearch = ManualReleaseSearchState.Idle) }
+    }
+
+    fun searchManualRelease(query: String) {
+        val trimmed = query.trim()
+        if (trimmed.isBlank()) {
+            updateReady { it.copy(manualReleaseSearch = ManualReleaseSearchState.Error("Введіть українську назву")) }
+            return
+        }
+        manualSearchJob?.cancel()
+        updateReady { it.copy(manualReleaseSearch = ManualReleaseSearchState.Loading) }
+        manualSearchJob = viewModelScope.launch {
+            try {
+                val results = anitubeClient.search(trimmed)
+                updateReady { it.copy(manualReleaseSearch = ManualReleaseSearchState.Results(results)) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                updateReady { it.copy(manualReleaseSearch = ManualReleaseSearchState.Error(e.message ?: "Помилка пошуку на AniTube")) }
+            }
+        }
+    }
+
     fun selectRelease(candidate: AnitubeSearchResult) {
         val current = _state.value as? DetailsState.Ready ?: return
         val candidates = when (val source = current.videoSource) {
@@ -152,7 +198,8 @@ class DetailsViewModel(
             is VideoSourceState.Error -> source.candidates
             else -> emptyList()
         }
-        if (candidate !in candidates) return
+        val manualCandidates = (current.manualReleaseSearch as? ManualReleaseSearchState.Results)?.candidates.orEmpty()
+        if (candidate !in candidates && candidate !in manualCandidates) return
         updateReady { it.copy(videoSource = VideoSourceState.Loading) }
         viewModelScope.launch {
             try {
@@ -177,7 +224,7 @@ class DetailsViewModel(
             val voiceIndex = history?.voiceIndex?.takeIf { it in voices.indices } ?: 0
             val episodeIndex = history?.episodeIndex?.takeIf { it in voices[voiceIndex].episodes.indices } ?: 0
             current.copy(
-                videoSource = VideoSourceState.Success(voices),
+                videoSource = VideoSourceState.Success(candidate, voices),
                 selectedVoiceIndex = voiceIndex,
                 selectedEpisodeIndex = episodeIndex,
             )

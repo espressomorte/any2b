@@ -38,6 +38,9 @@ class DetailsActivity : ComponentActivity() {
                     onRetry = viewModel::loadDetails,
                     onRetryVideoSource = viewModel::retryVideoSource,
                     onSelectRelease = viewModel::selectRelease,
+                    onManualSearch = viewModel::searchManualRelease,
+                    onResetManualSearch = viewModel::resetManualReleaseSearch,
+                    onToggleFavorite = viewModel::toggleFavorite,
                     onSelectVoice = viewModel::selectVoice,
                     onSelectEpisode = viewModel::selectEpisode,
                     onWatchClick = {
@@ -56,9 +59,23 @@ class DetailsActivity : ComponentActivity() {
                             }
                         )
                     },
-                    onBackClick = { finish() }
+                    onBackClick = { finish() },
+                    onOpenRelated = { card ->
+                        startActivity(Intent(this, DetailsActivity::class.java).apply {
+                            putExtra("ANIME_ID", card.id)
+                        })
+                    },
+                    onMoreRelated = { openDetailsCategory("related:$animeId", "Пов’язані релізи") },
+                    onMoreRecommendations = { openDetailsCategory("recommendations:$animeId", "Рекомендації") },
                 )
             }
         }
+    }
+
+    private fun openDetailsCategory(categoryId: String, title: String) {
+        startActivity(Intent(this, CategoryActivity::class.java).apply {
+            putExtra(CategoryActivity.EXTRA_CATEGORY_ID, categoryId)
+            putExtra(CategoryActivity.EXTRA_CATEGORY_TITLE, title)
+        })
     }
 }

@@ -68,6 +68,12 @@ class AniListClient(
             }
         }
 
+        val related = m.optJSONObject("relations")?.optJSONArray("nodes")?.toAnimeCards().orEmpty()
+            .filterNot { it.id == id }
+        val recommendationsConnection = m.optJSONObject("recommendations")
+        val recommendations = recommendationsConnection?.recommendedCards().orEmpty()
+            .filterNot { it.id == id }
+
         return AnimeDetails(
             id = m.getInt("id"),
             title = Title(t.str("romaji"), t.str("english"), t.str("native")),
@@ -82,6 +88,22 @@ class AniListClient(
             seasonYear = m.int("seasonYear"),
             genres = genres,
             studios = studios,
+            related = related,
+            recommendations = recommendations,
+            recommendationsHasMore = recommendationsConnection?.optJSONObject("pageInfo")
+                ?.optBoolean("hasNextPage") == true,
+        )
+    }
+
+    /** A page of recommendations for the full list on a details screen. */
+    suspend fun recommendationsPage(id: Int, page: Int, perPage: Int = 20): AnimeCardPage {
+        require(page > 0 && perPage in 1..25)
+        val variables = JSONObject().put("id", id).put("page", page).put("perPage", perPage)
+        val connection = execute(RECOMMENDATIONS_QUERY, variables)
+            .getJSONObject("Media").getJSONObject("recommendations")
+        return AnimeCardPage(
+            items = connection.recommendedCards().filterNot { it.id == id },
+            hasNextPage = connection.optJSONObject("pageInfo")?.optBoolean("hasNextPage") == true,
         )
     }
 
@@ -90,6 +112,51 @@ class AniListClient(
         val vars = JSONObject().put("search", query).put("perPage", perPage)
         val data = execute(SEARCH_QUERY, vars)
         return data.getJSONObject("Page").getJSONArray("media").toCards()
+    }
+
+    /** One page of a home category, used by the full category screen. */
+    suspend fun categoryPage(categoryId: String, page: Int, perPage: Int = 20): List<AnimeCard> {
+        require(page > 0 && perPage > 0)
+        val (season, year) = Season.current()
+        val (nextSeason, nextYear) = season.next(year)
+        val mediaArgs = when (categoryId) {
+            "popular_season" -> "season: ${'$'}season, seasonYear: ${'$'}year, sort: POPULARITY_DESC"
+            "trending" -> "sort: TRENDING_DESC"
+            "upcoming" -> "season: ${'$'}nextSeason, seasonYear: ${'$'}nextYear, sort: POPULARITY_DESC"
+            "popular_all" -> "sort: POPULARITY_DESC"
+            "top_score" -> "sort: SCORE_DESC"
+            else -> throw IllegalArgumentException("Невідома категорія: $categoryId")
+        }
+        val categoryVariables = when (categoryId) {
+            "popular_season" -> ", ${'$'}season: MediaSeason, ${'$'}year: Int"
+            "upcoming" -> ", ${'$'}nextSeason: MediaSeason, ${'$'}nextYear: Int"
+            else -> ""
+        }
+        val variables = JSONObject()
+            .put("page", page)
+            .put("perPage", perPage)
+            .put("season", season.name)
+            .put("year", year)
+            .put("nextSeason", nextSeason.name)
+            .put("nextYear", nextYear)
+        val query = """
+query Category(${'$'}page: Int, ${'$'}perPage: Int$categoryVariables) {
+  Page(page: ${'$'}page, perPage: ${'$'}perPage) {
+    media(type: ANIME, isAdult: false, $mediaArgs) {
+      id
+      title { romaji english native }
+      coverImage { large extraLarge }
+      averageScore
+      episodes
+      format
+      status
+      seasonYear
+      nextAiringEpisode { episode }
+    }
+  }
+}
+"""
+        return execute(query, variables).getJSONObject("Page").getJSONArray("media").toCards()
     }
 
     // ── Мережа ────────────────────────────────────────────────────────────
@@ -133,6 +200,20 @@ class AniListClient(
 
     private fun JSONArray.toCards(): List<AnimeCard> =
         (0 until length()).map { getJSONObject(it).toCard() }
+
+    private fun JSONArray.toAnimeCards(): List<AnimeCard> =
+        (0 until length()).mapNotNull { optJSONObject(it) }
+            .filter { it.optString("type") == "ANIME" && !it.optBoolean("isAdult") }
+            .map { it.toCard() }.distinctBy { it.id }
+
+    private fun JSONObject.recommendedCards(): List<AnimeCard> {
+        val nodes = optJSONArray("nodes") ?: return emptyList()
+        val media = JSONArray()
+        for (i in 0 until nodes.length()) {
+            nodes.optJSONObject(i)?.optJSONObject("mediaRecommendation")?.let { media.put(it) }
+        }
+        return media.toAnimeCards()
+    }
 
     private fun JSONObject.toCard(): AnimeCard {
         val t = getJSONObject("title")
@@ -205,6 +286,52 @@ query Details(${'$'}id: Int) {
     genres
     studios(isMain: true) {
       nodes { name }
+    }
+    relations {
+      nodes { ...relatedCard }
+    }
+    recommendations(page: 1, perPage: 25) {
+      pageInfo { hasNextPage }
+      nodes { mediaRecommendation { ...relatedCard } }
+    }
+  }
+}
+
+fragment relatedCard on Media {
+  id
+  type
+  isAdult
+  title { romaji english native }
+  coverImage { large extraLarge }
+  averageScore
+  episodes
+  format
+  status
+  seasonYear
+  nextAiringEpisode { episode }
+}
+"""
+
+        const val RECOMMENDATIONS_QUERY = """
+query Recommendations(${'$'}id: Int, ${'$'}page: Int, ${'$'}perPage: Int) {
+  Media(id: ${'$'}id, type: ANIME) {
+    recommendations(page: ${'$'}page, perPage: ${'$'}perPage) {
+      pageInfo { hasNextPage }
+      nodes {
+        mediaRecommendation {
+          id
+          type
+          isAdult
+          title { romaji english native }
+          coverImage { large extraLarge }
+          averageScore
+          episodes
+          format
+          status
+          seasonYear
+          nextAiringEpisode { episode }
+        }
+      }
     }
   }
 }
