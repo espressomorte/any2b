@@ -1,6 +1,8 @@
 package ua.any2b.tvplayer.data
 
 import android.content.Context
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import org.json.JSONArray
 import org.json.JSONObject
 import ua.any2b.core.anilist.AnimeCard
@@ -9,6 +11,16 @@ import ua.any2b.core.anilist.Title
 
 class FavoritesManager(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences("favorites_prefs", Context.MODE_PRIVATE)
+
+    companion object {
+        private val sharedFavoriteIds = MutableStateFlow<Set<Int>>(emptySet())
+    }
+
+    val favoriteIds: StateFlow<Set<Int>> = sharedFavoriteIds
+
+    init {
+        sharedFavoriteIds.value = getFavorites().mapTo(mutableSetOf()) { it.id }
+    }
 
     fun getFavorites(): List<AnimeCard> = try {
         val array = JSONArray(prefs.getString("items", "[]"))
@@ -30,25 +42,27 @@ class FavoritesManager(context: Context) {
         emptyList()
     }
 
-    fun isFavorite(animeId: Int): Boolean = getFavorites().any { it.id == animeId }
+    fun isFavorite(animeId: Int): Boolean = animeId in favoriteIds.value
 
     /** Returns the new favorite state. */
-    fun toggle(details: AnimeDetails): Boolean {
+    fun toggle(details: AnimeDetails): Boolean = toggle(AnimeCard(
+        id = details.id,
+        title = details.title,
+        cover = details.cover,
+        score = details.score,
+        episodes = details.episodes,
+        format = details.format,
+        status = details.status,
+        seasonYear = details.seasonYear,
+        nextEpisode = null,
+    ))
+
+    fun toggle(card: AnimeCard): Boolean {
         val favorites = getFavorites().toMutableList()
-        val existingIndex = favorites.indexOfFirst { it.id == details.id }
+        val existingIndex = favorites.indexOfFirst { it.id == card.id }
         val isFavorite = existingIndex < 0
         if (isFavorite) {
-            favorites.add(0, AnimeCard(
-                id = details.id,
-                title = details.title,
-                cover = details.cover,
-                score = details.score,
-                episodes = details.episodes,
-                format = details.format,
-                status = details.status,
-                seasonYear = details.seasonYear,
-                nextEpisode = null,
-            ))
+            favorites.add(0, card)
         } else {
             favorites.removeAt(existingIndex)
         }
@@ -68,6 +82,7 @@ class FavoritesManager(context: Context) {
             })
         }
         prefs.edit().putString("items", array.toString()).apply()
+        sharedFavoriteIds.value = favorites.mapTo(mutableSetOf()) { it.id }
         return isFavorite
     }
 

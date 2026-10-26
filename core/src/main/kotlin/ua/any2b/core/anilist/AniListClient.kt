@@ -68,7 +68,7 @@ class AniListClient(
             }
         }
 
-        val related = m.optJSONObject("relations")?.optJSONArray("nodes")?.toAnimeCards().orEmpty()
+        val related = m.relationsCards()
             .filterNot { it.id == id }
         val recommendationsConnection = m.optJSONObject("recommendations")
         val recommendations = recommendationsConnection?.recommendedCards().orEmpty()
@@ -215,6 +215,15 @@ query Category(${'$'}page: Int, ${'$'}perPage: Int$categoryVariables) {
         return media.toAnimeCards()
     }
 
+    private fun JSONObject.relationsCards(): List<AnimeCard> {
+        val edges = optJSONObject("relations")?.optJSONArray("edges") ?: return emptyList()
+        val media = JSONArray()
+        for (i in 0 until edges.length()) {
+            edges.optJSONObject(i)?.optJSONObject("node")?.let { media.put(it) }
+        }
+        return media.toAnimeCards()
+    }
+
     private fun JSONObject.toCard(): AnimeCard {
         val t = getJSONObject("title")
         val cover = optJSONObject("coverImage")
@@ -288,7 +297,9 @@ query Details(${'$'}id: Int) {
       nodes { name }
     }
     relations {
-      nodes { ...relatedCard }
+      edges {
+        node { ...relatedCard }
+      }
     }
     recommendations(page: 1, perPage: 25) {
       pageInfo { hasNextPage }

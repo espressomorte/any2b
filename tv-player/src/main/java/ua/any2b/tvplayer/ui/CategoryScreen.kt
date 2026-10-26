@@ -27,6 +27,7 @@ fun CategoryScreen(
     onLoadMore: () -> Unit,
     onBack: () -> Unit,
     showRelatedBadge: Boolean = false,
+    onFavoriteChanged: () -> Unit = {},
 ) {
     val gridState = rememberLazyGridState()
     LaunchedEffect(gridState, state.items.size, state.hasMore, state.loadingMore, state.error) {
@@ -44,7 +45,7 @@ fun CategoryScreen(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
             Button(onClick = onBack) { Text("← Назад") }
-            Text(title, style = MaterialTheme.typography.headlineLarge, fontFamily = IbmPlexMono)
+            Text(title, style = MaterialTheme.typography.headlineLarge)
         }
         if (state.error != null) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -71,6 +72,7 @@ fun CategoryScreen(
                         modifier = Modifier.fillMaxWidth(),
                         showRelatedBadge = showRelatedBadge,
                         onClick = { onOpen(card) },
+                        onFavoriteChanged = onFavoriteChanged,
                     )
                 }
                 if (state.loadingMore) {

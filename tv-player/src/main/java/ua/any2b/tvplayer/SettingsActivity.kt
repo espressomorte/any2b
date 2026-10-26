@@ -25,6 +25,8 @@ import ua.any2b.core.update.AppRelease
 import ua.any2b.core.update.GitHubReleaseClient
 import ua.any2b.core.update.compareVersions
 import ua.any2b.tvplayer.data.SettingsManager
+import ua.any2b.tvplayer.data.ExternalVideoPlayer
+import ua.any2b.tvplayer.data.ExternalVideoPlayers
 import ua.any2b.tvplayer.ui.AppTheme
 import ua.any2b.tvplayer.ui.SettingsScreen
 
@@ -42,12 +44,17 @@ sealed interface UpdateState {
 
 class SettingsViewModel(application: Application) : AndroidViewModel(application) {
     private val settingsManager = SettingsManager(application)
+    private val externalPlayers = ExternalVideoPlayers(application)
     private val releaseClient = GitHubReleaseClient()
     private val downloads = application.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
     private val updatePrefs = application.getSharedPreferences("update_download", Context.MODE_PRIVATE)
 
     private val _autoPlayNext = MutableStateFlow(settingsManager.isAutoPlayNextEnabled())
     val autoPlayNext: StateFlow<Boolean> = _autoPlayNext
+    private val _availablePlayers = MutableStateFlow<List<ExternalVideoPlayer>>(emptyList())
+    val availablePlayers: StateFlow<List<ExternalVideoPlayer>> = _availablePlayers
+    private val _selectedPlayerPackage = MutableStateFlow(settingsManager.selectedPlayerPackage())
+    val selectedPlayerPackage: StateFlow<String?> = _selectedPlayerPackage
     private val _updateState = MutableStateFlow<UpdateState>(UpdateState.Idle)
     val updateState: StateFlow<UpdateState> = _updateState
 
@@ -70,6 +77,21 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     fun setAutoPlayNext(enabled: Boolean) {
         settingsManager.setAutoPlayNextEnabled(enabled)
         _autoPlayNext.value = enabled
+    }
+
+    fun refreshPlayers() {
+        val players = externalPlayers.available()
+        _availablePlayers.value = players
+        val selected = _selectedPlayerPackage.value
+        if (selected != null && players.none { it.packageName == selected }) {
+            setSelectedPlayer(null)
+        }
+    }
+
+    fun setSelectedPlayer(packageName: String?) {
+        if (packageName != null && _availablePlayers.value.none { it.packageName == packageName }) return
+        settingsManager.setSelectedPlayerPackage(packageName)
+        _selectedPlayerPackage.value = packageName
     }
 
     fun checkForUpdates() {
@@ -165,12 +187,17 @@ class SettingsActivity : ComponentActivity() {
         setContent {
             AppTheme {
                 val autoPlay = viewModel.autoPlayNext.collectAsStateWithLifecycle().value
+                val availablePlayers = viewModel.availablePlayers.collectAsStateWithLifecycle().value
+                val selectedPlayerPackage = viewModel.selectedPlayerPackage.collectAsStateWithLifecycle().value
                 val updateState = viewModel.updateState.collectAsStateWithLifecycle().value
                 SettingsScreen(
                     autoPlayNext = autoPlay,
+                    availablePlayers = availablePlayers,
+                    selectedPlayerPackage = selectedPlayerPackage,
                     currentVersion = viewModel.currentVersion,
                     updateState = updateState,
                     onAutoPlayChanged = viewModel::setAutoPlayNext,
+                    onPlayerSelected = viewModel::setSelectedPlayer,
                     onCheckUpdates = viewModel::checkForUpdates,
                     onDownloadUpdate = viewModel::downloadUpdate,
                     onInstallUpdate = ::installUpdate,
@@ -179,6 +206,11 @@ class SettingsActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        viewModel.refreshPlayers()
     }
 
     private fun installUpdate(uri: Uri) {

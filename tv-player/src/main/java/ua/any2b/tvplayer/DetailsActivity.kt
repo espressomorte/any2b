@@ -1,6 +1,7 @@
 package ua.any2b.tvplayer
 
 import android.content.Intent
+import android.content.ActivityNotFoundException
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -12,6 +13,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ua.any2b.tvplayer.ui.AppTheme
 import ua.any2b.tvplayer.ui.DetailsScreen
 import ua.any2b.tvplayer.ui.DetailsViewModel
+import ua.any2b.tvplayer.data.ExternalVideoPlayers
+import ua.any2b.tvplayer.data.SettingsManager
 
 class DetailsActivity : ComponentActivity() {
 
@@ -49,13 +52,7 @@ class DetailsActivity : ComponentActivity() {
                                 Toast.makeText(this, errorMessage, Toast.LENGTH_LONG).show()
                             },
                             onSuccess = { streamUrl, voiceIndex, episodeIndex ->
-                                val intent = Intent(this, PlayerActivity::class.java).apply {
-                                    putExtra(PlayerActivity.EXTRA_STREAM_URL, streamUrl)
-                                    putExtra(PlayerActivity.EXTRA_ANIME_ID, animeId)
-                                    putExtra(PlayerActivity.EXTRA_VOICE_INDEX, voiceIndex)
-                                    putExtra(PlayerActivity.EXTRA_EPISODE_INDEX, episodeIndex)
-                                }
-                                startActivity(intent)
+                                openPlayer(streamUrl, voiceIndex, episodeIndex)
                             }
                         )
                     },
@@ -70,6 +67,32 @@ class DetailsActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    private fun openPlayer(streamUrl: String, voiceIndex: Int, episodeIndex: Int) {
+        val settings = SettingsManager(this)
+        val selectedPackage = settings.selectedPlayerPackage()
+        if (selectedPackage != null) {
+            val externalIntent = ExternalVideoPlayers(this).intentFor(streamUrl, selectedPackage)
+            if (externalIntent != null) {
+                try {
+                    startActivity(externalIntent)
+                    return
+                } catch (_: ActivityNotFoundException) {
+                    // Плеєр могли видалити або оновити після вибору.
+                } catch (_: SecurityException) {
+                    // Плеєр більше не дозволяє запуск своєї Activity.
+                }
+            }
+            settings.setSelectedPlayerPackage(null)
+            Toast.makeText(this, "Обраний плеєр недоступний. Відкриваємо вбудований", Toast.LENGTH_LONG).show()
+        }
+        startActivity(Intent(this, PlayerActivity::class.java).apply {
+            putExtra(PlayerActivity.EXTRA_STREAM_URL, streamUrl)
+            putExtra(PlayerActivity.EXTRA_ANIME_ID, animeId)
+            putExtra(PlayerActivity.EXTRA_VOICE_INDEX, voiceIndex)
+            putExtra(PlayerActivity.EXTRA_EPISODE_INDEX, episodeIndex)
+        })
     }
 
     private fun openDetailsCategory(categoryId: String, title: String) {
