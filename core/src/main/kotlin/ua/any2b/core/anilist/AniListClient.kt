@@ -92,6 +92,12 @@ class AniListClient(
             recommendations = recommendations,
             recommendationsHasMore = recommendationsConnection?.optJSONObject("pageInfo")
                 ?.optBoolean("hasNextPage") == true,
+            trailer = m.optJSONObject("trailer")?.let { trailer ->
+                val trailerId = trailer.str("id")
+                val site = trailer.str("site")
+                if (trailerId.isNullOrBlank() || site.isNullOrBlank()) null
+                else MediaTrailer(trailerId, site)
+            },
         )
     }
 
@@ -292,6 +298,7 @@ query Details(${'$'}id: Int) {
     format
     status
     seasonYear
+    trailer { id site }
     genres
     studios(isMain: true) {
       nodes { name }

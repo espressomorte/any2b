@@ -2,6 +2,7 @@ package ua.any2b.tvplayer
 
 import android.content.Intent
 import android.content.ActivityNotFoundException
+import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -13,8 +14,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ua.any2b.tvplayer.ui.AppTheme
 import ua.any2b.tvplayer.ui.DetailsScreen
 import ua.any2b.tvplayer.ui.DetailsViewModel
+import ua.any2b.tvplayer.ui.DetailsState
 import ua.any2b.tvplayer.data.ExternalVideoPlayers
 import ua.any2b.tvplayer.data.SettingsManager
+import ua.any2b.core.anilist.trailerSearchUrl
 
 class DetailsActivity : ComponentActivity() {
 
@@ -51,10 +54,24 @@ class DetailsActivity : ComponentActivity() {
                             onError = { errorMessage ->
                                 Toast.makeText(this, errorMessage, Toast.LENGTH_LONG).show()
                             },
-                            onSuccess = { streamUrl, voiceIndex, episodeIndex ->
-                                openPlayer(streamUrl, voiceIndex, episodeIndex)
+                            onSuccess = { streamUrl, voiceIndex, episodeIndex, episodeNumber ->
+                                openPlayer(
+                                    streamUrl, voiceIndex, episodeIndex, episodeNumber,
+                                    (state as? DetailsState.Ready)?.details?.format.equals("MOVIE", ignoreCase = true),
+                                )
                             }
                         )
+                    },
+                    onTrailerClick = {
+                        val details = (state as? DetailsState.Ready)?.details
+                        if (details != null) {
+                            val directUrl = details.trailer?.videoUrl()
+                            if (directUrl == null || !openTrailerUrl(directUrl)) {
+                                if (!openTrailerUrl(details.trailerSearchUrl())) {
+                                    Toast.makeText(this, "Немає застосунку для відкриття трейлера", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        }
                     },
                     onBackClick = { finish() },
                     onOpenRelated = { card ->
@@ -69,7 +86,13 @@ class DetailsActivity : ComponentActivity() {
         }
     }
 
-    private fun openPlayer(streamUrl: String, voiceIndex: Int, episodeIndex: Int) {
+    private fun openPlayer(
+        streamUrl: String,
+        voiceIndex: Int,
+        episodeIndex: Int,
+        episodeNumber: Int,
+        isMovie: Boolean,
+    ) {
         val settings = SettingsManager(this)
         val selectedPackage = settings.selectedPlayerPackage()
         if (selectedPackage != null) {
@@ -92,6 +115,8 @@ class DetailsActivity : ComponentActivity() {
             putExtra(PlayerActivity.EXTRA_ANIME_ID, animeId)
             putExtra(PlayerActivity.EXTRA_VOICE_INDEX, voiceIndex)
             putExtra(PlayerActivity.EXTRA_EPISODE_INDEX, episodeIndex)
+            putExtra(PlayerActivity.EXTRA_EPISODE_NUMBER, episodeNumber)
+            putExtra(PlayerActivity.EXTRA_IS_MOVIE, isMovie)
         })
     }
 
@@ -100,5 +125,14 @@ class DetailsActivity : ComponentActivity() {
             putExtra(CategoryActivity.EXTRA_CATEGORY_ID, categoryId)
             putExtra(CategoryActivity.EXTRA_CATEGORY_TITLE, title)
         })
+    }
+
+    private fun openTrailerUrl(url: String): Boolean = try {
+        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        true
+    } catch (_: ActivityNotFoundException) {
+        false
+    } catch (_: SecurityException) {
+        false
     }
 }
