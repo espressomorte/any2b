@@ -54,6 +54,7 @@ fun DetailsScreen(
     onSelectVoice: (Int) -> Unit,
     onSelectEpisode: (Int) -> Unit,
     onWatchClick: () -> Unit,
+    onTrailerClick: () -> Unit,
     onBackClick: () -> Unit,
     onOpenRelated: (AnimeCard) -> Unit,
     onMoreRelated: () -> Unit,
@@ -208,14 +209,17 @@ fun DetailsScreen(
                                     }
 
                                     OutlinedButton(
-                                        onClick = { /* TODO: Trailer */ },
+                                        onClick = onTrailerClick,
                                         colors = OutlinedButtonDefaults.colors(
                                             containerColor = Color(0xFF15171E),
                                             contentColor = Color(0xFFD0BCFF)
                                         ),
                                         modifier = Modifier.weight(1f)
                                     ) {
-                                        Text("Трейлер", fontSize = 11.sp)
+                                        Text(
+                                            if (state.details.trailer?.videoUrl() != null) "Трейлер" else "Знайти трейлер",
+                                            fontSize = 11.sp
+                                        )
                                     }
                                 }
                             }
@@ -750,6 +754,7 @@ private fun DetailsScreenPreview() {
             onSelectVoice = {},
             onSelectEpisode = {},
             onWatchClick = {},
+            onTrailerClick = {},
             onBackClick = {},
             onOpenRelated = {},
             onMoreRelated = {},

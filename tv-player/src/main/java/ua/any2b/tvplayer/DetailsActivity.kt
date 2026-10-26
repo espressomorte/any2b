@@ -2,6 +2,7 @@ package ua.any2b.tvplayer
 
 import android.content.Intent
 import android.content.ActivityNotFoundException
+import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -16,6 +17,7 @@ import ua.any2b.tvplayer.ui.DetailsViewModel
 import ua.any2b.tvplayer.ui.DetailsState
 import ua.any2b.tvplayer.data.ExternalVideoPlayers
 import ua.any2b.tvplayer.data.SettingsManager
+import ua.any2b.core.anilist.trailerSearchUrl
 
 class DetailsActivity : ComponentActivity() {
 
@@ -59,6 +61,17 @@ class DetailsActivity : ComponentActivity() {
                                 )
                             }
                         )
+                    },
+                    onTrailerClick = {
+                        val details = (state as? DetailsState.Ready)?.details
+                        if (details != null) {
+                            val directUrl = details.trailer?.videoUrl()
+                            if (directUrl == null || !openTrailerUrl(directUrl)) {
+                                if (!openTrailerUrl(details.trailerSearchUrl())) {
+                                    Toast.makeText(this, "Немає застосунку для відкриття трейлера", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        }
                     },
                     onBackClick = { finish() },
                     onOpenRelated = { card ->
@@ -112,5 +125,14 @@ class DetailsActivity : ComponentActivity() {
             putExtra(CategoryActivity.EXTRA_CATEGORY_ID, categoryId)
             putExtra(CategoryActivity.EXTRA_CATEGORY_TITLE, title)
         })
+    }
+
+    private fun openTrailerUrl(url: String): Boolean = try {
+        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        true
+    } catch (_: ActivityNotFoundException) {
+        false
+    } catch (_: SecurityException) {
+        false
     }
 }

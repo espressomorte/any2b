@@ -63,6 +63,10 @@ class WatchHistoryManager(context: Context) {
         return getHistory().find { item -> item.animeId == animeId }
     }
 
+    fun clearHistory() {
+        prefs.edit().remove("history_list").apply()
+    }
+
     fun saveProgress(
         details: AnimeDetails,
         episodeIndex: Int,
