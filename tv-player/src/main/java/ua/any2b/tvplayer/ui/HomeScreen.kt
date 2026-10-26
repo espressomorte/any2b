@@ -33,6 +33,8 @@ import androidx.tv.material3.*
 import coil.compose.AsyncImage
 import ua.any2b.core.anilist.AnimeCard
 import ua.any2b.core.anilist.HomeRow
+import ua.any2b.core.anilist.hasFullList
+import ua.any2b.core.anilist.previewItems
 import ua.any2b.tvplayer.R
 import ua.any2b.tvplayer.data.FavoritesManager
 
@@ -211,7 +213,7 @@ private fun Rows(
                     horizontalArrangement = Arrangement.spacedBy(20.dp),
                     modifier = Modifier.graphicsLayer { clip = false }
                 ) {
-                    items(row.items.take(13), key = { it.id }) { card ->
+                    items(row.previewItems, key = { it.id }) { card ->
                         val isFirst = card.id == firstCardId
                         PosterCard(
                             item = card,
@@ -220,7 +222,7 @@ private fun Rows(
                             onFavoriteChanged = onFavoriteChanged,
                         )
                     }
-                    if (row.items.size >= 14) {
+                    if (row.hasFullList) {
                         item(key = "more_${row.id}") {
                             MoreCard(onClick = { onMore(row) })
                         }

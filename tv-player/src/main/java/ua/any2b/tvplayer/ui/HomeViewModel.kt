@@ -11,6 +11,8 @@ import ua.any2b.core.anilist.AniListClient
 import ua.any2b.core.anilist.HomeRow
 import ua.any2b.core.anilist.AnimeCard
 import ua.any2b.core.anilist.Title
+import ua.any2b.core.anilist.HOME_FETCH_SIZE
+import ua.any2b.core.anilist.rowsWithLocal
 import ua.any2b.tvplayer.data.FavoritesManager
 import ua.any2b.tvplayer.data.WatchHistoryManager
 
@@ -37,7 +39,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         _state.value = HomeState.Loading
         viewModelScope.launch {
             _state.value = try {
-                HomeState.Ready(rowsWithLocal(client.homeRows(perRow = 14)))
+                HomeState.Ready(rowsWithLocal(client.homeRows(perRow = HOME_FETCH_SIZE)))
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -66,9 +68,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 nextEpisode = null,
             )
         }
-        return (listOf(HomeRow("history", "Історія переглядів", history)) +
-            catalogRows +
-            HomeRow("favorites", "Обране", favoritesManager.getFavorites()))
-            .filter { it.items.isNotEmpty() }
+        return rowsWithLocal(catalogRows, history, favoritesManager.getFavorites())
     }
 }
