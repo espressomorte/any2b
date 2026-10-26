@@ -43,6 +43,7 @@ class CategoryActivity : ComponentActivity() {
                     onLoadMore = viewModel::loadMore,
                     onBack = { finish() },
                     showRelatedBadge = categoryId.startsWith("related:"),
+                    onFavoriteChanged = viewModel::refreshLocal,
                 )
             }
         }

@@ -16,6 +16,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
@@ -33,6 +34,7 @@ import coil.compose.AsyncImage
 import ua.any2b.core.anilist.AnimeCard
 import ua.any2b.core.anilist.HomeRow
 import ua.any2b.tvplayer.R
+import ua.any2b.tvplayer.data.FavoritesManager
 
 val IbmPlexMono = FontFamily(
     Font(R.font.ibm_plex_mono_regular, FontWeight.Normal),
@@ -87,6 +89,7 @@ fun HomeScreen(
     onRetry: () -> Unit,
     onOpen: (AnimeCard) -> Unit,
     onMore: (HomeRow) -> Unit,
+    onFavoriteChanged: () -> Unit,
 ) {
     val context = LocalContext.current
 
@@ -116,7 +119,7 @@ fun HomeScreen(
                 ) {
                     when (state) {
                         is HomeState.Error -> ErrorBlock(state.message, onRetry)
-                        is HomeState.Ready -> Rows(state.rows, state.catalogError, onRetry, onOpen, onMore)
+                        is HomeState.Ready -> Rows(state.rows, state.catalogError, onRetry, onOpen, onMore, onFavoriteChanged)
                         else -> {}
                     }
                 }
@@ -172,6 +175,7 @@ private fun Rows(
     onRetry: () -> Unit,
     onOpen: (AnimeCard) -> Unit,
     onMore: (HomeRow) -> Unit,
+    onFavoriteChanged: () -> Unit,
 ) {
     val firstCardId = rows.firstNotNullOfOrNull { it.items.firstOrNull()?.id }
     val focusRequester = remember { FocusRequester() }
@@ -200,23 +204,26 @@ private fun Rows(
                 Text(
                     text = row.title,
                     style = MaterialTheme.typography.titleLarge,
-                    fontFamily = IbmPlexMono,
                     modifier = Modifier.padding(start = 12.dp, bottom = 14.dp),
                 )
                 LazyRow(
-                    contentPadding = PaddingValues(horizontal = 12.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(20.dp),
+                    modifier = Modifier.graphicsLayer { clip = false }
                 ) {
                     items(row.items.take(13), key = { it.id }) { card ->
                         val isFirst = card.id == firstCardId
                         PosterCard(
                             item = card,
                             modifier = if (isFirst) Modifier.width(160.dp).focusRequester(focusRequester) else Modifier.width(160.dp),
-                            onClick = { onOpen(card) }
+                            onClick = { onOpen(card) },
+                            onFavoriteChanged = onFavoriteChanged,
                         )
                     }
-                    item(key = "more_${row.id}") {
-                        MoreCard(onClick = { onMore(row) })
+                    if (row.items.size >= 14) {
+                        item(key = "more_${row.id}") {
+                            MoreCard(onClick = { onMore(row) })
+                        }
                     }
                 }
             }
@@ -224,20 +231,22 @@ private fun Rows(
     }
 }
 
+val NeonCyan = Color(0xFF80F5FF)
+
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun MoreCard(onClick: () -> Unit) {
-    Column(modifier = Modifier.width(160.dp)) {
+    Column(modifier = Modifier.width(160.dp).padding(4.dp)) {
         Card(onClick = onClick, modifier = Modifier.fillMaxWidth().aspectRatio(2f / 3f)) {
             Box(
                 modifier = Modifier.fillMaxSize().background(Color(0xFF20232D)),
                 contentAlignment = Alignment.Center
             ) {
-                Text("Більше", color = Color(0xFFD0BCFF), fontFamily = IbmPlexMono, fontWeight = FontWeight.Bold)
+                Text("Більше", color = Color(0xFFD0BCFF), fontWeight = FontWeight.Bold)
             }
         }
         Spacer(Modifier.height(8.dp))
-        Text("Усі тайтли", color = Color(0xFF94A3B8), fontFamily = IbmPlexMono)
+        Text("Усі тайтли", color = Color(0xFF94A3B8))
     }
 }
 
@@ -248,18 +257,27 @@ fun PosterCard(
     modifier: Modifier = Modifier,
     showRelatedBadge: Boolean = false,
     onClick: () -> Unit,
+    onFavoriteChanged: () -> Unit = {},
 ) {
+    val context = LocalContext.current
+    val favoritesManager = remember(context) { FavoritesManager(context) }
+    val favoriteIds by favoritesManager.favoriteIds.collectAsState()
+    val isFavorite = item.id in favoriteIds
+    var showFavoriteMenu by remember { mutableStateOf(false) }
     var isFocused by remember { mutableStateOf(false) }
-    val textColor = if (isFocused) Color(0xFFD0BCFF) else Color(0xFF94A3B8)
-    val scale = if (isFocused) 1.05f else 1.0f
+    val lightCyanGrey = Color(0xFFB8C2D1)
+    val textColor = if (isFocused) NeonCyan else lightCyanGrey
+    val scale = if (isFocused) 1.025f else 1.0f
 
     Column(
         modifier = modifier
+            .padding(4.dp)
             .onFocusChanged { isFocused = it.isFocused }
             .scale(scale)
     ) {
         Card(
             onClick = onClick,
+            onLongClick = { showFavoriteMenu = true },
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(2f / 3f),
@@ -271,9 +289,14 @@ fun PosterCard(
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
                 )
+                ReleaseBadge(
+                    format = item.format,
+                    score = item.score,
+                    modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
+                )
                 if (showRelatedBadge) {
                     Box(
-                        modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
+                        modifier = Modifier.align(Alignment.TopStart).padding(8.dp)
                             .clip(RoundedCornerShape(8.dp)).background(Color(0xDD15171E))
                             .padding(7.dp),
                         contentAlignment = Alignment.Center,
@@ -281,18 +304,42 @@ fun PosterCard(
                         FontAwesomeIcon(FaIcons.LINK, color = Color(0xFFD0BCFF), size = 13.sp)
                     }
                 }
+                if (isFavorite) {
+                    FavoriteBadge(Modifier.align(Alignment.BottomEnd).padding(6.dp))
+                }
             }
         }
         Spacer(Modifier.height(8.dp))
-        Text(
-            text = item.title.display,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            style = MaterialTheme.typography.labelMedium,
-            fontFamily = IbmPlexMono,
-            color = textColor,
-            fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Normal,
-            modifier = Modifier.padding(horizontal = 4.dp)
+        Column(modifier = Modifier.padding(horizontal = 4.dp)) {
+            Text(
+                text = item.title.display,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.labelMedium,
+                color = textColor,
+                fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Normal,
+            )
+            item.seasonYear?.let { year ->
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = "$year",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontSize = 10.sp,
+                    color = textColor,
+                    fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Normal,
+                )
+            }
+        }
+    }
+    if (showFavoriteMenu) {
+        FavoriteContextMenu(
+            isFavorite = isFavorite,
+            onToggle = {
+                showFavoriteMenu = false
+                favoritesManager.toggle(item)
+                onFavoriteChanged()
+            },
+            onDismiss = { showFavoriteMenu = false },
         )
     }
 }
@@ -302,8 +349,8 @@ fun PosterCard(
 private fun ErrorBlock(message: String, onRetry: () -> Unit) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Text(message, style = MaterialTheme.typography.titleMedium, fontFamily = IbmPlexMono, textAlign = TextAlign.Center)
-            Button(onClick = onRetry) { Text("Повторити", fontFamily = IbmPlexMono) }
+            Text(message, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
+            Button(onClick = onRetry) { Text("Повторити") }
         }
     }
 }

@@ -13,21 +13,16 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
-import coil.compose.AsyncImage
 import ua.any2b.core.anilist.AnimeCard
 
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -63,7 +58,6 @@ fun SearchScreen(
             Text(
                 text = "Пошук аніме",
                 style = MaterialTheme.typography.headlineLarge,
-                fontFamily = IbmPlexMono,
                 color = Color.White,
                 fontWeight = FontWeight.Bold
             )
@@ -83,7 +77,6 @@ fun SearchScreen(
                     Text(
                         text = "Введіть назву аніме...",
                         color = Color(0xFF64748B),
-                        fontFamily = IbmPlexMono,
                         fontSize = 14.sp
                     )
                 }
@@ -93,7 +86,6 @@ fun SearchScreen(
                     singleLine = true,
                     textStyle = androidx.compose.ui.text.TextStyle(
                         color = Color.White,
-                        fontFamily = IbmPlexMono,
                         fontSize = 16.sp
                     ),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
@@ -118,7 +110,6 @@ fun SearchScreen(
             Text(
                 text = "Поки що пошук працює лише за англійською назвою або ромадзі. Кирилиця не підтримується.",
                 style = MaterialTheme.typography.bodySmall,
-                fontFamily = IbmPlexMono,
                 color = Color(0xFF94A3B8)
             )
 
@@ -130,7 +121,7 @@ fun SearchScreen(
                         .fillMaxWidth(),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("Пошук...", style = MaterialTheme.typography.titleMedium, fontFamily = IbmPlexMono, color = Color(0xFFD0BCFF))
+                    Text("Пошук...", style = MaterialTheme.typography.titleMedium, color = Color(0xFFD0BCFF))
                 }
             } else if (searchResults.isEmpty()) {
                 Box(
@@ -142,7 +133,6 @@ fun SearchScreen(
                     Text(
                         text = if (query.isBlank()) "Введіть текст для пошуку" else "Нічого не знайдено",
                         style = MaterialTheme.typography.titleMedium,
-                        fontFamily = IbmPlexMono,
                         color = Color(0xFF64748B),
                         textAlign = TextAlign.Center
                     )
@@ -159,15 +149,15 @@ fun SearchScreen(
                             Text(
                                 text = "Результати пошуку (${searchResults.size})",
                                 style = MaterialTheme.typography.titleLarge,
-                                fontFamily = IbmPlexMono,
                                 modifier = Modifier.padding(bottom = 14.dp),
                                 color = Color.White
                             )
                             LazyRow(
+                                contentPadding = PaddingValues(vertical = 8.dp),
                                 horizontalArrangement = Arrangement.spacedBy(20.dp),
                             ) {
                                 items(searchResults, key = { it.id }) { card ->
-                                    SearchPosterCard(
+                                    PosterCard(
                                         item = card,
                                         modifier = Modifier.width(160.dp),
                                         onClick = { onOpen(card) }
@@ -179,44 +169,5 @@ fun SearchScreen(
                 }
             }
         }
-    }
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun SearchPosterCard(item: AnimeCard, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    var isFocused by remember { mutableStateOf(false) }
-    val textColor = if (isFocused) Color(0xFFD0BCFF) else Color(0xFF94A3B8)
-    val scale = if (isFocused) 1.05f else 1.0f
-
-    Column(
-        modifier = modifier
-            .onFocusChanged { isFocused = it.isFocused }
-            .scale(scale)
-    ) {
-        Card(
-            onClick = onClick,
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(2f / 3f),
-        ) {
-            AsyncImage(
-                model = item.cover,
-                contentDescription = item.title.display,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
-        Spacer(Modifier.height(8.dp))
-        Text(
-            text = item.title.display,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            style = MaterialTheme.typography.labelMedium,
-            fontFamily = IbmPlexMono,
-            color = textColor,
-            fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Normal,
-            modifier = Modifier.padding(horizontal = 4.dp)
-        )
     }
 }

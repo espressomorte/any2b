@@ -12,4 +12,12 @@ class SettingsManager(context: Context) {
     fun setAutoPlayNextEnabled(enabled: Boolean) {
         prefs.edit().putBoolean("auto_play_next", enabled).apply()
     }
+
+    fun selectedPlayerPackage(): String? = prefs.getString("player_package", null)
+
+    fun setSelectedPlayerPackage(packageName: String?) {
+        prefs.edit().apply {
+            if (packageName == null) remove("player_package") else putString("player_package", packageName)
+        }.apply()
+    }
 }

@@ -34,6 +34,7 @@ class MainActivity : ComponentActivity() {
                             putExtra(CategoryActivity.EXTRA_CATEGORY_TITLE, row.title)
                         })
                     },
+                    onFavoriteChanged = viewModel::refreshLocalRows,
                 )
             }
         }

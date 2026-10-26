@@ -18,14 +18,18 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
 import ua.any2b.core.update.AppRelease
 import ua.any2b.tvplayer.UpdateState
+import ua.any2b.tvplayer.data.ExternalVideoPlayer
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     autoPlayNext: Boolean,
+    availablePlayers: List<ExternalVideoPlayer>,
+    selectedPlayerPackage: String?,
     currentVersion: String,
     updateState: UpdateState,
     onAutoPlayChanged: (Boolean) -> Unit,
+    onPlayerSelected: (String?) -> Unit,
     onCheckUpdates: () -> Unit,
     onDownloadUpdate: (AppRelease) -> Unit,
     onInstallUpdate: (Uri) -> Unit,
@@ -113,6 +117,60 @@ fun SettingsScreen(
                         }
                     }
                 }
+
+
+                var showPlayers by remember { mutableStateOf(false) }
+                val selectedPlayerName = availablePlayers.firstOrNull {
+                    it.packageName == selectedPlayerPackage
+                }?.label ?: "Вбудований плеєр"
+                Surface(
+                    onClick = { showPlayers = !showPlayers },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp)),
+                    colors = ClickableSurfaceDefaults.colors(
+                        containerColor = Color(0xFF20232D),
+                        focusedContainerColor = Color(0xFF4F378B).copy(alpha = 0.8f)
+                    )
+                ) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text("Плеєр для відео", color = Color.White, fontFamily = IbmPlexMono)
+                        Spacer(Modifier.height(4.dp))
+                        Text(selectedPlayerName, color = Color(0xFF94A3B8), fontFamily = IbmPlexMono)
+                    }
+                }
+                if (selectedPlayerPackage != null) {
+                    Text(
+                        "Зовнішній плеєр не передає прогрес перегляду й не запускає наступну серію автоматично",
+                        color = Color(0xFF94A3B8),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = IbmPlexMono
+                    )
+                }
+                if (showPlayers) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PlayerChoice(
+                            label = "Вбудований плеєр",
+                            selected = selectedPlayerPackage == null,
+                            onClick = {
+                                onPlayerSelected(null)
+                                showPlayers = false
+                            }
+                        )
+                        availablePlayers.forEach { player ->
+                            PlayerChoice(
+                                label = player.label,
+                                selected = selectedPlayerPackage == player.packageName,
+                                onClick = {
+                                    onPlayerSelected(player.packageName)
+                                    showPlayers = false
+                                }
+                            )
+                        }
+                        if (availablePlayers.isEmpty()) {
+                            Text("Інших плеєрів не знайдено", color = Color(0xFF94A3B8))
+                        }
+                    }
+                }
             }
 
             Column(
@@ -168,5 +226,27 @@ fun SettingsScreen(
                 }
             }
         }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun PlayerChoice(label: String, selected: Boolean, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp)),
+        colors = ClickableSurfaceDefaults.colors(
+            containerColor = if (selected) Color(0xFF4F378B) else Color(0xFF20232D),
+            focusedContainerColor = Color(0xFF4F378B).copy(alpha = 0.8f)
+        )
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.padding(16.dp),
+            color = Color.White,
+            fontFamily = IbmPlexMono,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+        )
     }
 }

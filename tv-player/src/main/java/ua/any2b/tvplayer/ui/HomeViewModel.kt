@@ -37,7 +37,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         _state.value = HomeState.Loading
         viewModelScope.launch {
             _state.value = try {
-                HomeState.Ready(rowsWithLocal(client.homeRows(perRow = 13)))
+                HomeState.Ready(rowsWithLocal(client.homeRows(perRow = 14)))
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

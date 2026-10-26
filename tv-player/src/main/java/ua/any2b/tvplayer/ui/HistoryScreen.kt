@@ -14,6 +14,7 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -22,6 +23,9 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
 import ua.any2b.tvplayer.data.WatchHistoryEntry
+import ua.any2b.tvplayer.data.FavoritesManager
+import ua.any2b.core.anilist.AnimeCard
+import ua.any2b.core.anilist.Title
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -48,7 +52,6 @@ fun HistoryScreen(
                 Text(
                     text = "Історія переглядів",
                     style = MaterialTheme.typography.headlineLarge,
-                    fontFamily = IbmPlexMono,
                     color = Color.White,
                     fontWeight = FontWeight.Bold
                 )
@@ -64,7 +67,6 @@ fun HistoryScreen(
                     Text(
                         text = "Історія переглядів порожня",
                         style = MaterialTheme.typography.titleMedium,
-                        fontFamily = IbmPlexMono,
                         color = Color(0xFF64748B),
                         textAlign = TextAlign.Center
                     )
@@ -94,18 +96,26 @@ fun HistoryScreen(
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun HistoryCard(item: WatchHistoryEntry, onClick: () -> Unit) {
+    val context = LocalContext.current
+    val favoritesManager = remember(context) { FavoritesManager(context) }
+    val favoriteIds by favoritesManager.favoriteIds.collectAsState()
+    val isFavorite = item.animeId in favoriteIds
+    var showFavoriteMenu by remember { mutableStateOf(false) }
     var isFocused by remember { mutableStateOf(false) }
-    val textColor = if (isFocused) Color(0xFFD0BCFF) else Color(0xFF94A3B8)
-    val scale = if (isFocused) 1.05f else 1.0f
+    val lightCyanGrey = Color(0xFFB8C2D1)
+    val textColor = if (isFocused) NeonCyan else lightCyanGrey
+    val scale = if (isFocused) 1.025f else 1.0f
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .padding(4.dp)
             .onFocusChanged { isFocused = it.isFocused }
             .scale(scale)
     ) {
         Card(
             onClick = onClick,
+            onLongClick = { showFavoriteMenu = true },
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(2f / 3f),
@@ -128,7 +138,6 @@ private fun HistoryCard(item: WatchHistoryEntry, onClick: () -> Unit) {
                         Text(
                             text = "Серія ${item.episodeNumber}",
                             color = Color(0xFFD0BCFF),
-                            fontFamily = IbmPlexMono,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold
                         )
@@ -148,18 +157,51 @@ private fun HistoryCard(item: WatchHistoryEntry, onClick: () -> Unit) {
                         }
                     }
                 }
+                if (isFavorite) {
+                    FavoriteBadge(Modifier.align(Alignment.BottomEnd).padding(6.dp))
+                }
             }
         }
         Spacer(Modifier.height(8.dp))
-        Text(
-            text = item.titleDisplay,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            style = MaterialTheme.typography.labelMedium,
-            fontFamily = IbmPlexMono,
-            color = textColor,
-            fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Normal,
-            modifier = Modifier.padding(horizontal = 4.dp)
+        Column(modifier = Modifier.padding(horizontal = 4.dp)) {
+            Text(
+                text = item.titleDisplay,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.labelMedium,
+                color = textColor,
+                fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Normal,
+            )
+            item.seasonYear?.let { year ->
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = "$year",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontSize = 10.sp,
+                    color = textColor,
+                    fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Normal,
+                )
+            }
+        }
+    }
+    if (showFavoriteMenu) {
+        FavoriteContextMenu(
+            isFavorite = isFavorite,
+            onToggle = {
+                showFavoriteMenu = false
+                favoritesManager.toggle(AnimeCard(
+                    id = item.animeId,
+                    title = Title(item.romaji, item.english, item.native),
+                    cover = item.cover,
+                    score = item.score,
+                    episodes = item.episodes,
+                    format = item.format,
+                    status = item.status,
+                    seasonYear = item.seasonYear,
+                    nextEpisode = null,
+                ))
+            },
+            onDismiss = { showFavoriteMenu = false },
         )
     }
 }
