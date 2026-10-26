@@ -58,12 +58,22 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.event.release.tag_name }}
         shell: bash
         run: |
+          set -euo pipefail
           chmod +x gradlew
+          if [[ -z "$RELEASE_TAG" && "$GITHUB_REF_TYPE" == "tag" ]]; then
+            RELEASE_TAG="$GITHUB_REF_NAME"
+          fi
+          gradle_args=("-PappVersionCode=$GITHUB_RUN_NUMBER")
+          if [[ -n "$RELEASE_TAG" ]]; then
+            gradle_args+=("-PappVersionName=${RELEASE_TAG#v}")
+          fi
           ./gradlew \
             "-Dorg.gradle.java.home=$JAVA_HOME" \
             --no-daemon --max-workers=2 \
+            "${gradle_args[@]}" \
             :core:test :tv-player:assembleRelease
 
       - name: Upload APK

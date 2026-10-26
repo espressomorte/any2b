@@ -6,6 +6,7 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.coroutines.core)
     implementation(libs.json)
+    testImplementation(kotlin("test"))
 }
 
 kotlin {
