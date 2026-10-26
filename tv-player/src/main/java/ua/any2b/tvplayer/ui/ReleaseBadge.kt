@@ -3,90 +3,65 @@ package ua.any2b.tvplayer.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 
 @Composable
 fun ReleaseBadge(
-    format: String?,
     score: Int?,
     modifier: Modifier = Modifier
 ) {
-    val isMovie = format?.equals("MOVIE", ignoreCase = true) == true
-    val typeText = if (isMovie) "Movie" else "Series"
+    if (score == null) return
+    val ratingColor = scoreToSpectrumColor(score)
 
-    // T-90 for movies (light green), T-80 for series (dim/medium green)
-    val leftBgColor = if (isMovie) Color(0xFFC2E8CE) else Color(0xFF8CD8A3)
-    val leftTextColor = Color(0xFF0F172A)
+    // Визначаємо, який колір тексту буде контрастним до кольорового фону
+    val contentColor = if (ratingColor.luminance() > 0.5f) Color.Black else Color.White
 
-    val lightCyanGrey = Color(0xFFB8C2D1)
+    // Кольорова заливка бейджа (можна регулювати alpha для соковитості)
+    val backgroundTint = ratingColor.copy(alpha = 0.85f)
 
-    val hasScore = score != null
-    val ratingColor = if (score != null) scoreToSpectrumColor(score) else lightCyanGrey
-    val scoreText = if (score != null) "$score%" else "null"
-    val scoreTextColor = ratingColor
+    val floatScore = score / 10f
+    val scoreText = String.format(java.util.Locale.US, "%.1f", floatScore)
 
-    Row(
+    Box(
         modifier = modifier
             .clip(RoundedCornerShape(percent = 50))
-            .background(leftBgColor),
-        verticalAlignment = Alignment.CenterVertically
+            .background(backgroundTint)
+            .border(1.5.dp, contentColor.copy(alpha = 0.5f), RoundedCornerShape(percent = 50))
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        contentAlignment = Alignment.Center
     ) {
-        // Left half: Type ("Movie" / "Series")
-        Box(
-            modifier = Modifier
-                .background(leftBgColor)
-                .padding(horizontal = 7.dp, vertical = 3.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = typeText,
-                color = leftTextColor,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold
-            )
-        }
-
-        // Vertical divider between left and right halves
-        Box(
-            modifier = Modifier
-                .width(1.dp)
-                .height(14.dp)
-                .background(leftTextColor.copy(alpha = 0.25f))
+        Text(
+            text = scoreText,
+            color = contentColor,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold
         )
-
-        // Right half: Rating percentage / "null" with spectrum outline and text matching outline color
-        Box(
-            modifier = Modifier
-                .background(Color(0xDD15171E))
-                .border(
-                    width = 1.5.dp,
-                    color = ratingColor,
-                    shape = RoundedCornerShape(topEnd = 50.dp, bottomEnd = 50.dp)
-                )
-                .padding(horizontal = 7.dp, vertical = 3.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = scoreText,
-                color = scoreTextColor,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold
-            )
-        }
     }
+}
+
+fun adjustBrightness(color: Color, factor: Float): Color {
+    val argb = android.graphics.Color.argb(
+        (color.alpha * 255).toInt(),
+        (color.red * 255).toInt(),
+        (color.green * 255).toInt(),
+        (color.blue * 255).toInt()
+    )
+    val hsv = FloatArray(3)
+    android.graphics.Color.colorToHSV(argb, hsv)
+    hsv[2] = (hsv[2] * factor).coerceIn(0f, 1f)
+    return Color(android.graphics.Color.HSVToColor(hsv))
 }
 
 /**
@@ -145,4 +120,14 @@ fun scoreToSpectrumColor(score: Int): Color {
         green = (g * factor).toFloat().coerceIn(0f, 1f),
         blue = (b * factor).toFloat().coerceIn(0f, 1f)
     )
+}
+
+@Preview
+@Composable
+private fun ReleaseBadgePreview() {
+    AppTheme {
+        ReleaseBadge(
+            score = 85
+        )
+    }
 }

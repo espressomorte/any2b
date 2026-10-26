@@ -290,7 +290,6 @@ fun PosterCard(
                     modifier = Modifier.fillMaxSize(),
                 )
                 ReleaseBadge(
-                    format = item.format,
                     score = item.score,
                     modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
                 )

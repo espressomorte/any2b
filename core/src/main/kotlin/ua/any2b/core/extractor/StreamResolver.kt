@@ -14,7 +14,8 @@ class StreamResolver(
      * Перевіряє, чи вміє система витягувати відео з даного URL.
      */
     fun canHandle(embedUrl: String): Boolean =
-        extractors.any { it.canHandle(embedUrl) }
+        embedUrl.endsWith(".m3u8") || embedUrl.contains(".m3u8?") ||
+            extractors.any { it.canHandle(embedUrl) }
 
     /**
      * Автоматично знаходить потрібний екстрактор та повертає готовий HLS-потік.

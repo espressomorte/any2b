@@ -138,8 +138,9 @@ class AnitubeClient(
             }
         }
 
-        val voicesMap = mutableMapOf<String, MutableList<AnitubeEpisode>>()
+        val voicesMap = linkedMapOf<String, MutableList<AnitubeEpisode>>()
         val voiceCategories = mutableMapOf<String, String>()
+        val voiceNames = mutableMapOf<String, String>()
 
         for ((id, title, fileUrl) in rawItems) {
             val parts = id.split("_")
@@ -150,9 +151,9 @@ class AnitubeClient(
             val studioName = names[studioKey] ?: category.ifBlank { "Оригінал" }
 
             val playerName = names[id].orEmpty()
-            val epNum = Regex("""(\d+)""").find(title)?.groupValues?.get(1)?.toIntOrNull() ?: 1
+            val epNum = episodeNumberFromTitle(title) ?: 1
 
-            voicesMap.getOrPut(studioName) { mutableListOf() }.add(
+            voicesMap.getOrPut(studioKey) { mutableListOf() }.add(
                 AnitubeEpisode(
                     id = id,
                     episodeNumber = epNum,
@@ -161,16 +162,23 @@ class AnitubeClient(
                     playerName = playerName
                 )
             )
-            voiceCategories[studioName] = category
+            voiceCategories[studioKey] = category
+            voiceNames[studioKey] = studioName
         }
 
-        return voicesMap.map { (name, episodes) ->
+        return voicesMap.map { (key, episodes) ->
             AnitubeVoice(
-                category = voiceCategories[name].orEmpty(),
-                name = name,
+                category = voiceCategories[key].orEmpty(),
+                name = voiceNames[key].orEmpty(),
                 episodes = episodes
             )
         }
+    }
+
+    private fun episodeNumberFromTitle(title: String): Int? {
+        val match = Regex("""^\s*(\d{1,3})(?=\b|[.\-])|(?:серія|епізод|episode|ep\.?)\s*#?\s*(\d+)""", RegexOption.IGNORE_CASE)
+            .find(title) ?: return null
+        return (match.groupValues[1].ifEmpty { match.groupValues[2] }).toIntOrNull()
     }
 
     companion object {

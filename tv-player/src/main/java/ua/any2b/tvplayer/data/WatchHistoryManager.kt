@@ -67,7 +67,8 @@ class WatchHistoryManager(context: Context) {
         details: AnimeDetails,
         episodeIndex: Int,
         voiceIndex: Int,
-        progress: Float = 1.0f
+        progress: Float = 1.0f,
+        episodeNumber: Int = episodeIndex + 1,
     ) {
         val list = getHistory().toMutableList()
         val existingIndex = list.indexOfFirst { it.animeId == details.id }
@@ -84,7 +85,7 @@ class WatchHistoryManager(context: Context) {
             status = details.status,
             seasonYear = details.seasonYear,
             episodeIndex = episodeIndex,
-            episodeNumber = episodeIndex + 1,
+            episodeNumber = episodeNumber,
             voiceIndex = voiceIndex,
             progress = progress,
             lastWatchedTimestamp = System.currentTimeMillis()
