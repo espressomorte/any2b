@@ -19,6 +19,9 @@ object FaIcons {
     const val LINK = "\uf0c1"
     const val BOOKMARK = "\uf02e"
     const val ANGLE_DOWN = "\uf107"
+    const val ARROW_UP = "\uf062"
+    const val ARROW_DOWN = "\uf063"
+    const val CHECK = "\uf00c"
 }
 
 @Composable

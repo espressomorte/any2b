@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
@@ -68,6 +69,7 @@ object AppColors {
     val HistoryOverlay = Color(0xCC0F1115)
     val AccentLight = Color(0xFFD0BCFF)
     val ButtonDarkText = Color(0xFF0F172A)
+    val NeonCyanLight = Color(0xFFE2E8F0)
 }
 
 fun Modifier.neonGlow(
@@ -261,11 +263,20 @@ private fun Rows(
         contentPadding = PaddingValues(top = 24.dp, bottom = 48.dp, start = 36.dp, end = 48.dp),
         verticalArrangement = Arrangement.spacedBy(32.dp),
     ) {
+        if (rows.isEmpty() && catalogError == null) {
+            item(key = "empty_home") {
+                Text(
+                    "Усі списки приховані. Увімкніть їх у налаштуваннях головної.",
+                    color = AppColors.TextSecondary,
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+            }
+        }
         if (catalogError != null) {
             item(key = "catalog_error") {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(catalogError, color = AppColors.ErrorRed)
-                    Button(onClick = onRetry) { Text("Повторити завантаження каталогу") }
+                    PrimaryButton(onClick = onRetry, text = "Повторити завантаження каталогу")
                 }
             }
         }
@@ -471,7 +482,30 @@ private fun ErrorBlock(message: String, onRetry: () -> Unit) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Text(message, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
-            Button(onClick = onRetry) { Text("Повторити") }
+            PrimaryButton(onClick = onRetry, text = "Повторити")
         }
+    }
+}
+
+@Composable
+private fun PrimaryButton(onClick: () -> Unit, text: String) {
+    var isFocused by remember { mutableStateOf(false) }
+    Button(
+        onClick = onClick,
+        scale = ButtonDefaults.scale(scale = 1f, focusedScale = 1f),
+        shape = ButtonDefaults.shape(RoundedCornerShape(12.dp)),
+        glow = ButtonDefaults.glow(glow = Glow.None, focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 10.dp)),
+        colors = ButtonDefaults.colors(
+            containerColor = AppColors.PrimaryPurple,
+            contentColor = Color.White,
+            focusedContainerColor = AppColors.PrimaryPurple,
+            focusedContentColor = Color.White
+        ),
+        modifier = Modifier
+            .zIndex(if (isFocused) 1f else 0f)
+            .onFocusChanged { isFocused = it.isFocused }
+            .neonGlow(focused = isFocused, borderRadius = 12.dp)
+    ) {
+        Text(text)
     }
 }

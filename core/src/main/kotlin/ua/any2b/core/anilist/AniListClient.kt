@@ -131,17 +131,21 @@ class AniListClient(
         require(page > 0 && perPage > 0)
         val (season, year) = Season.current()
         val (nextSeason, nextYear) = season.next(year)
-        val mediaArgs = when (categoryId) {
-            "popular_season" -> "season: ${'$'}season, seasonYear: ${'$'}year, sort: POPULARITY_DESC"
-            "trending" -> "sort: TRENDING_DESC"
-            "upcoming" -> "season: ${'$'}nextSeason, seasonYear: ${'$'}nextYear, sort: POPULARITY_DESC"
-            "popular_all" -> "sort: POPULARITY_DESC"
-            "top_score" -> "sort: SCORE_DESC"
+        val genre = categoryId.takeIf { it.startsWith("genre:") }
+            ?.removePrefix("genre:")?.takeIf { it.isNotBlank() }
+        val mediaArgs = when {
+            categoryId == "popular_season" -> "season: ${'$'}season, seasonYear: ${'$'}year, sort: POPULARITY_DESC"
+            categoryId == "trending" -> "sort: TRENDING_DESC"
+            categoryId == "upcoming" -> "season: ${'$'}nextSeason, seasonYear: ${'$'}nextYear, sort: POPULARITY_DESC"
+            categoryId == "popular_all" -> "sort: POPULARITY_DESC"
+            categoryId == "top_score" -> "sort: SCORE_DESC"
+            genre != null -> "genre_in: ${'$'}genres, sort: POPULARITY_DESC"
             else -> throw IllegalArgumentException("Невідома категорія: $categoryId")
         }
-        val categoryVariables = when (categoryId) {
-            "popular_season" -> ", ${'$'}season: MediaSeason, ${'$'}year: Int"
-            "upcoming" -> ", ${'$'}nextSeason: MediaSeason, ${'$'}nextYear: Int"
+        val categoryVariables = when {
+            categoryId == "popular_season" -> ", ${'$'}season: MediaSeason, ${'$'}year: Int"
+            categoryId == "upcoming" -> ", ${'$'}nextSeason: MediaSeason, ${'$'}nextYear: Int"
+            genre != null -> ", ${'$'}genres: [String]"
             else -> ""
         }
         val variables = JSONObject()
@@ -151,6 +155,7 @@ class AniListClient(
             .put("year", year)
             .put("nextSeason", nextSeason.name)
             .put("nextYear", nextYear)
+        if (genre != null) variables.put("genres", JSONArray().put(genre))
         val query = """
 query Category(${'$'}page: Int, ${'$'}perPage: Int$categoryVariables) {
   Page(page: ${'$'}page, perPage: ${'$'}perPage) {

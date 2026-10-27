@@ -59,6 +59,7 @@ fun DetailsScreen(
     onTrailerClick: () -> Unit,
     onBackClick: () -> Unit,
     onOpenRelated: (AnimeCard) -> Unit,
+    onOpenGenre: (String) -> Unit,
     onMoreRelated: () -> Unit,
     onMoreRecommendations: () -> Unit,
 ) {
@@ -193,6 +194,8 @@ fun DetailsScreen(
                                         else -> "Дивитися серію"
                                     }
                                     var isWatchFocused by remember { mutableStateOf(false) }
+                                    val watchBg = if (isWatchFocused) AppColors.NeonCyanLight else AppColors.SurfaceCard
+                                    val watchText = if (isWatchFocused) AppColors.ButtonDarkText else Color.White
                                     Button(
                                         onClick = onWatchClick,
                                         enabled = !state.resolvingStream && selectedEpisode != null,
@@ -203,10 +206,10 @@ fun DetailsScreen(
                                             focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 12.dp)
                                         ),
                                         colors = ButtonDefaults.colors(
-                                            containerColor = AppColors.PrimaryPurple,
-                                            contentColor = Color.White,
-                                            focusedContainerColor = AppColors.PrimaryPurple,
-                                            focusedContentColor = Color.White
+                                            containerColor = watchBg,
+                                            contentColor = watchText,
+                                            focusedContainerColor = watchBg,
+                                            focusedContentColor = watchText
                                         ),
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -223,6 +226,16 @@ fun DetailsScreen(
                                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
                                     var isFavFocused by remember { mutableStateOf(false) }
+                                    val favBg = when {
+                                        isFavFocused -> AppColors.NeonCyanLight
+                                        state.isFavorite -> AppColors.NeonCyan
+                                        else -> AppColors.SurfaceCard
+                                    }
+                                    val favText = when {
+                                        isFavFocused -> AppColors.ButtonDarkText
+                                        state.isFavorite -> AppColors.ButtonDarkText
+                                        else -> Color.White
+                                    }
                                     OutlinedButton(
                                         onClick = onToggleFavorite,
                                         scale = OutlinedButtonDefaults.scale(scale = 1f, focusedScale = 1f),
@@ -233,10 +246,10 @@ fun DetailsScreen(
                                             focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 10.dp)
                                         ),
                                         colors = OutlinedButtonDefaults.colors(
-                                            containerColor = AppColors.SurfaceDark,
-                                            contentColor = AppColors.AccentLight,
-                                            focusedContainerColor = AppColors.SurfaceDark,
-                                            focusedContentColor = AppColors.NeonCyan
+                                            containerColor = favBg,
+                                            contentColor = favText,
+                                            focusedContainerColor = favBg,
+                                            focusedContentColor = favText
                                         ),
                                         modifier = Modifier
                                             .weight(1f)
@@ -248,6 +261,8 @@ fun DetailsScreen(
                                     }
 
                                     var isTrailerFocused by remember { mutableStateOf(false) }
+                                    val trailerBg = if (isTrailerFocused) AppColors.NeonCyanLight else AppColors.SurfaceCard
+                                    val trailerText = if (isTrailerFocused) AppColors.ButtonDarkText else Color.White
                                     OutlinedButton(
                                         onClick = onTrailerClick,
                                         scale = OutlinedButtonDefaults.scale(scale = 1f, focusedScale = 1f),
@@ -258,10 +273,10 @@ fun DetailsScreen(
                                             focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 10.dp)
                                         ),
                                         colors = OutlinedButtonDefaults.colors(
-                                            containerColor = AppColors.SurfaceDark,
-                                            contentColor = AppColors.AccentLight,
-                                            focusedContainerColor = AppColors.SurfaceDark,
-                                            focusedContentColor = AppColors.NeonCyan
+                                            containerColor = trailerBg,
+                                            contentColor = trailerText,
+                                            focusedContainerColor = trailerBg,
+                                            focusedContentColor = trailerText
                                         ),
                                         modifier = Modifier
                                             .weight(1f)
@@ -291,11 +306,26 @@ fun DetailsScreen(
                                     color = Color.White,
                                     fontWeight = FontWeight.Bold
                                 )
-                                state.details.title.romaji?.let {
-                                    if (it != state.details.title.display) {
-                                        Text(it, style = MaterialTheme.typography.titleMedium, color = AppColors.TextLight)
+                                val ukrainianTitle = (state.videoSource as? VideoSourceState.Success)
+                                    ?.release?.title ?: when (state.videoSource) {
+                                        VideoSourceState.Loading -> "Шукаємо українську назву..."
+                                        else -> "Українську назву не вибрано"
                                     }
-                                }
+                                var isUkrainianTitleFocused by remember { mutableStateOf(false) }
+                                Text(
+                                    text = ukrainianTitle,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = if (isUkrainianTitleFocused) AppColors.NeonCyan else AppColors.TextLight,
+                                    modifier = Modifier
+                                        .onFocusChanged { isUkrainianTitleFocused = it.isFocused }
+                                        .clickable {
+                                            onResetManualSearch()
+                                            showManualDialog = true
+                                        }
+                                        .semantics { contentDescription = "Уточнити реліз AniTube: $ukrainianTitle" },
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
                             }
 
                             // Metadata Pills
@@ -323,13 +353,29 @@ fun DetailsScreen(
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
                                     state.details.genres.forEach { genre ->
-                                        Box(
+                                        var isGenreFocused by remember(genre) { mutableStateOf(false) }
+                                        Card(
+                                            onClick = { onOpenGenre(genre) },
+                                            scale = CardDefaults.scale(scale = 1f, focusedScale = 1f),
+                                            shape = CardDefaults.shape(RoundedCornerShape(8.dp)),
+                                            glow = CardDefaults.glow(
+                                                glow = Glow.None,
+                                                focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 8.dp),
+                                            ),
+                                            colors = CardDefaults.colors(
+                                                containerColor = AppColors.SurfaceDark,
+                                                focusedContainerColor = AppColors.SurfaceDark,
+                                            ),
                                             modifier = Modifier
-                                                .clip(RoundedCornerShape(8.dp))
-                                                .background(AppColors.SurfaceDark)
-                                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                                                .zIndex(if (isGenreFocused) 1f else 0f)
+                                                .onFocusChanged { isGenreFocused = it.isFocused },
                                         ) {
-                                            Text(genre, color = AppColors.TextLight, fontSize = 12.sp)
+                                            Text(
+                                                genreLabel(genre),
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                                color = if (isGenreFocused) AppColors.NeonCyan else AppColors.TextLight,
+                                                fontSize = 12.sp,
+                                            )
                                         }
                                     }
                                 }
@@ -371,33 +417,6 @@ fun DetailsScreen(
                                     .padding(vertical = 12.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                val releaseTitle = (state.videoSource as? VideoSourceState.Success)
-                                    ?.release?.title ?: "Не вибрано"
-
-                                Column(
-                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    Text(
-                                        text = "AniTube",
-                                        color = AppColors.TextSecondary,
-                                        fontSize = 11.sp
-                                    )
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        Text(
-                                            text = releaseTitle,
-                                            color = Color.White,
-                                            style = MaterialTheme.typography.titleMedium,
-                                            modifier = Modifier.weight(1f, fill = false),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                }
-
                                 when (val source = state.videoSource) {
                                     VideoSourceState.Loading -> Row(
                                         modifier = Modifier.padding(horizontal = 16.dp),
@@ -460,8 +479,16 @@ fun DetailsScreen(
                                                         else rememberedVariants[group.key] ?: group.preferredIndex
                                                     val displayedVoice = group.variants.firstOrNull { it.index == displayedIndex }
                                                         ?.value ?: group.variants.first().value
-                                                    val bg = if (isSelected) AppColors.PrimaryPurple else AppColors.SurfaceCard
-                                                    val textColor = if (isSelected) Color.White else AppColors.TextSecondary
+                                                    val bg = when {
+                                                        isStudioFocused -> AppColors.NeonCyanLight
+                                                        isSelected -> AppColors.NeonCyan
+                                                        else -> AppColors.SurfaceCard
+                                                    }
+                                                    val textColor = when {
+                                                        isStudioFocused -> AppColors.ButtonDarkText
+                                                        isSelected -> AppColors.ButtonDarkText
+                                                        else -> AppColors.TextSecondary
+                                                    }
 
                                                     Card(
                                                         onClick = {
@@ -488,6 +515,7 @@ fun DetailsScreen(
                                                         modifier = Modifier
                                                             .zIndex(if (isStudioFocused) 1f else 0f)
                                                             .onFocusChanged { isStudioFocused = it.isFocused }
+                                                            .neonGlow(focused = isStudioFocused, borderRadius = 12.dp)
                                                     ) {
                                                         Row(
                                                             modifier = Modifier
@@ -548,9 +576,14 @@ fun DetailsScreen(
                                             val isEpSelected = epIndex == state.selectedEpisodeIndex
                                             val isWatched = episode.episodeNumber < watchedEpNumber ||
                                                     (state.historyEntry != null && episode.episodeNumber == watchedEpNumber && state.historyEntry.progress >= 0.99f)
-                                            val bg = if (isEpSelected) AppColors.PrimaryPurple else AppColors.SurfaceCardHover
+                                            val bg = when {
+                                                isEpFocused -> AppColors.NeonCyanLight
+                                                isEpSelected -> AppColors.NeonCyan
+                                                else -> AppColors.SurfaceCardHover
+                                            }
                                             val textColor = when {
-                                                isEpSelected -> Color.White
+                                                isEpFocused -> AppColors.ButtonDarkText
+                                                isEpSelected -> AppColors.ButtonDarkText
                                                 isWatched -> AppColors.TextWatched
                                                 else -> AppColors.TextSecondary
                                             }
@@ -574,6 +607,7 @@ fun DetailsScreen(
                                                     .height(36.dp)
                                                     .zIndex(if (isEpFocused) 1f else 0f)
                                                     .onFocusChanged { isEpFocused = it.isFocused }
+                                                    .neonGlow(focused = isEpFocused, borderRadius = 10.dp)
                                             ) {
                                                 Box(
                                                     modifier = Modifier
@@ -891,12 +925,21 @@ private fun StudioVoiceDialog(
                 group.variants.forEachIndexed { position, (index, voice) ->
                     val player = voice.playerName.ifBlank { "Плеєр ${position + 1}" }
                     val studio = voice.name.ifBlank { "Невідома студія" }
+                    val isSelected = index == selectedVoiceIndex
+                    val containerColor = if (isSelected) Color(0xFFE2E8F0) else AppColors.SurfaceCard
+                    val contentColor = if (isSelected) Color(0xFF0F172A) else Color.White
                     var isVoiceFocused by remember { mutableStateOf(false) }
                     Button(
                         onClick = { onSelect(index) },
                         scale = ButtonDefaults.scale(scale = 1f, focusedScale = 1f),
                         shape = ButtonDefaults.shape(RoundedCornerShape(12.dp)),
                         glow = ButtonDefaults.glow(glow = Glow.None, focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 10.dp)),
+                        colors = ButtonDefaults.colors(
+                            containerColor = containerColor,
+                            contentColor = contentColor,
+                            focusedContainerColor = containerColor,
+                            focusedContentColor = contentColor
+                        ),
                         modifier = Modifier
                             .fillMaxWidth()
                             .zIndex(if (isVoiceFocused) 1f else 0f)
@@ -904,8 +947,9 @@ private fun StudioVoiceDialog(
                             .neonGlow(focused = isVoiceFocused, borderRadius = 12.dp)
                     ) {
                         Text(
-                            text = "$studio · $player" + if (index == selectedVoiceIndex) " · обрано" else "",
+                            text = "$studio · $player" + if (isSelected) " · обрано" else "",
                             maxLines = 1,
+                            color = contentColor
                         )
                     }
                 }
@@ -1009,6 +1053,7 @@ private fun DetailsScreenPreview() {
             onTrailerClick = {},
             onBackClick = {},
             onOpenRelated = {},
+            onOpenGenre = {},
             onMoreRelated = {},
             onMoreRecommendations = {},
         )

@@ -1,6 +1,7 @@
 package ua.any2b.tvplayer.ui
 
 import android.content.Context
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
@@ -10,6 +11,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import ua.any2b.core.anilist.AniListClient
 import ua.any2b.core.anilist.AnimeDetails
 import ua.any2b.core.anitube.AnitubeClient
@@ -22,6 +25,8 @@ import ua.any2b.tvplayer.data.VoiceCache
 import ua.any2b.tvplayer.data.FavoritesManager
 import ua.any2b.tvplayer.data.WatchHistoryEntry
 import ua.any2b.tvplayer.data.WatchHistoryManager
+import ua.any2b.tvplayer.data.ReleaseMappingStore
+import ua.any2b.tvplayer.data.ReleaseSelection
 
 sealed interface VideoSourceState {
     data object Loading : VideoSourceState
@@ -64,7 +69,10 @@ class DetailsViewModel(
 
     private val historyManager = WatchHistoryManager(context)
     private val favoritesManager = FavoritesManager(context)
+    private val releaseMappings = ReleaseMappingStore.getInstance(context)
     private var manualSearchJob: Job? = null
+    private var detailsJob: Job? = null
+    private var videoSourceJob: Job? = null
 
     private val _state = MutableStateFlow<DetailsState>(DetailsState.Loading)
     val state: StateFlow<DetailsState> = _state
@@ -74,8 +82,10 @@ class DetailsViewModel(
     }
 
     fun loadDetails() {
+        detailsJob?.cancel()
+        videoSourceJob?.cancel()
         _state.value = DetailsState.Loading
-        viewModelScope.launch {
+        detailsJob = viewModelScope.launch {
             try {
                 val details = withContext(Dispatchers.IO) { aniListClient.animeDetails(animeId) }
                 val historyEntry = try {
@@ -95,7 +105,7 @@ class DetailsViewModel(
                     isFavorite = favoritesManager.isFavorite(animeId),
                     historyEntry = historyEntry
                 )
-                searchVideoSource(details)
+                videoSourceJob = viewModelScope.launch { loadVideoSource(details) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -112,8 +122,37 @@ class DetailsViewModel(
 
     fun retryVideoSource() {
         val details = (_state.value as? DetailsState.Ready)?.details ?: return
+        videoSourceJob?.cancel()
         updateReady { it.copy(videoSource = VideoSourceState.Loading) }
-        viewModelScope.launch { searchVideoSource(details) }
+        videoSourceJob = viewModelScope.launch { loadVideoSource(details) }
+    }
+
+    private suspend fun loadVideoSource(details: AnimeDetails) {
+        val saved = try {
+            releaseMappings.get(animeId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w("DetailsViewModel", "Cannot read saved release mapping", e)
+            null
+        }
+        if (saved != null) {
+            val release = saved.asSearchResult()
+            try {
+                loadVoices(release)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                updateReady {
+                    it.copy(videoSource = VideoSourceState.Error(
+                        e.message ?: "Не вдалося оновити збережений реліз",
+                        listOf(release),
+                    ))
+                }
+            }
+            return
+        }
+        searchVideoSource(details)
     }
 
     private suspend fun searchVideoSource(details: AnimeDetails) {
@@ -127,7 +166,7 @@ class DetailsViewModel(
             val initialMatches = TitleMatcher.match(details, results)
             val initialChoice = TitleMatcher.confidentBest(initialMatches)
             if (initialChoice != null) {
-                loadVoices(initialChoice)
+                loadVoices(initialChoice, selection = ReleaseSelection.AUTOMATIC)
                 return
             }
 
@@ -151,7 +190,7 @@ class DetailsViewModel(
             val matches = TitleMatcher.match(details, candidates)
             val choice = TitleMatcher.confidentBest(matches)
             when {
-                choice != null -> loadVoices(choice)
+                choice != null -> loadVoices(choice, selection = ReleaseSelection.AUTOMATIC)
                 matches.isNotEmpty() -> updateReady {
                     it.copy(videoSource = VideoSourceState.Ambiguous(matches.map { match -> match.result }))
                 }
@@ -200,10 +239,11 @@ class DetailsViewModel(
         }
         val manualCandidates = (current.manualReleaseSearch as? ManualReleaseSearchState.Results)?.candidates.orEmpty()
         if (candidate !in candidates && candidate !in manualCandidates) return
+        videoSourceJob?.cancel()
         updateReady { it.copy(videoSource = VideoSourceState.Loading) }
-        viewModelScope.launch {
+        videoSourceJob = viewModelScope.launch {
             try {
-                loadVoices(candidate, restoreHistory = false)
+                loadVoices(candidate, restoreHistory = false, selection = ReleaseSelection.MANUAL)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -212,13 +252,27 @@ class DetailsViewModel(
         }
     }
 
-    private suspend fun loadVoices(candidate: AnitubeSearchResult, restoreHistory: Boolean = true) {
+    private suspend fun loadVoices(
+        candidate: AnitubeSearchResult,
+        restoreHistory: Boolean = true,
+        selection: ReleaseSelection? = null,
+    ) {
         val format = (_state.value as? DetailsState.Ready)?.details?.format
         val voices = playableVoices(anitubeClient.getVoices(candidate.pageUrl), format, streamResolver)
         if (voices.isEmpty()) {
             updateReady { it.copy(videoSource = VideoSourceState.Error("Для релізу немає доступного відео", listOf(candidate))) }
             return
         }
+        if (selection != null) {
+            try {
+                releaseMappings.put(animeId, candidate, selection)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w("DetailsViewModel", "Cannot save release mapping", e)
+            }
+        }
+        currentCoroutineContext().ensureActive()
         VoiceCache.put(animeId, voices)
         updateReady { current ->
             val history = current.historyEntry.takeIf { restoreHistory }
@@ -233,6 +287,52 @@ class DetailsViewModel(
                 selectedVoiceIndex = voiceIndex,
                 selectedEpisodeIndex = episodeIndex,
             )
+        }
+    }
+
+    /** Refreshes episode availability after playback while keeping the current details visible. */
+    fun refreshVoicesAfterPlayback() {
+        val current = _state.value as? DetailsState.Ready ?: return
+        val release = (current.videoSource as? VideoSourceState.Success)?.release ?: return
+        videoSourceJob?.cancel()
+        videoSourceJob = viewModelScope.launch {
+            try {
+                val history = withContext(Dispatchers.IO) { historyManager.getEntry(animeId) }
+                val voices = playableVoices(
+                    anitubeClient.getVoices(release.pageUrl),
+                    current.details.format,
+                    streamResolver,
+                )
+                if (voices.isEmpty()) return@launch
+                currentCoroutineContext().ensureActive()
+                updateReady { latest ->
+                    val previous = latest.videoSource as? VideoSourceState.Success
+                    if (previous?.release?.pageUrl != release.pageUrl) return@updateReady latest
+                    val selected = previous.voices.getOrNull(latest.selectedVoiceIndex)
+                    val voiceIndex = voices.indexOfFirst { voice ->
+                        selected != null && voice.name == selected.name &&
+                            voice.category == selected.category &&
+                            voice.playerName == selected.playerName
+                    }.takeIf { it >= 0 } ?: 0
+                    val episodeNumber = history?.takeIf { it.voiceIndex == latest.selectedVoiceIndex }
+                        ?.episodeNumber
+                        ?: selected?.episodes?.getOrNull(latest.selectedEpisodeIndex)?.episodeNumber
+                    val episodeIndex = voices[voiceIndex].episodes.indexOfFirst {
+                        it.episodeNumber == episodeNumber
+                    }.takeIf { it >= 0 } ?: 0
+                    VoiceCache.put(animeId, voices)
+                    latest.copy(
+                        videoSource = VideoSourceState.Success(release, voices),
+                        selectedVoiceIndex = voiceIndex,
+                        selectedEpisodeIndex = episodeIndex,
+                        historyEntry = history,
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w("DetailsViewModel", "Cannot refresh release after playback", e)
+            }
         }
     }
 
