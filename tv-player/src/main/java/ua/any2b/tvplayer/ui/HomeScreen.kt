@@ -263,6 +263,15 @@ private fun Rows(
         contentPadding = PaddingValues(top = 24.dp, bottom = 48.dp, start = 36.dp, end = 48.dp),
         verticalArrangement = Arrangement.spacedBy(32.dp),
     ) {
+        if (rows.isEmpty() && catalogError == null) {
+            item(key = "empty_home") {
+                Text(
+                    "Усі списки приховані. Увімкніть їх у налаштуваннях головної.",
+                    color = AppColors.TextSecondary,
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+            }
+        }
         if (catalogError != null) {
             item(key = "catalog_error") {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

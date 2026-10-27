@@ -25,6 +25,7 @@ import ua.any2b.core.update.AppRelease
 import ua.any2b.core.update.GitHubReleaseClient
 import ua.any2b.core.update.compareVersions
 import ua.any2b.tvplayer.data.SettingsManager
+import ua.any2b.tvplayer.data.HomeSectionSetting
 import ua.any2b.tvplayer.data.ExternalVideoPlayer
 import ua.any2b.tvplayer.data.ExternalVideoPlayers
 import ua.any2b.tvplayer.data.WatchHistoryManager
@@ -53,6 +54,8 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     private val _autoPlayNext = MutableStateFlow(settingsManager.isAutoPlayNextEnabled())
     val autoPlayNext: StateFlow<Boolean> = _autoPlayNext
+    private val _homeSections = MutableStateFlow(settingsManager.homeSections())
+    val homeSections: StateFlow<List<HomeSectionSetting>> = _homeSections
     private val _availablePlayers = MutableStateFlow<List<ExternalVideoPlayer>>(emptyList())
     val availablePlayers: StateFlow<List<ExternalVideoPlayer>> = _availablePlayers
     private val _selectedPlayerPackage = MutableStateFlow(settingsManager.selectedPlayerPackage())
@@ -79,6 +82,14 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     fun setAutoPlayNext(enabled: Boolean) {
         settingsManager.setAutoPlayNextEnabled(enabled)
         _autoPlayNext.value = enabled
+    }
+
+    fun setHomeSectionEnabled(id: String, enabled: Boolean) {
+        _homeSections.value = settingsManager.setHomeSectionEnabled(id, enabled)
+    }
+
+    fun moveHomeSection(id: String, offset: Int) {
+        _homeSections.value = settingsManager.moveHomeSection(id, offset)
     }
 
     fun clearHistory() {
@@ -193,16 +204,20 @@ class SettingsActivity : ComponentActivity() {
         setContent {
             AppTheme {
                 val autoPlay = viewModel.autoPlayNext.collectAsStateWithLifecycle().value
+                val homeSections = viewModel.homeSections.collectAsStateWithLifecycle().value
                 val availablePlayers = viewModel.availablePlayers.collectAsStateWithLifecycle().value
                 val selectedPlayerPackage = viewModel.selectedPlayerPackage.collectAsStateWithLifecycle().value
                 val updateState = viewModel.updateState.collectAsStateWithLifecycle().value
                 SettingsScreen(
                     autoPlayNext = autoPlay,
+                    homeSections = homeSections,
                     availablePlayers = availablePlayers,
                     selectedPlayerPackage = selectedPlayerPackage,
                     currentVersion = viewModel.currentVersion,
                     updateState = updateState,
                     onAutoPlayChanged = viewModel::setAutoPlayNext,
+                    onHomeSectionEnabled = viewModel::setHomeSectionEnabled,
+                    onMoveHomeSection = viewModel::moveHomeSection,
                     onPlayerSelected = viewModel::setSelectedPlayer,
                     onClearHistory = viewModel::clearHistory,
                     onCheckUpdates = viewModel::checkForUpdates,
