@@ -1,95 +1,130 @@
 package ua.any2b.core.matcher
 
+import ua.any2b.core.anilist.AnimeDetails
 import ua.any2b.core.anilist.Title
 import ua.any2b.core.anitube.AnitubeSearchResult
+import kotlin.math.abs
 import kotlin.math.max
 
 data class MatchResult(
     val result: AnitubeSearchResult,
-    val score: Double, // 0.0 .. 1.0
+    val score: Double, // weighted points, not a probability
     val matchedField: String,
+    val titleSimilarity: Double,
+    val metadataMatches: Int,
+    val conflictingMetadata: Boolean,
 )
 
-/**
- * Співставлення назви тайтла з AniList (Romaji / English) із результатами пошуку на AniTube.
- */
+/** Ranks AniTube releases using names and available AniList/AniTube metadata. */
 object TitleMatcher {
+    private const val MIN_AUTO_SCORE = 3.0
+    private const val MIN_AUTO_MARGIN = 1.5
 
-    /**
-     * Ранжує знайдені релізи на AniTube за відповідністю до тайтла AniList.
-     */
-    fun match(
+    fun match(details: AnimeDetails, candidates: List<AnitubeSearchResult>): List<MatchResult> =
+        rank(details.title, details.synonyms, details.seasonYear, details.episodes,
+            details.durationMinutes, details.nextEpisode, candidates)
+
+    /** Title-only matching is also used by the CLI when AniList details are unavailable. */
+    fun match(title: Title, candidates: List<AnitubeSearchResult>): List<MatchResult> =
+        rank(title, emptyList(), null, null, null, null, candidates)
+
+    fun confidentBest(matches: List<MatchResult>): AnitubeSearchResult? {
+        val best = matches.firstOrNull() ?: return null
+        if (best.score < MIN_AUTO_SCORE || best.conflictingMetadata) return null
+        if (best.titleSimilarity < 0.65 && best.metadataMatches < 2) return null
+        if (matches.getOrNull(1)?.let { best.score - it.score < MIN_AUTO_MARGIN } == true) return null
+        return best.result
+    }
+
+    private fun rank(
         title: Title,
+        synonyms: List<String>,
+        year: Int?,
+        totalEpisodes: Int?,
+        durationMinutes: Int?,
+        nextEpisode: Int?,
         candidates: List<AnitubeSearchResult>,
-        expectedSeason: Int? = null,
     ): List<MatchResult> {
-        val searchNames = listOfNotNull(
-            title.romaji?.let { "romaji" to it },
-            title.english?.let { "english" to it },
-        )
+        val searchNames = buildList {
+            title.romaji?.let { add("romaji" to it) }
+            title.english?.let { add("english" to it) }
+            title.native?.let { add("native" to it) }
+            synonyms.forEach { add("synonym" to it) }
+        }.filter { it.second.isNotBlank() }
 
-        return candidates.mapNotNull { candidate ->
-            var bestScore = 0.0
-            var bestField = "none"
+        return candidates.map { candidate ->
+            val normalizedCandidate = normalize(candidate.title)
+            val bestTitle = searchNames.maxByOrNull { (_, name) ->
+                calculateSimilarity(normalize(name), normalizedCandidate)
+            }
+            val titleSimilarity = bestTitle?.let { calculateSimilarity(normalize(it.second), normalizedCandidate) } ?: 0.0
+            var score = titleSimilarity * 4.0
+            var metadataMatches = 0
+            var conflictingMetadata = false
 
-            val normCandidate = normalize(candidate.title)
-            val candidateSeason = extractSeasonNumber(candidate.title)
-
-            for ((field, name) in searchNames) {
-                val normQuery = normalize(name)
-                var score = calculateSimilarity(normQuery, normCandidate)
-
-                // Бонус або штраф за сезон
-                if (expectedSeason != null && candidateSeason != null) {
-                    if (expectedSeason == candidateSeason) {
-                        score = (score + 0.2).coerceAtMost(1.0)
-                    } else {
-                        score = (score - 0.4).coerceAtLeast(0.0)
-                    }
-                }
-
-                if (score > bestScore) {
-                    bestScore = score
-                    bestField = field
+            if (year != null && candidate.year != null) {
+                when (abs(year - candidate.year)) {
+                    0 -> { score += 3.0; metadataMatches++ }
+                    1 -> { score += 1.0; metadataMatches++ }
+                    else -> conflictingMetadata = true
                 }
             }
 
-            if (bestScore >= 0.25) {
-                MatchResult(result = candidate, score = bestScore, matchedField = bestField)
-            } else null
-        }.sortedByDescending { it.score }
+            if (durationMinutes != null && candidate.durationMinutes != null) {
+                val difference = abs(durationMinutes - candidate.durationMinutes)
+                when {
+                    difference <= 5 -> { score += 2.0; metadataMatches++ }
+                    difference >= max(10, durationMinutes / 2) -> {
+                        score -= 3.0
+                        conflictingMetadata = true
+                    }
+                }
+            }
+
+            if (totalEpisodes != null) {
+                if (candidate.totalEpisodes == totalEpisodes) {
+                    score += 2.0
+                    metadataMatches++
+                }
+                if (candidate.airedEpisodes != null && candidate.airedEpisodes > totalEpisodes) {
+                    score -= 3.0
+                    conflictingMetadata = true
+                }
+            } else if (nextEpisode != null && candidate.airedEpisodes != null) {
+                val airedOnAniList = nextEpisode - 1
+                when {
+                    candidate.airedEpisodes > airedOnAniList -> {
+                        score -= 3.0
+                        conflictingMetadata = true
+                    }
+                    candidate.airedEpisodes == airedOnAniList -> {
+                        score += 1.0
+                        metadataMatches++
+                    }
+                }
+            }
+
+            MatchResult(candidate, score, bestTitle?.first ?: "none",
+                titleSimilarity, metadataMatches, conflictingMetadata)
+        }.sortedWith(compareByDescending<MatchResult> { it.score }.thenBy { it.result.newsId })
     }
 
-    private fun normalize(str: String): String =
-        str.lowercase()
-            .replace(Regex("""\(.*?\)"""), "") // видаляємо круглі дужки
-            .replace(Regex("""\[.*?\]"""), "") // видаляємо квадратні дужки
+    private fun normalize(value: String): String =
+        value.lowercase()
+            .replace(Regex("""\(.*?\)"""), " ")
+            .replace(Regex("""\[.*?\]"""), " ")
             .replace(Regex("""[^a-z0-9а-яіїєґ ]"""), " ")
             .replace(Regex("""\s+"""), " ")
             .trim()
 
-    private fun extractSeasonNumber(title: String): Int? {
-        val match = Regex("""(\d+)\s*(?:сезон|season)""", RegexOption.IGNORE_CASE).find(title)
-            ?: Regex("""(?:сезон|season)\s*(\d+)""", RegexOption.IGNORE_CASE).find(title)
-        return match?.groupValues?.get(1)?.toIntOrNull()
-    }
+    private fun calculateSimilarity(first: String, second: String): Double {
+        if (first.isEmpty() || second.isEmpty()) return 0.0
+        if (first == second) return 1.0
+        if (first in second || second in first) return 0.85
 
-    /**
-     * Схожість за коефіцієнтом перетину слів (Jaccard + підстрічковий пошук).
-     */
-    private fun calculateSimilarity(s1: String, s2: String): Double {
-        if (s1.isEmpty() || s2.isEmpty()) return 0.0
-        if (s1 == s2) return 1.0
-        if (s1 in s2 || s2 in s1) return 0.85
-
-        val tokens1 = s1.split(" ").filter { it.isNotBlank() }.toSet()
-        val tokens2 = s2.split(" ").filter { it.isNotBlank() }.toSet()
-
-        if (tokens1.isEmpty() || tokens2.isEmpty()) return 0.0
-
-        val intersection = tokens1.intersect(tokens2).size
-        val union = tokens1.union(tokens2).size
-
-        return intersection.toDouble() / union.toDouble()
+        val firstTokens = first.split(" ").filter { it.isNotBlank() }.toSet()
+        val secondTokens = second.split(" ").filter { it.isNotBlank() }.toSet()
+        if (firstTokens.isEmpty() || secondTokens.isEmpty()) return 0.0
+        return firstTokens.intersect(secondTokens).size.toDouble() / firstTokens.union(secondTokens).size
     }
 }

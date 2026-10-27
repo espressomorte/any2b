@@ -49,7 +49,7 @@ fun main(args: Array<String>) = runBlocking {
             )
             println("Знайдено кандидатів: ${matched.size}")
             matched.forEach { m ->
-                println("  • (${(m.score * 100).toInt()}%) ${m.result.title} -> ${m.result.pageUrl}")
+                println("  • (${m.score} бала) ${m.result.title} -> ${m.result.pageUrl}")
             }
         }
 

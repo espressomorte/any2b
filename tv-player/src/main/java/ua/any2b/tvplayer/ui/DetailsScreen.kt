@@ -20,6 +20,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.contentDescription
@@ -53,6 +54,7 @@ fun DetailsScreen(
     onSelectVoice: (Int) -> Unit,
     onSelectEpisode: (Int) -> Unit,
     onWatchClick: () -> Unit,
+    onTrailerClick: () -> Unit,
     onBackClick: () -> Unit,
     onOpenRelated: (AnimeCard) -> Unit,
     onMoreRelated: () -> Unit,
@@ -81,6 +83,7 @@ fun DetailsScreen(
                 }
             }
             is DetailsState.Ready -> {
+                val isMovie = state.details.format.equals("MOVIE", ignoreCase = true)
                 var showReleaseDialog by remember(state.details.id) { mutableStateOf(false) }
                 var showManualDialog by remember(state.details.id) { mutableStateOf(false) }
                 var isDescriptionExpanded by rememberSaveable(state.details.id) { mutableStateOf(false) }
@@ -121,6 +124,10 @@ fun DetailsScreen(
                                     contentScale = ContentScale.Crop,
                                     modifier = Modifier.fillMaxSize()
                                 )
+                                ReleaseBadge(
+                                    score = state.details.score,
+                                    modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
+                                )
                             }
 
                             // Action Buttons under poster
@@ -134,7 +141,11 @@ fun DetailsScreen(
                                         verticalArrangement = Arrangement.spacedBy(4.dp)
                                     ) {
                                         Text(
-                                            text = "Переглянуто: серія ${state.historyEntry.episodeNumber}",
+                                            text = if (isMovie) {
+                                                "Прогрес перегляду: ${(state.historyEntry.progress * 100).toInt()}%"
+                                            } else {
+                                                "Переглянуто: серія ${state.historyEntry.episodeNumber}"
+                                            },
                                             color = Color(0xFF94A3B8),
                                             fontSize = 11.sp
                                         )
@@ -156,18 +167,25 @@ fun DetailsScreen(
                                 }
 
                                 if (state.videoSource is VideoSourceState.Success) {
+                                    val selectedEpisode = state.voices.getOrNull(state.selectedVoiceIndex)
+                                        ?.episodes?.getOrNull(state.selectedEpisodeIndex)
+                                    val canContinue = state.historyEntry?.let { history ->
+                                        history.voiceIndex == state.selectedVoiceIndex &&
+                                            history.episodeIndex == state.selectedEpisodeIndex &&
+                                            history.progress in 0.01f..0.98f
+                                    } == true
                                     val buttonText = when {
                                         state.resolvingStream -> "Підготовка..."
-                                        state.historyEntry != null -> "Продовжити (Серія ${state.selectedEpisodeIndex + 1})"
-                                        else -> "Дивитися"
+                                        canContinue -> "Продовжити перегляд"
+                                        isMovie -> "Дивитися фільм"
+                                        else -> "Дивитися серію"
                                     }
                                     Button(
                                         onClick = onWatchClick,
-                                        enabled = !state.resolvingStream && state.voices.getOrNull(state.selectedVoiceIndex)
-                                            ?.episodes?.getOrNull(state.selectedEpisodeIndex) != null,
+                                        enabled = !state.resolvingStream && selectedEpisode != null,
                                         colors = ButtonDefaults.colors(
-                                            containerColor = Color(0xFFD0BCFF),
-                                            contentColor = Color(0xFF21005D)
+                                            containerColor = Color(0xFF80F5FF),
+                                            contentColor = Color(0xFF0F172A)
                                         ),
                                         modifier = Modifier.fillMaxWidth()
                                     ) {
@@ -191,14 +209,17 @@ fun DetailsScreen(
                                     }
 
                                     OutlinedButton(
-                                        onClick = { /* TODO: Trailer */ },
+                                        onClick = onTrailerClick,
                                         colors = OutlinedButtonDefaults.colors(
                                             containerColor = Color(0xFF15171E),
                                             contentColor = Color(0xFFD0BCFF)
                                         ),
                                         modifier = Modifier.weight(1f)
                                     ) {
-                                        Text("Трейлер", fontSize = 11.sp)
+                                        Text(
+                                            if (state.details.trailer?.videoUrl() != null) "Трейлер" else "Знайти трейлер",
+                                            fontSize = 11.sp
+                                        )
                                     }
                                 }
                             }
@@ -224,16 +245,12 @@ fun DetailsScreen(
                                 }
                             }
 
-                            // Metadata Pills (Rating colored by wavelength spectrum 740nm..380nm)
+                            // Metadata Pills
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                state.details.score?.let { score ->
-                                    val ratingColor = scoreToSpectrumColor(score)
-                                    MetadataBadge("Рейтинг: $score%", ratingColor.copy(alpha = 0.25f), ratingColor)
-                                }
                                 state.details.format?.let { format ->
                                     MetadataBadge(format, Color(0xFF20232D), Color(0xFFD0BCFF))
                                 }
@@ -305,26 +322,46 @@ fun DetailsScreen(
                             ) {
                                 val releaseTitle = (state.videoSource as? VideoSourceState.Success)
                                     ?.release?.title ?: "Реліз ще не вибрано"
-                                Row(
+
+                                Column(
                                     modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text("AniTube · українська назва", color = Color(0xFF94A3B8), fontSize = 11.sp)
-                                        Text(releaseTitle, color = Color.White, style = MaterialTheme.typography.titleMedium)
-                                    }
-                                    OutlinedButton(
-                                        onClick = {
-                                            onResetManualSearch()
-                                            showManualDialog = true
-                                        },
-                                        modifier = Modifier.size(48.dp)
-                                            .semantics { contentDescription = "Змінити реліз" }
+                                    Text(
+                                        text = "AniTube · українська назва",
+                                        color = Color(0xFF94A3B8),
+                                        fontSize = 11.sp
+                                    )
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
-                                        FontAwesomeIcon(FaIcons.PENCIL)
+                                        Text(
+                                            text = releaseTitle,
+                                            color = Color.White,
+                                            style = MaterialTheme.typography.titleMedium,
+                                            modifier = Modifier.weight(1f, fill = false),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        IconButton(
+                                            onClick = {
+                                                onResetManualSearch()
+                                                showManualDialog = true
+                                            },
+                                            modifier = Modifier
+                                                .size(32.dp)
+                                                .semantics { contentDescription = "Змінити реліз" }
+                                        ) {
+                                            FontAwesomeIcon(
+                                                icon = FaIcons.PENCIL,
+                                                color = Color.White,
+                                                size = MaterialTheme.typography.titleMedium.fontSize
+                                            )
+                                        }
                                     }
                                 }
+
                                 when (val source = state.videoSource) {
                                     VideoSourceState.Loading -> Row(
                                         verticalAlignment = Alignment.CenterVertically,
@@ -342,7 +379,11 @@ fun DetailsScreen(
                                         Text("Шукаємо озвучки на AniTube...", color = Color(0xFFCCC2DC), fontSize = 13.sp)
                                     }
                                     is VideoSourceState.Ambiguous -> VideoSourceNotice(
-                                        message = "Знайдено кілька схожих релізів, виберіть потрібний",
+                                        message = if (source.candidates.size == 1) {
+                                            "Перевірте знайдений реліз перед відтворенням"
+                                        } else {
+                                            "Знайдено кілька схожих релізів, виберіть потрібний"
+                                        },
                                         action = "Вибрати реліз",
                                         onClick = { showReleaseDialog = true }
                                     )
@@ -371,7 +412,7 @@ fun DetailsScreen(
                                                             .padding(horizontal = 12.dp, vertical = 6.dp)
                                                     ) {
                                                         Text(
-                                                            text = voice.name.ifBlank { voice.category },
+                                                            text = voice.displayName,
                                                             color = textColor,
                                                             fontSize = 11.sp,
                                                             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
@@ -382,12 +423,13 @@ fun DetailsScreen(
                                         }
                                     }
                                 }
+
                                 // Episodes for selected voice (~25% smaller chips)
                                 val currentVoice = if (state.videoSource is VideoSourceState.Success) {
                                     state.voices.getOrNull(state.selectedVoiceIndex)
                                 } else null
-                                val watchedEpIndex = state.historyEntry?.episodeIndex ?: -1
-                                if (currentVoice != null && currentVoice.episodes.isNotEmpty()) {
+                                val watchedEpNumber = state.historyEntry?.episodeNumber ?: -1
+                                if (!isMovie && currentVoice != null && currentVoice.episodes.isNotEmpty()) {
                                     Spacer(Modifier.height(4.dp))
                                     Text("Серії:", color = Color(0xFFCCC2DC), fontSize = 13.sp, fontWeight = FontWeight.Medium)
                                     LazyRow(
@@ -395,15 +437,16 @@ fun DetailsScreen(
                                     ) {
                                         itemsIndexed(currentVoice.episodes) { epIndex, episode ->
                                             val isEpSelected = epIndex == state.selectedEpisodeIndex
-                                            val isWatched = epIndex < watchedEpIndex || (state.historyEntry != null && epIndex == watchedEpIndex && state.historyEntry.progress >= 0.99f)
+                                            val isWatched = episode.episodeNumber < watchedEpNumber ||
+                                                    (state.historyEntry != null && episode.episodeNumber == watchedEpNumber && state.historyEntry.progress >= 0.99f)
                                             val bg = if (isEpSelected) Color(0xFFA855F7) else Color(0xFF1E222D)
                                             val textColor = when {
                                                 isEpSelected -> Color.White
-                                                isWatched -> Color(0xFF475569) // Dimmer color for older/watched episodes
+                                                isWatched -> Color(0xFF475569)
                                                 else -> Color(0xFF94A3B8)
                                             }
-                                            val epText = episode.title.takeIf { it.isNotBlank() && !it.contains("серія", true) } 
-                                                ?: "Серія ${epIndex + 1}"
+                                            val epText = episode.title.takeIf { it.isNotBlank() && !it.contains("серія", true) }
+                                                ?: "Серія ${episode.episodeNumber}"
 
                                             Box(
                                                 modifier = Modifier
@@ -715,6 +758,7 @@ private fun DetailsScreenPreview() {
             onSelectVoice = {},
             onSelectEpisode = {},
             onWatchClick = {},
+            onTrailerClick = {},
             onBackClick = {},
             onOpenRelated = {},
             onMoreRelated = {},

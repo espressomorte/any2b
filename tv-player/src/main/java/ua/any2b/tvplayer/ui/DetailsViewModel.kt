@@ -15,6 +15,7 @@ import ua.any2b.core.anilist.AnimeDetails
 import ua.any2b.core.anitube.AnitubeClient
 import ua.any2b.core.anitube.AnitubeSearchResult
 import ua.any2b.core.anitube.AnitubeVoice
+import ua.any2b.core.anitube.playableVoices
 import ua.any2b.core.extractor.StreamResolver
 import ua.any2b.core.matcher.TitleMatcher
 import ua.any2b.tvplayer.data.VoiceCache
@@ -117,47 +118,46 @@ class DetailsViewModel(
 
     private suspend fun searchVideoSource(details: AnimeDetails) {
         try {
-            val query = details.title.romaji ?: details.title.english
+            val query = details.title.romaji ?: details.title.english ?: details.title.native
             if (query.isNullOrBlank()) {
                 updateReady { it.copy(videoSource = VideoSourceState.Error("Немає назви для пошуку на AniTube")) }
                 return
             }
             val results = anitubeClient.search(query)
-            val matched = TitleMatcher.match(details.title, results)
-            val best = matched.firstOrNull()
-            // AniTube often returns Ukrainian titles, so several search hits can have no
-            // text match against AniList's romaji/English names at all.
-            val needsYearSearch = results.size > 1 && (
-                best == null || best.score < 0.65 ||
-                    (matched.size > 1 && best.score - matched[1].score <= 0.1)
-                )
-            when {
-                results.size == 1 -> loadVoices(results.single())
-                needsYearSearch -> {
-                    val refinedResults = details.seasonYear?.let { year ->
-                        try {
-                            anitubeClient.search("$query $year")
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (_: Exception) {
-                            emptyList()
-                        }
-                    }.orEmpty()
+            val initialMatches = TitleMatcher.match(details, results)
+            val initialChoice = TitleMatcher.confidentBest(initialMatches)
+            if (initialChoice != null) {
+                loadVoices(initialChoice)
+                return
+            }
 
-                    if (refinedResults.size == 1) {
-                        loadVoices(refinedResults.single())
-                    } else {
-                        val candidates = (results + refinedResults).distinctBy { it.newsId }
-                        updateReady { it.copy(videoSource = VideoSourceState.Ambiguous(candidates)) }
-                    }
+            // A year-qualified search can reveal better candidates when the first page
+            // has only weak title matches or missing metadata.
+            val refinedResults = details.seasonYear?.let { year ->
+                try {
+                    anitubeClient.search("$query $year")
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    emptyList()
                 }
-                best == null -> updateReady {
-                    it.copy(videoSource = VideoSourceState.Error("Відповідний реліз не знайдено", results))
+            }.orEmpty()
+            val candidates = (results + refinedResults).groupBy { it.newsId }.values.map { hits ->
+                hits.maxByOrNull { hit ->
+                    listOf(hit.year, hit.airedEpisodes, hit.totalEpisodes, hit.durationMinutes)
+                        .count { it != null }
+                }!!
+            }
+            val matches = TitleMatcher.match(details, candidates)
+            val choice = TitleMatcher.confidentBest(matches)
+            when {
+                choice != null -> loadVoices(choice)
+                matches.isNotEmpty() -> updateReady {
+                    it.copy(videoSource = VideoSourceState.Ambiguous(matches.map { match -> match.result }))
                 }
-                best.score < 0.65 -> updateReady {
-                    it.copy(videoSource = VideoSourceState.Ambiguous(results))
+                else -> updateReady {
+                    it.copy(videoSource = VideoSourceState.Error("Відповідний реліз не знайдено"))
                 }
-                else -> loadVoices(best.result)
             }
         } catch (e: CancellationException) {
             throw e
@@ -213,16 +213,21 @@ class DetailsViewModel(
     }
 
     private suspend fun loadVoices(candidate: AnitubeSearchResult, restoreHistory: Boolean = true) {
-        val voices = anitubeClient.getVoices(candidate.pageUrl)
+        val format = (_state.value as? DetailsState.Ready)?.details?.format
+        val voices = playableVoices(anitubeClient.getVoices(candidate.pageUrl), format, streamResolver)
         if (voices.isEmpty()) {
-            updateReady { it.copy(videoSource = VideoSourceState.Error("Для релізу немає доступних серій", listOf(candidate))) }
+            updateReady { it.copy(videoSource = VideoSourceState.Error("Для релізу немає доступного відео", listOf(candidate))) }
             return
         }
         VoiceCache.put(animeId, voices)
         updateReady { current ->
             val history = current.historyEntry.takeIf { restoreHistory }
             val voiceIndex = history?.voiceIndex?.takeIf { it in voices.indices } ?: 0
-            val episodeIndex = history?.episodeIndex?.takeIf { it in voices[voiceIndex].episodes.indices } ?: 0
+            val episodeIndex = history?.let { saved ->
+                voices[voiceIndex].episodes.indexOfFirst { it.episodeNumber == saved.episodeNumber }
+                    .takeIf { it >= 0 }
+                    ?: saved.episodeIndex.takeIf { it in voices[voiceIndex].episodes.indices }
+            } ?: 0
             current.copy(
                 videoSource = VideoSourceState.Success(candidate, voices),
                 selectedVoiceIndex = voiceIndex,
@@ -247,7 +252,7 @@ class DetailsViewModel(
 
     fun resolveSelectedStream(
         onError: ((String) -> Unit)? = null,
-        onSuccess: (String, Int, Int) -> Unit,
+        onSuccess: (String, Int, Int, Int) -> Unit,
     ) {
         val currentState = _state.value as? DetailsState.Ready ?: return
         val voiceIndex = currentState.selectedVoiceIndex
@@ -259,12 +264,14 @@ class DetailsViewModel(
         }
         val episode = voice.episodes.getOrNull(episodeIndex)
         if (episode == null) {
-            onError?.invoke("Серію не вибрано")
+            onError?.invoke("Відео не вибрано")
             return
         }
 
-        val existingProgress = currentState.historyEntry?.takeIf { it.episodeIndex == episodeIndex }?.progress ?: 0.0f
-        historyManager.saveProgress(currentState.details, episodeIndex, voiceIndex, existingProgress)
+        val existingProgress = currentState.historyEntry?.takeIf {
+            it.episodeNumber == episode.episodeNumber && it.voiceIndex == voiceIndex
+        }?.progress ?: 0.0f
+        historyManager.saveProgress(currentState.details, episodeIndex, voiceIndex, existingProgress, episode.episodeNumber)
         val updatedHistory = historyManager.getEntry(animeId)
         updateReady { it.copy(resolvingStream = true, historyEntry = updatedHistory) }
 
@@ -272,7 +279,7 @@ class DetailsViewModel(
             try {
                 val extracted = withContext(Dispatchers.IO) { streamResolver.resolve(episode.fileUrl) }
                 updateReady { it.copy(resolvingStream = false) }
-                onSuccess(extracted.streamUrl, voiceIndex, episodeIndex)
+                onSuccess(extracted.streamUrl, voiceIndex, episodeIndex, episode.episodeNumber)
             } catch (e: Exception) {
                 updateReady { it.copy(resolvingStream = false) }
                 val errorMsg = e.message?.takeIf { it.isNotBlank() } ?: "Помилка отримання джерела"

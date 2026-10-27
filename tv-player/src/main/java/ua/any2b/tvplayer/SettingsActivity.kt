@@ -27,6 +27,7 @@ import ua.any2b.core.update.compareVersions
 import ua.any2b.tvplayer.data.SettingsManager
 import ua.any2b.tvplayer.data.ExternalVideoPlayer
 import ua.any2b.tvplayer.data.ExternalVideoPlayers
+import ua.any2b.tvplayer.data.WatchHistoryManager
 import ua.any2b.tvplayer.ui.AppTheme
 import ua.any2b.tvplayer.ui.SettingsScreen
 
@@ -45,6 +46,7 @@ sealed interface UpdateState {
 class SettingsViewModel(application: Application) : AndroidViewModel(application) {
     private val settingsManager = SettingsManager(application)
     private val externalPlayers = ExternalVideoPlayers(application)
+    private val watchHistory = WatchHistoryManager(application)
     private val releaseClient = GitHubReleaseClient()
     private val downloads = application.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
     private val updatePrefs = application.getSharedPreferences("update_download", Context.MODE_PRIVATE)
@@ -77,6 +79,10 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     fun setAutoPlayNext(enabled: Boolean) {
         settingsManager.setAutoPlayNextEnabled(enabled)
         _autoPlayNext.value = enabled
+    }
+
+    fun clearHistory() {
+        watchHistory.clearHistory()
     }
 
     fun refreshPlayers() {
@@ -198,6 +204,7 @@ class SettingsActivity : ComponentActivity() {
                     updateState = updateState,
                     onAutoPlayChanged = viewModel::setAutoPlayNext,
                     onPlayerSelected = viewModel::setSelectedPlayer,
+                    onClearHistory = viewModel::clearHistory,
                     onCheckUpdates = viewModel::checkForUpdates,
                     onDownloadUpdate = viewModel::downloadUpdate,
                     onInstallUpdate = ::installUpdate,

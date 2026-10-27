@@ -92,6 +92,18 @@ class AniListClient(
             recommendations = recommendations,
             recommendationsHasMore = recommendationsConnection?.optJSONObject("pageInfo")
                 ?.optBoolean("hasNextPage") == true,
+            trailer = m.optJSONObject("trailer")?.let { trailer ->
+                val trailerId = trailer.str("id")
+                val site = trailer.str("site")
+                if (trailerId.isNullOrBlank() || site.isNullOrBlank()) null
+                else MediaTrailer(trailerId, site)
+            },
+            synonyms = m.optJSONArray("synonyms")?.let { values ->
+                (0 until values.length()).mapNotNull { index ->
+                    values.optString(index).takeIf { it.isNotBlank() }
+                }
+            }.orEmpty(),
+            nextEpisode = m.optJSONObject("nextAiringEpisode")?.int("episode"),
         )
     }
 
@@ -292,6 +304,9 @@ query Details(${'$'}id: Int) {
     format
     status
     seasonYear
+    synonyms
+    nextAiringEpisode { episode }
+    trailer { id site }
     genres
     studios(isMain: true) {
       nodes { name }

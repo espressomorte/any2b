@@ -18,6 +18,7 @@ import okhttp3.OkHttpClient
 import ua.any2b.core.anilist.AniListClient
 import ua.any2b.core.anitube.AnitubeClient
 import ua.any2b.core.anitube.AnitubeVoice
+import ua.any2b.core.anitube.playableVoices
 import ua.any2b.core.extractor.StreamResolver
 import ua.any2b.core.matcher.TitleMatcher
 import ua.any2b.tvplayer.data.SettingsManager
@@ -35,6 +36,8 @@ class PlayerActivity : FragmentActivity() {
         const val EXTRA_ANIME_ID = "ANIME_ID"
         const val EXTRA_VOICE_INDEX = "VOICE_INDEX"
         const val EXTRA_EPISODE_INDEX = "EPISODE_INDEX"
+        const val EXTRA_EPISODE_NUMBER = "EPISODE_NUMBER"
+        const val EXTRA_IS_MOVIE = "IS_MOVIE"
     }
 
     private lateinit var binding: ActivityPlayerBinding
@@ -43,9 +46,12 @@ class PlayerActivity : FragmentActivity() {
     private var animeId: Int = -1
     private var voiceIndex: Int = 0
     private var episodeIndex: Int = 0
+    private var episodeNumber: Int = 1
+    private var isMovie: Boolean = false
 
     private var nextEpisodeUrl: String? = null
     private var nextEpisodeIndex: Int = -1
+    private var nextEpisodeNumber: Int = -1
     private var progressJob: Job? = null
     private var prefetchJob: Job? = null
 
@@ -82,6 +88,8 @@ class PlayerActivity : FragmentActivity() {
         animeId = intent.getIntExtra(EXTRA_ANIME_ID, -1)
         voiceIndex = intent.getIntExtra(EXTRA_VOICE_INDEX, 0)
         episodeIndex = intent.getIntExtra(EXTRA_EPISODE_INDEX, 0)
+        episodeNumber = intent.getIntExtra(EXTRA_EPISODE_NUMBER, episodeIndex + 1)
+        isMovie = intent.getBooleanExtra(EXTRA_IS_MOVIE, false)
 
         if (url.isNullOrBlank()) {
             Log.w("NextEp", "finish(): url is null or blank")
@@ -170,7 +178,7 @@ class PlayerActivity : FragmentActivity() {
                             val aniListClient = AniListClient()
                             val details = aniListClient.animeDetails(animeId)
                             val historyManager = WatchHistoryManager(this@PlayerActivity)
-                            historyManager.saveProgress(details, episodeIndex, voiceIndex, progress)
+                            historyManager.saveProgress(details, episodeIndex, voiceIndex, progress, episodeNumber)
                         } catch (_: Exception) {}
                     }
                 }
@@ -188,9 +196,9 @@ class PlayerActivity : FragmentActivity() {
             val details = aniListClient.animeDetails(animeId)
             val query = details.title.romaji ?: details.title.english ?: ""
             val searchResults = anitubeClient.search(query)
-            val matched = TitleMatcher.match(details.title, searchResults)
-            val best = matched.firstOrNull()?.result ?: searchResults.firstOrNull() ?: return null
-            val voices = anitubeClient.getVoices(best.pageUrl)
+            val best = TitleMatcher.confidentBest(TitleMatcher.match(details, searchResults))
+                ?: return null
+            val voices = playableVoices(anitubeClient.getVoices(best.pageUrl), details.format)
             VoiceCache.put(animeId, voices)
             return voices
         } catch (_: Exception) {
@@ -199,7 +207,7 @@ class PlayerActivity : FragmentActivity() {
     }
 
     private fun startPreFetchingNextEpisode() {
-        if (animeId <= 0) return
+        if (animeId <= 0 || isMovie) return
         prefetchJob?.cancel()
         prefetchJob = lifecycleScope.launch(Dispatchers.IO) {
             try {
@@ -212,6 +220,7 @@ class PlayerActivity : FragmentActivity() {
                 val extracted = streamResolver.resolve(nextEp.fileUrl)
                 nextEpisodeUrl = extracted.streamUrl
                 nextEpisodeIndex = targetNextIndex
+                nextEpisodeNumber = nextEp.episodeNumber
 
                 withContext(Dispatchers.Main) {
                     binding.btnNextEpisode.visibility = View.VISIBLE
@@ -223,24 +232,27 @@ class PlayerActivity : FragmentActivity() {
     private fun playNextEpisodeInstant() {
         val url = nextEpisodeUrl
         val nextIdx = nextEpisodeIndex
-        if (url.isNullOrBlank() || nextIdx < 0 || animeId <= 0) {
+        val nextNumber = nextEpisodeNumber
+        if (url.isNullOrBlank() || nextIdx < 0 || nextNumber < 1 || animeId <= 0) {
             playNextEpisodeFallback()
             return
         }
 
         binding.btnNextEpisode.visibility = View.GONE
-        showStatus("▶ Запуск серії ${nextIdx + 1}…", url)
+        showStatus("▶ Запуск серії $nextNumber…", url)
 
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val aniListClient = AniListClient()
                 val details = aniListClient.animeDetails(animeId)
                 val historyManager = WatchHistoryManager(this@PlayerActivity)
-                historyManager.saveProgress(details, nextIdx, voiceIndex, 0.0f)
+                historyManager.saveProgress(details, nextIdx, voiceIndex, 0.0f, nextNumber)
 
                 withContext(Dispatchers.Main) {
                     episodeIndex = nextIdx
+                    episodeNumber = nextNumber
                     intent.putExtra(EXTRA_EPISODE_INDEX, episodeIndex)
+                    intent.putExtra(EXTRA_EPISODE_NUMBER, episodeNumber)
 
                     val dataSourceFactory = OkHttpDataSource.Factory(okHttpClient)
                     val hlsMediaSource = HlsMediaSource.Factory(dataSourceFactory)
@@ -254,6 +266,7 @@ class PlayerActivity : FragmentActivity() {
 
                     nextEpisodeUrl = null
                     nextEpisodeIndex = -1
+                    nextEpisodeNumber = -1
                     startPreFetchingNextEpisode()
                 }
             } catch (e: Exception) {
@@ -294,11 +307,13 @@ class PlayerActivity : FragmentActivity() {
                     val historyManager = WatchHistoryManager(this@PlayerActivity)
                     val aniListClient = AniListClient()
                     val details = aniListClient.animeDetails(animeId)
-                    historyManager.saveProgress(details, targetNextIndex, voiceIndex, 0.0f)
+                    historyManager.saveProgress(details, targetNextIndex, voiceIndex, 0.0f, nextEp.episodeNumber)
 
                     withContext(Dispatchers.Main) {
                         episodeIndex = targetNextIndex
+                        episodeNumber = nextEp.episodeNumber
                         intent.putExtra(EXTRA_EPISODE_INDEX, episodeIndex)
+                        intent.putExtra(EXTRA_EPISODE_NUMBER, episodeNumber)
 
                         val dataSourceFactory = OkHttpDataSource.Factory(okHttpClient)
                         val hlsMediaSource = HlsMediaSource.Factory(dataSourceFactory)
@@ -309,10 +324,11 @@ class PlayerActivity : FragmentActivity() {
                             prepare()
                             playWhenReady = true
                         }
-                        showStatus("▶ Серія ${episodeIndex + 1}", extracted.streamUrl)
+                        showStatus("▶ Серія $episodeNumber", extracted.streamUrl)
 
                         nextEpisodeUrl = null
                         nextEpisodeIndex = -1
+                        nextEpisodeNumber = -1
                         startPreFetchingNextEpisode()
                     }
                 } else {
@@ -343,11 +359,15 @@ class PlayerActivity : FragmentActivity() {
                     val aniListClient = AniListClient()
                     val details = aniListClient.animeDetails(animeId)
                     val historyManager = WatchHistoryManager(this@PlayerActivity)
-                    historyManager.saveProgress(details, episodeIndex, voiceIndex, 1.0f)
+                    historyManager.saveProgress(details, episodeIndex, voiceIndex, 1.0f, episodeNumber)
                 }
             } catch (_: Exception) {}
         }
 
+        if (isMovie) {
+            finish()
+            return
+        }
         val settingsManager = SettingsManager(this)
         val autoPlay = settingsManager.isAutoPlayNextEnabled()
 

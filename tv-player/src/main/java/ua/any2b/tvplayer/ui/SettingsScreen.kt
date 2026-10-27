@@ -15,6 +15,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.tv.material3.*
 import ua.any2b.core.update.AppRelease
 import ua.any2b.tvplayer.UpdateState
@@ -30,12 +31,14 @@ fun SettingsScreen(
     updateState: UpdateState,
     onAutoPlayChanged: (Boolean) -> Unit,
     onPlayerSelected: (String?) -> Unit,
+    onClearHistory: () -> Unit,
     onCheckUpdates: () -> Unit,
     onDownloadUpdate: (AppRelease) -> Unit,
     onInstallUpdate: (Uri) -> Unit,
     onOpenRelease: (String) -> Unit,
     onBack: () -> Unit,
 ) {
+    var showClearHistoryDialog by remember { mutableStateOf(false) }
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -180,6 +183,36 @@ fun SettingsScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
+                    "Історія",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontFamily = IbmPlexMono,
+                    color = Color(0xFFD0BCFF),
+                )
+                Surface(
+                    onClick = { showClearHistoryDialog = true },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp)),
+                    colors = ClickableSurfaceDefaults.colors(
+                        containerColor = Color(0xFF20232D),
+                        focusedContainerColor = Color(0xFF4F378B).copy(alpha = 0.8f),
+                    ),
+                ) {
+                    Text(
+                        "Очистити історію",
+                        modifier = Modifier.padding(16.dp),
+                        color = Color.White,
+                        fontFamily = IbmPlexMono,
+                    )
+                }
+            }
+
+            Column(
+                modifier = Modifier.fillMaxWidth()
+                    .background(Color(0xFF15171E), RoundedCornerShape(16.dp))
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
                     "Оновлення",
                     style = MaterialTheme.typography.titleMedium,
                     fontFamily = IbmPlexMono,
@@ -222,6 +255,39 @@ fun SettingsScreen(
                     is UpdateState.Error -> {
                         Text(updateState.message, color = Color(0xFFFFB4AB))
                         Button(onClick = onCheckUpdates) { Text("Повторити перевірку") }
+                    }
+                }
+            }
+        }
+        if (showClearHistoryDialog) {
+            Dialog(onDismissRequest = { showClearHistoryDialog = false }) {
+                Column(
+                    modifier = Modifier
+                        .background(Color(0xFF20232D), RoundedCornerShape(16.dp))
+                        .padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(20.dp),
+                ) {
+                    Text(
+                        "Ар ю шур?",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontFamily = IbmPlexMono,
+                        color = Color.White,
+                    )
+                    Text(
+                        "Усю історію перегляду буде видалено.",
+                        color = Color(0xFF94A3B8),
+                        fontFamily = IbmPlexMono,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Button(onClick = { showClearHistoryDialog = false }) {
+                            Text("Нат шур")
+                        }
+                        Button(onClick = {
+                            onClearHistory()
+                            showClearHistoryDialog = false
+                        }) {
+                            Text("Шур")
+                        }
                     }
                 }
             }
