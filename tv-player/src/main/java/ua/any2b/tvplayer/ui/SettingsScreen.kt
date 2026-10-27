@@ -16,6 +16,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.window.Dialog
 import androidx.tv.material3.*
 import ua.any2b.core.update.AppRelease
@@ -88,7 +89,9 @@ fun SettingsScreen(
                     ),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .onFocusChanged { isFocusedAutoPlay = it.isFocused },
+                        .zIndex(if (isFocusedAutoPlay) 1f else 0f)
+                        .onFocusChanged { isFocusedAutoPlay = it.isFocused }
+                        .neonGlow(focused = isFocusedAutoPlay, borderRadius = 12.dp),
                 ) {
                     Row(
                         modifier = Modifier
@@ -147,7 +150,9 @@ fun SettingsScreen(
                     ),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .onFocusChanged { isFocusedPlayer = it.isFocused },
+                        .zIndex(if (isFocusedPlayer) 1f else 0f)
+                        .onFocusChanged { isFocusedPlayer = it.isFocused }
+                        .neonGlow(focused = isFocusedPlayer, borderRadius = 12.dp),
                 ) {
                     Column(Modifier.padding(16.dp)) {
                         Text("Плеєр для відео", color = if (isFocusedPlayer) AppColors.NeonCyan else Color.White, fontFamily = IbmPlexMono)
@@ -217,7 +222,9 @@ fun SettingsScreen(
                     ),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .onFocusChanged { isFocusedHistory = it.isFocused },
+                        .zIndex(if (isFocusedHistory) 1f else 0f)
+                        .onFocusChanged { isFocusedHistory = it.isFocused }
+                        .neonGlow(focused = isFocusedHistory, borderRadius = 12.dp),
                 ) {
                     Text(
                         "Очистити історію",
@@ -242,28 +249,28 @@ fun SettingsScreen(
                 )
                 Text("Поточна версія: $currentVersion", color = AppColors.TextSecondary)
                 when (updateState) {
-                    UpdateState.Idle -> Button(onClick = onCheckUpdates) { Text("Перевірити оновлення") }
+                    UpdateState.Idle -> PrimaryButton(onClick = onCheckUpdates, text = "Перевірити оновлення")
                     UpdateState.Checking -> Text("Перевіряємо GitHub Releases...", color = AppColors.TextSecondary)
                     UpdateState.UpToDate -> {
                         Text("Встановлено останню версію", color = Color.White)
-                        Button(onClick = onCheckUpdates) { Text("Перевірити ще раз") }
+                        PrimaryButton(onClick = onCheckUpdates, text = "Перевірити ще раз")
                     }
                     UpdateState.NoReleases -> {
                         Text("Опублікованих релізів поки немає", color = Color.White)
-                        Button(onClick = onCheckUpdates) { Text("Перевірити ще раз") }
+                        PrimaryButton(onClick = onCheckUpdates, text = "Перевірити ще раз")
                     }
                     is UpdateState.Available -> {
                         Text("Доступна нова версія: ${updateState.release.tag}", color = Color.White)
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Button(onClick = { onDownloadUpdate(updateState.release) }) { Text("Оновити") }
-                            Button(onClick = { onOpenRelease(updateState.release.pageUrl) }) { Text("Сторінка релізу") }
+                            PrimaryButton(onClick = { onDownloadUpdate(updateState.release) }, text = "Оновити")
+                            PrimaryButton(onClick = { onOpenRelease(updateState.release.pageUrl) }, text = "Сторінка релізу")
                         }
                     }
                     is UpdateState.MissingApk -> {
                         Text("Є реліз ${updateState.release.tag}, але APK ще не додано до Assets", color = Color.White)
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Button(onClick = { onOpenRelease(updateState.release.pageUrl) }) { Text("Сторінка релізу") }
-                            Button(onClick = onCheckUpdates) { Text("Перевірити ще раз") }
+                            PrimaryButton(onClick = { onOpenRelease(updateState.release.pageUrl) }, text = "Сторінка релізу")
+                            PrimaryButton(onClick = onCheckUpdates, text = "Перевірити ще раз")
                         }
                     }
                     is UpdateState.Downloading -> Text(
@@ -272,11 +279,11 @@ fun SettingsScreen(
                     )
                     is UpdateState.ReadyToInstall -> {
                         Text("Версію ${updateState.release.tag} завантажено", color = Color.White)
-                        Button(onClick = { onInstallUpdate(updateState.uri) }) { Text("Встановити") }
+                        PrimaryButton(onClick = { onInstallUpdate(updateState.uri) }, text = "Встановити")
                     }
                     is UpdateState.Error -> {
                         Text(updateState.message, color = AppColors.ErrorRed)
-                        Button(onClick = onCheckUpdates) { Text("Повторити перевірку") }
+                        PrimaryButton(onClick = onCheckUpdates, text = "Повторити перевірку")
                     }
                 }
             }
@@ -301,15 +308,11 @@ fun SettingsScreen(
                         fontFamily = IbmPlexMono,
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Button(onClick = { showClearHistoryDialog = false }) {
-                            Text("Нат шур")
-                        }
-                        Button(onClick = {
+                        PrimaryButton(onClick = { showClearHistoryDialog = false }, text = "Нат шур")
+                        PrimaryButton(onClick = {
                             onClearHistory()
                             showClearHistoryDialog = false
-                        }) {
-                            Text("Шур")
-                        }
+                        }, text = "Шур")
                     }
                 }
             }
@@ -317,10 +320,35 @@ fun SettingsScreen(
     }
 }
 
+@Composable
+private fun PrimaryButton(onClick: () -> Unit, text: String) {
+    var isFocused by remember { mutableStateOf(false) }
+    Button(
+        onClick = onClick,
+        scale = ButtonDefaults.scale(scale = 1f, focusedScale = 1f),
+        shape = ButtonDefaults.shape(RoundedCornerShape(12.dp)),
+        glow = ButtonDefaults.glow(glow = Glow.None, focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 10.dp)),
+        colors = ButtonDefaults.colors(
+            containerColor = AppColors.PrimaryPurple,
+            contentColor = Color.White,
+            focusedContainerColor = AppColors.PrimaryPurple,
+            focusedContentColor = Color.White
+        ),
+        modifier = Modifier
+            .zIndex(if (isFocused) 1f else 0f)
+            .onFocusChanged { isFocused = it.isFocused }
+            .neonGlow(focused = isFocused, borderRadius = 12.dp)
+    ) {
+        Text(text)
+    }
+}
+
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun PlayerChoice(label: String, selected: Boolean, onClick: () -> Unit) {
     var isFocused by remember { mutableStateOf(false) }
+    val containerColor = if (selected) Color(0xFFE2E8F0) else AppColors.SurfaceCard
+    val contentColor = if (selected) Color(0xFF0F172A) else Color.White
     Surface(
         onClick = onClick,
         scale = ClickableSurfaceDefaults.scale(scale = 1f, focusedScale = 1f),
@@ -330,17 +358,19 @@ private fun PlayerChoice(label: String, selected: Boolean, onClick: () -> Unit) 
         ),
         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp)),
         colors = ClickableSurfaceDefaults.colors(
-            containerColor = if (selected) AppColors.PrimaryPurple else AppColors.SurfaceCard,
-            focusedContainerColor = if (selected) AppColors.PrimaryPurple else AppColors.SurfaceCard
+            containerColor = containerColor,
+            focusedContainerColor = containerColor
         ),
         modifier = Modifier
             .fillMaxWidth()
-            .onFocusChanged { isFocused = it.isFocused },
+            .zIndex(if (isFocused) 1f else 0f)
+            .onFocusChanged { isFocused = it.isFocused }
+            .neonGlow(focused = isFocused, borderRadius = 12.dp)
     ) {
         Text(
             text = label,
             modifier = Modifier.padding(16.dp),
-            color = if (isFocused) AppColors.NeonCyan else Color.White,
+            color = if (isFocused) AppColors.NeonCyan else contentColor,
             fontFamily = IbmPlexMono,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
         )

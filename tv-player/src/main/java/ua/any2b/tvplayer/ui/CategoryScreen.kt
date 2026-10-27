@@ -6,20 +6,20 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.snapshotFlow
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
-import androidx.tv.material3.Button
-import androidx.tv.material3.MaterialTheme
-import androidx.tv.material3.Text
+import androidx.compose.ui.zIndex
+import androidx.tv.material3.*
 import kotlinx.coroutines.flow.collect
 import ua.any2b.core.anilist.AnimeCard
 
+@OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun CategoryScreen(
     title: String,
@@ -45,13 +45,45 @@ fun CategoryScreen(
         verticalArrangement = Arrangement.spacedBy(24.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-            Button(onClick = onBack) { Text("← Назад") }
+            var isBackFocused by remember { mutableStateOf(false) }
+            Button(
+                onClick = onBack,
+                scale = ButtonDefaults.scale(scale = 1f, focusedScale = 1f),
+                shape = ButtonDefaults.shape(RoundedCornerShape(12.dp)),
+                glow = ButtonDefaults.glow(glow = Glow.None, focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 10.dp)),
+                colors = ButtonDefaults.colors(
+                    containerColor = AppColors.PrimaryPurple,
+                    contentColor = Color.White,
+                    focusedContainerColor = AppColors.PrimaryPurple,
+                    focusedContentColor = Color.White
+                ),
+                modifier = Modifier
+                    .zIndex(if (isBackFocused) 1f else 0f)
+                    .onFocusChanged { isBackFocused = it.isFocused }
+                    .neonGlow(focused = isBackFocused, borderRadius = 12.dp)
+            ) { Text("← Назад") }
             Text(title, style = MaterialTheme.typography.headlineLarge)
         }
         if (state.error != null) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(state.error, color = AppColors.ErrorRed)
-                Button(onClick = onLoadMore) { Text("Повторити") }
+                var isRetryFocused by remember { mutableStateOf(false) }
+                Button(
+                    onClick = onLoadMore,
+                    scale = ButtonDefaults.scale(scale = 1f, focusedScale = 1f),
+                    shape = ButtonDefaults.shape(RoundedCornerShape(12.dp)),
+                    glow = ButtonDefaults.glow(glow = Glow.None, focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 10.dp)),
+                    colors = ButtonDefaults.colors(
+                        containerColor = AppColors.PrimaryPurple,
+                        contentColor = Color.White,
+                        focusedContainerColor = AppColors.PrimaryPurple,
+                        focusedContentColor = Color.White
+                    ),
+                    modifier = Modifier
+                        .zIndex(if (isRetryFocused) 1f else 0f)
+                        .onFocusChanged { isRetryFocused = it.isFocused }
+                        .neonGlow(focused = isRetryFocused, borderRadius = 12.dp)
+                ) { Text("Повторити") }
             }
         }
         if (state.items.isEmpty() && !state.loadingMore && state.error == null) {
