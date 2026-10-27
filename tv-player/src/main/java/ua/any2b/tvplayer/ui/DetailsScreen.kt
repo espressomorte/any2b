@@ -193,6 +193,8 @@ fun DetailsScreen(
                                         else -> "Дивитися серію"
                                     }
                                     var isWatchFocused by remember { mutableStateOf(false) }
+                                    val watchBg = if (isWatchFocused) AppColors.NeonCyanLight else AppColors.SurfaceCard
+                                    val watchText = if (isWatchFocused) AppColors.ButtonDarkText else Color.White
                                     Button(
                                         onClick = onWatchClick,
                                         enabled = !state.resolvingStream && selectedEpisode != null,
@@ -203,10 +205,10 @@ fun DetailsScreen(
                                             focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 12.dp)
                                         ),
                                         colors = ButtonDefaults.colors(
-                                            containerColor = AppColors.PrimaryPurple,
-                                            contentColor = Color.White,
-                                            focusedContainerColor = AppColors.PrimaryPurple,
-                                            focusedContentColor = Color.White
+                                            containerColor = watchBg,
+                                            contentColor = watchText,
+                                            focusedContainerColor = watchBg,
+                                            focusedContentColor = watchText
                                         ),
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -223,6 +225,16 @@ fun DetailsScreen(
                                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
                                     var isFavFocused by remember { mutableStateOf(false) }
+                                    val favBg = when {
+                                        isFavFocused -> AppColors.NeonCyanLight
+                                        state.isFavorite -> AppColors.NeonCyan
+                                        else -> AppColors.SurfaceCard
+                                    }
+                                    val favText = when {
+                                        isFavFocused -> AppColors.ButtonDarkText
+                                        state.isFavorite -> AppColors.ButtonDarkText
+                                        else -> Color.White
+                                    }
                                     OutlinedButton(
                                         onClick = onToggleFavorite,
                                         scale = OutlinedButtonDefaults.scale(scale = 1f, focusedScale = 1f),
@@ -233,10 +245,10 @@ fun DetailsScreen(
                                             focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 10.dp)
                                         ),
                                         colors = OutlinedButtonDefaults.colors(
-                                            containerColor = AppColors.SurfaceDark,
-                                            contentColor = AppColors.AccentLight,
-                                            focusedContainerColor = AppColors.SurfaceDark,
-                                            focusedContentColor = AppColors.NeonCyan
+                                            containerColor = favBg,
+                                            contentColor = favText,
+                                            focusedContainerColor = favBg,
+                                            focusedContentColor = favText
                                         ),
                                         modifier = Modifier
                                             .weight(1f)
@@ -248,6 +260,8 @@ fun DetailsScreen(
                                     }
 
                                     var isTrailerFocused by remember { mutableStateOf(false) }
+                                    val trailerBg = if (isTrailerFocused) AppColors.NeonCyanLight else AppColors.SurfaceCard
+                                    val trailerText = if (isTrailerFocused) AppColors.ButtonDarkText else Color.White
                                     OutlinedButton(
                                         onClick = onTrailerClick,
                                         scale = OutlinedButtonDefaults.scale(scale = 1f, focusedScale = 1f),
@@ -258,10 +272,10 @@ fun DetailsScreen(
                                             focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 10.dp)
                                         ),
                                         colors = OutlinedButtonDefaults.colors(
-                                            containerColor = AppColors.SurfaceDark,
-                                            contentColor = AppColors.AccentLight,
-                                            focusedContainerColor = AppColors.SurfaceDark,
-                                            focusedContentColor = AppColors.NeonCyan
+                                            containerColor = trailerBg,
+                                            contentColor = trailerText,
+                                            focusedContainerColor = trailerBg,
+                                            focusedContentColor = trailerText
                                         ),
                                         modifier = Modifier
                                             .weight(1f)
@@ -460,8 +474,16 @@ fun DetailsScreen(
                                                         else rememberedVariants[group.key] ?: group.preferredIndex
                                                     val displayedVoice = group.variants.firstOrNull { it.index == displayedIndex }
                                                         ?.value ?: group.variants.first().value
-                                                    val bg = if (isSelected) AppColors.PrimaryPurple else AppColors.SurfaceCard
-                                                    val textColor = if (isSelected) Color.White else AppColors.TextSecondary
+                                                    val bg = when {
+                                                        isStudioFocused -> AppColors.NeonCyanLight
+                                                        isSelected -> AppColors.NeonCyan
+                                                        else -> AppColors.SurfaceCard
+                                                    }
+                                                    val textColor = when {
+                                                        isStudioFocused -> AppColors.ButtonDarkText
+                                                        isSelected -> AppColors.ButtonDarkText
+                                                        else -> AppColors.TextSecondary
+                                                    }
 
                                                     Card(
                                                         onClick = {
@@ -488,6 +510,7 @@ fun DetailsScreen(
                                                         modifier = Modifier
                                                             .zIndex(if (isStudioFocused) 1f else 0f)
                                                             .onFocusChanged { isStudioFocused = it.isFocused }
+                                                            .neonGlow(focused = isStudioFocused, borderRadius = 12.dp)
                                                     ) {
                                                         Row(
                                                             modifier = Modifier
@@ -548,9 +571,14 @@ fun DetailsScreen(
                                             val isEpSelected = epIndex == state.selectedEpisodeIndex
                                             val isWatched = episode.episodeNumber < watchedEpNumber ||
                                                     (state.historyEntry != null && episode.episodeNumber == watchedEpNumber && state.historyEntry.progress >= 0.99f)
-                                            val bg = if (isEpSelected) AppColors.PrimaryPurple else AppColors.SurfaceCardHover
+                                            val bg = when {
+                                                isEpFocused -> AppColors.NeonCyanLight
+                                                isEpSelected -> AppColors.NeonCyan
+                                                else -> AppColors.SurfaceCardHover
+                                            }
                                             val textColor = when {
-                                                isEpSelected -> Color.White
+                                                isEpFocused -> AppColors.ButtonDarkText
+                                                isEpSelected -> AppColors.ButtonDarkText
                                                 isWatched -> AppColors.TextWatched
                                                 else -> AppColors.TextSecondary
                                             }
@@ -574,6 +602,7 @@ fun DetailsScreen(
                                                     .height(36.dp)
                                                     .zIndex(if (isEpFocused) 1f else 0f)
                                                     .onFocusChanged { isEpFocused = it.isFocused }
+                                                    .neonGlow(focused = isEpFocused, borderRadius = 10.dp)
                                             ) {
                                                 Box(
                                                     modifier = Modifier
@@ -891,12 +920,21 @@ private fun StudioVoiceDialog(
                 group.variants.forEachIndexed { position, (index, voice) ->
                     val player = voice.playerName.ifBlank { "Плеєр ${position + 1}" }
                     val studio = voice.name.ifBlank { "Невідома студія" }
+                    val isSelected = index == selectedVoiceIndex
+                    val containerColor = if (isSelected) Color(0xFFE2E8F0) else AppColors.SurfaceCard
+                    val contentColor = if (isSelected) Color(0xFF0F172A) else Color.White
                     var isVoiceFocused by remember { mutableStateOf(false) }
                     Button(
                         onClick = { onSelect(index) },
                         scale = ButtonDefaults.scale(scale = 1f, focusedScale = 1f),
                         shape = ButtonDefaults.shape(RoundedCornerShape(12.dp)),
                         glow = ButtonDefaults.glow(glow = Glow.None, focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 10.dp)),
+                        colors = ButtonDefaults.colors(
+                            containerColor = containerColor,
+                            contentColor = contentColor,
+                            focusedContainerColor = containerColor,
+                            focusedContentColor = contentColor
+                        ),
                         modifier = Modifier
                             .fillMaxWidth()
                             .zIndex(if (isVoiceFocused) 1f else 0f)
@@ -904,8 +942,9 @@ private fun StudioVoiceDialog(
                             .neonGlow(focused = isVoiceFocused, borderRadius = 12.dp)
                     ) {
                         Text(
-                            text = "$studio · $player" + if (index == selectedVoiceIndex) " · обрано" else "",
+                            text = "$studio · $player" + if (isSelected) " · обрано" else "",
                             maxLines = 1,
+                            color = contentColor
                         )
                     }
                 }
