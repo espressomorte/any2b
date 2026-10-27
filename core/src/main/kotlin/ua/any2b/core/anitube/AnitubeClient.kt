@@ -98,20 +98,45 @@ class AnitubeClient(
             Pattern.DOTALL or Pattern.CASE_INSENSITIVE
         )
         val matcher = pattern.matcher(html)
+        val headings = mutableListOf<SearchHeading>()
+        while (matcher.find()) {
+            val newsId = matcher.group(2).toIntOrNull() ?: continue
+            headings.add(SearchHeading(
+                start = matcher.start(),
+                end = matcher.end(),
+                newsId = newsId,
+                pageUrl = matcher.group(1),
+                title = matcher.group(3).replace(Regex("<[^>]+>"), "").trim(),
+            ))
+        }
 
         val seen = mutableSetOf<Int>()
-        while (matcher.find()) {
-            val pageUrl = matcher.group(1)
-            val newsId = matcher.group(2).toIntOrNull() ?: continue
-            val rawTitle = matcher.group(3)
-            val cleanTitle = rawTitle.replace(Regex("<[^>]+>"), "").trim()
-
-            if (seen.add(newsId)) {
-                results.add(AnitubeSearchResult(newsId = newsId, title = cleanTitle, pageUrl = pageUrl))
+        headings.forEachIndexed { index, heading ->
+            if (seen.add(heading.newsId)) {
+                val nextStart = headings.getOrNull(index + 1)?.start ?: html.length
+                val chunk = html.substring(heading.end, nextStart)
+                val episodes = EPS_RE.find(chunk)?.groupValues
+                results.add(AnitubeSearchResult(
+                    newsId = heading.newsId,
+                    title = heading.title,
+                    pageUrl = heading.pageUrl,
+                    year = YEAR_RE.find(chunk)?.groupValues?.get(1)?.toIntOrNull(),
+                    airedEpisodes = episodes?.get(1)?.toIntOrNull(),
+                    totalEpisodes = episodes?.get(2)?.toIntOrNull(),
+                    durationMinutes = episodes?.get(3)?.toIntOrNull(),
+                ))
             }
         }
         return results
     }
+
+    private data class SearchHeading(
+        val start: Int,
+        val end: Int,
+        val newsId: Int,
+        val pageUrl: String,
+        val title: String,
+    )
 
     private fun parsePlaylistHtml(html: String): List<AnitubeVoice> {
         val liPattern = Pattern.compile("""<li([^>]*)>(.*?)</li>""", Pattern.DOTALL)
@@ -147,13 +172,15 @@ class AnitubeClient(
             val catKey = if (parts.size >= 2) "${parts[0]}_${parts[1]}" else parts.firstOrNull().orEmpty()
             val category = names[catKey].orEmpty()
 
-            val studioKey = if (parts.size >= 3) "${parts[0]}_${parts[1]}_${parts[2]}" else catKey
+            val studioKey = if (parts.size >= 3) parts.take(3).joinToString("_") else catKey
             val studioName = names[studioKey] ?: category.ifBlank { "Оригінал" }
 
-            val playerName = names[id].orEmpty()
+            // The fourth data-id segment identifies the player within a studio.
+            val playerKey = if (parts.size >= 4) parts.take(4).joinToString("_") else studioKey
+            val playerName = names[playerKey].orEmpty()
             val epNum = episodeNumberFromTitle(title) ?: 1
 
-            voicesMap.getOrPut(studioKey) { mutableListOf() }.add(
+            voicesMap.getOrPut(playerKey) { mutableListOf() }.add(
                 AnitubeEpisode(
                     id = id,
                     episodeNumber = epNum,
@@ -162,14 +189,15 @@ class AnitubeClient(
                     playerName = playerName
                 )
             )
-            voiceCategories[studioKey] = category
-            voiceNames[studioKey] = studioName
+            voiceCategories[playerKey] = category
+            voiceNames[playerKey] = studioName
         }
 
         return voicesMap.map { (key, episodes) ->
             AnitubeVoice(
                 category = voiceCategories[key].orEmpty(),
                 name = voiceNames[key].orEmpty(),
+                playerName = names[key].orEmpty(),
                 episodes = episodes
             )
         }
@@ -183,5 +211,7 @@ class AnitubeClient(
 
     companion object {
         const val BASE_URL = "https://anitube.in.ua"
+        private val YEAR_RE = Regex("""Рік виходу аніме:\s*</dt>\s*(?:<a[^>]*>)?\s*(\d{4})""", RegexOption.IGNORE_CASE)
+        private val EPS_RE = Regex("""Серій:\s*</dt>\s*(\d+)(?:\s*з\s*(\d+|\?))?(?:\s*\((\d+)\s*хв\))?""", RegexOption.IGNORE_CASE)
     }
 }

@@ -44,6 +44,8 @@ data class AnimeDetails(
     val recommendations: List<AnimeCard> = emptyList(),
     val recommendationsHasMore: Boolean = false,
     val trailer: MediaTrailer? = null,
+    val synonyms: List<String> = emptyList(),
+    val nextEpisode: Int? = null,
 )
 
 /** AniList currently provides YouTube and Dailymotion trailer IDs. */
