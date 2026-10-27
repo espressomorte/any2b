@@ -7,6 +7,18 @@ import org.json.JSONObject
 class SettingsManager(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences("settings_prefs", Context.MODE_PRIVATE)
 
+    fun workerUrl(): String = prefs.getString("worker_url", "").orEmpty()
+
+    fun setWorkerUrl(value: String) {
+        prefs.edit().putString("worker_url", value.trim().trimEnd('/')).apply()
+    }
+
+    fun torrServerUrl(): String = prefs.getString("torrserver_url", "").orEmpty()
+
+    fun setTorrServerUrl(value: String) {
+        prefs.edit().putString("torrserver_url", value.trim().trimEnd('/')).apply()
+    }
+
     fun homeSections(): List<HomeSectionSetting> = synchronized(homeSectionsLock) {
         val stored = prefs.getString("home_sections", null) ?: return@synchronized HomeSections.defaults
         val saved = try {

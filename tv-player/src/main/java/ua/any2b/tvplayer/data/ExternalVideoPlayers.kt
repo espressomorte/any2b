@@ -49,6 +49,16 @@ class ExternalVideoPlayers(private val context: Context) {
             .setComponent(player.component)
     }
 
+    fun intentForVideo(url: String, packageName: String): Intent? {
+        val uri = Uri.parse(url)
+        if (uri.scheme != "http" && uri.scheme != "https") return null
+        val intent = Intent(Intent.ACTION_VIEW).setDataAndType(uri, "video/*")
+        val info = packageManager.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
+            .firstOrNull { it.activityInfo?.packageName == packageName }?.activityInfo ?: return null
+        return Intent(Intent.ACTION_VIEW).setDataAndType(uri, "video/*")
+            .setComponent(ComponentName(info.packageName, info.name))
+    }
+
     private companion object {
         val MIME_TYPES = listOf("application/vnd.apple.mpegurl", "application/x-mpegURL", "video/*")
     }

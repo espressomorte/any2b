@@ -42,6 +42,7 @@ import ua.any2b.core.anilist.Title
 import ua.any2b.core.anitube.AnitubeEpisode
 import ua.any2b.core.anitube.AnitubeSearchResult
 import ua.any2b.core.anitube.AnitubeVoice
+import ua.any2b.core.toloka.TolokaHit
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalTvMaterial3Api::class)
 @Composable
@@ -52,6 +53,10 @@ fun DetailsScreen(
     onSelectRelease: (AnitubeSearchResult) -> Unit,
     onManualSearch: (String) -> Unit,
     onResetManualSearch: () -> Unit,
+    onTolokaSearch: (String) -> Unit,
+    onSelectTolokaHit: (String) -> Unit,
+    onRetryTolokaMetadata: () -> Unit,
+    onPlayTolokaFile: (Int) -> Unit,
     onToggleFavorite: () -> Unit,
     onSelectVoice: (Int) -> Unit,
     onSelectEpisode: (Int) -> Unit,
@@ -100,6 +105,18 @@ fun DetailsScreen(
                 var showReleaseDialog by remember(state.details.id) { mutableStateOf(false) }
                 var showManualDialog by remember(state.details.id) { mutableStateOf(false) }
                 var isDescriptionExpanded by rememberSaveable(state.details.id) { mutableStateOf(false) }
+                var videoTab by rememberSaveable(state.details.id) { mutableStateOf("online") }
+                val tolokaUkrainianTitle = (state.videoSource as? VideoSourceState.Success)?.release?.title
+                val tolokaOptions = tolokaQueryOptions(state.details, tolokaUkrainianTitle)
+                var tolokaQueryCustomized by rememberSaveable(state.details.id) { mutableStateOf(false) }
+                var tolokaQuery by rememberSaveable(state.details.id) {
+                    mutableStateOf(tolokaOptions.firstOrNull()?.second.orEmpty())
+                }
+                LaunchedEffect(tolokaUkrainianTitle) {
+                    if (!tolokaQueryCustomized && tolokaOptions.isNotEmpty()) {
+                        tolokaQuery = tolokaOptions.first().second
+                    }
+                }
                 val releaseCandidates = when (val source = state.videoSource) {
                     is VideoSourceState.Ambiguous -> source.candidates
                     is VideoSourceState.Error -> source.candidates
@@ -148,7 +165,7 @@ fun DetailsScreen(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                if (state.historyEntry != null) {
+                                if (videoTab == "online" && state.historyEntry != null) {
                                     Column(
                                         modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
                                         verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -179,7 +196,7 @@ fun DetailsScreen(
                                     }
                                 }
 
-                                if (state.videoSource is VideoSourceState.Success) {
+                                if (videoTab == "online" && state.videoSource is VideoSourceState.Success) {
                                     val selectedEpisode = state.voices.getOrNull(state.selectedVoiceIndex)
                                         ?.episodes?.getOrNull(state.selectedEpisodeIndex)
                                     val canContinue = state.historyEntry?.let { history ->
@@ -417,6 +434,18 @@ fun DetailsScreen(
                                     .padding(vertical = 12.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 16.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    SourceTabButton("Онлайн", selected = videoTab == "online") {
+                                        videoTab = "online"
+                                    }
+                                    SourceTabButton("Торент", selected = videoTab == "torrent") {
+                                        videoTab = "torrent"
+                                    }
+                                }
+                                if (videoTab == "online") {
                                 when (val source = state.videoSource) {
                                     VideoSourceState.Loading -> Row(
                                         modifier = Modifier.padding(horizontal = 16.dp),
@@ -627,6 +656,20 @@ fun DetailsScreen(
                                         }
                                     }
                                 }
+                                } else {
+                                    TolokaSearchPanel(
+                                        query = tolokaQuery,
+                                        options = tolokaOptions,
+                                        onChooseQuery = { tolokaQuery = it; tolokaQueryCustomized = true },
+                                        searchState = state.tolokaSearch,
+                                        transferState = state.tolokaTransfer,
+                                        playbackStatus = state.tolokaPlaybackStatus,
+                                        onSearch = { tolokaQueryCustomized = true; onTolokaSearch(tolokaQuery) },
+                                        onSelect = onSelectTolokaHit,
+                                        onRetryMetadata = onRetryTolokaMetadata,
+                                        onPlayFile = onPlayTolokaFile,
+                                    )
+                                }
                             }
                         }
                     }
@@ -674,6 +717,256 @@ fun DetailsScreen(
                     )
                 }
             }
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun SourceTabButton(label: String, selected: Boolean, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    Button(
+        onClick = onClick,
+        scale = ButtonDefaults.scale(scale = 1f, focusedScale = 1f),
+        shape = ButtonDefaults.shape(RoundedCornerShape(10.dp)),
+        colors = ButtonDefaults.colors(
+            containerColor = if (selected) AppColors.NeonCyan else AppColors.SurfaceCard,
+            contentColor = if (selected) AppColors.ButtonDarkText else Color.White,
+            focusedContainerColor = AppColors.NeonCyanLight,
+            focusedContentColor = AppColors.ButtonDarkText,
+        ),
+        modifier = Modifier.onFocusChanged { focused = it.isFocused }
+            .neonGlow(focused = focused, borderRadius = 10.dp),
+    ) {
+        Text(label, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun TolokaSearchPanel(
+    query: String,
+    options: List<Pair<String, String>>,
+    onChooseQuery: (String) -> Unit,
+    searchState: TolokaSearchState,
+    transferState: TolokaTransferState,
+    playbackStatus: String?,
+    onSearch: () -> Unit,
+    onSelect: (String) -> Unit,
+    onRetryMetadata: () -> Unit,
+    onPlayFile: (Int) -> Unit,
+) {
+    var showQueryDialog by remember { mutableStateOf(false) }
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("Пошук роздач Toloka", color = Color.White,
+            style = MaterialTheme.typography.titleMedium)
+        Text("OK — шукати · утримуйте OK — інші назви. Роздачу й файл вибираєте ви.",
+            color = AppColors.TextSecondary, fontSize = 13.sp)
+        var searchFocused by remember { mutableStateOf(false) }
+        Card(
+            onClick = { if (query.isNotBlank() && searchState != TolokaSearchState.Loading) onSearch() },
+            onLongClick = { showQueryDialog = true },
+            scale = CardDefaults.scale(scale = 1f, focusedScale = 1f),
+            shape = CardDefaults.shape(RoundedCornerShape(10.dp)),
+            modifier = Modifier.onFocusChanged { searchFocused = it.isFocused }
+                .neonGlow(focused = searchFocused, borderRadius = 10.dp),
+        ) { Text(query, modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp)) }
+
+        when (searchState) {
+            TolokaSearchState.Idle -> Text("Натисніть «Шукати», щоб отримати роздачі.",
+                color = AppColors.TextSecondary)
+            TolokaSearchState.Loading -> Text("Шукаємо роздачі…", color = AppColors.TextLight)
+            is TolokaSearchState.Error -> Text(searchState.message, color = AppColors.ErrorRed)
+            is TolokaSearchState.Results -> {
+                if (searchState.query != query.trim()) {
+                    Text("Запит змінено. Натисніть кнопку з назвою, щоб оновити результати.",
+                        color = AppColors.TextSecondary)
+                } else if (searchState.hits.isEmpty()) {
+                    Text("Підхожих роздач немає. Знайдено: ${searchState.totalFound}; відсіяно за назвою, роком або сезоном.",
+                        color = AppColors.TextLight)
+                } else {
+                    Text("Підхожих роздач: ${searchState.hits.size} із ${searchState.totalFound}",
+                        color = AppColors.TextSecondary, fontSize = 12.sp)
+                    searchState.hits.forEach { hit ->
+                        TolokaResultRow(
+                            hit = hit,
+                            selected = hit.id == searchState.selectedId,
+                            enabled = transferState !is TolokaTransferState.Loading,
+                            onClick = { onSelect(hit.id) },
+                        )
+                        if (hit.id == searchState.selectedId) {
+                            TolokaTransferContent(transferState, playbackStatus, onSearch, onRetryMetadata, onPlayFile)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if (showQueryDialog) {
+        TolokaQueryDialog(options, query, onDismiss = { showQueryDialog = false }) { selected ->
+            onChooseQuery(selected)
+            showQueryDialog = false
+        }
+    }
+}
+
+private fun tolokaQueryOptions(details: AnimeDetails, releaseTitle: String?): List<Pair<String, String>> {
+    val ukrainian = releaseTitle?.takeIf(String::isNotBlank)
+        ?: details.synonyms.firstOrNull { it.contains(Regex("[іїєґІЇЄҐ]")) }
+    val year = details.seasonYear?.toString()
+    return buildList {
+        fun addName(label: String, name: String?) {
+            val value = name?.trim()?.takeIf(String::isNotBlank) ?: return
+            add(label to value)
+            if (year != null) add("$label + рік" to "$value $year")
+        }
+        addName("Українська", ukrainian)
+        addName("English", details.title.english)
+        addName("Romaji", details.title.romaji)
+        addName("Native", details.title.native)
+        details.synonyms.filter { it != ukrainian }.take(4).forEachIndexed { index, name ->
+            addName("Синонім ${index + 1}", name)
+        }
+        if (isEmpty()) add("Назва" to details.title.display)
+    }.distinctBy { it.second.lowercase() }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun TolokaQueryDialog(
+    options: List<Pair<String, String>>,
+    selectedQuery: String,
+    onDismiss: () -> Unit,
+    onSelect: (String) -> Unit,
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier.width(560.dp).heightIn(max = 600.dp)
+                .clip(RoundedCornerShape(18.dp)).background(AppColors.SurfaceDark).padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text("Варіант пошукової назви", color = Color.White,
+                style = MaterialTheme.typography.titleLarge)
+            Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                options.forEach { (label, value) ->
+                    Button(onClick = { onSelect(value) }, modifier = Modifier.fillMaxWidth(),
+                        scale = ButtonDefaults.scale(scale = 1f, focusedScale = 1f)) {
+                        Text("$label: $value" + if (value == selectedQuery) " ✓" else "",
+                            maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+            OutlinedButton(onClick = onDismiss) { Text("Назад") }
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun TolokaTransferContent(
+    transferState: TolokaTransferState,
+    playbackStatus: String?,
+    onSearch: () -> Unit,
+    onRetryMetadata: () -> Unit,
+    onPlayFile: (Int) -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(start = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+    when (transferState) {
+        TolokaTransferState.Idle -> Unit
+        is TolokaTransferState.Loading -> {
+            Text(transferState.step + "…", color = AppColors.TextLight)
+            Text("Останній успішний етап: ${transferState.lastSuccess}", color = AppColors.TextSecondary,
+                fontSize = 12.sp)
+        }
+        is TolokaTransferState.Error -> {
+            Text(transferState.message, color = AppColors.ErrorRed)
+            Text("Останній успішний етап: ${transferState.lastSuccess}", color = AppColors.TextSecondary,
+                fontSize = 12.sp)
+            if (transferState.repeatSearch) {
+                Button(onClick = onSearch) { Text("Повторити пошук") }
+            }
+            if (transferState.retryMetadata) {
+                Button(onClick = onRetryMetadata) { Text("Повторити читання файлів") }
+            }
+        }
+        is TolokaTransferState.Files -> {
+            val files = transferState.torrent.videoFiles
+            Text("Торент додано. Виберіть відеофайл для відтворення:", color = Color.White,
+                style = MaterialTheme.typography.titleMedium)
+            Text("Метадані отримано: ${transferState.torrent.files.size} файлів, відео: ${files.size}",
+                color = AppColors.TextSecondary, fontSize = 12.sp)
+            if (playbackStatus != null) Text(playbackStatus, color = AppColors.TextLight,
+                fontSize = 12.sp)
+            if (files.isEmpty()) {
+                Text("У роздачі немає доступних відеофайлів.", color = AppColors.TextSecondary)
+            } else {
+                files.forEach { file ->
+                    var focused by remember(file.id) { mutableStateOf(false) }
+                    Card(
+                        onClick = { onPlayFile(file.id) },
+                        scale = CardDefaults.scale(scale = 1f, focusedScale = 1f),
+                        shape = CardDefaults.shape(RoundedCornerShape(10.dp)),
+                        colors = CardDefaults.colors(
+                            containerColor = AppColors.SurfaceCard,
+                            focusedContainerColor = AppColors.NeonCyanLight,
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                            .onFocusChanged { focused = it.isFocused }
+                            .neonGlow(focused = focused, borderRadius = 10.dp),
+                    ) {
+                        Column(Modifier.fillMaxWidth().padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(file.path, color = if (focused) AppColors.ButtonDarkText else Color.White)
+                            Text(formatFileSize(file.length), fontSize = 12.sp,
+                                color = if (focused) AppColors.ButtonDarkText else AppColors.TextSecondary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    }
+}
+
+private fun formatFileSize(bytes: Long): String = when {
+    bytes >= 1_073_741_824L -> "%.2f GB".format(java.util.Locale.ROOT, bytes / 1_073_741_824.0)
+    bytes >= 1_048_576L -> "%.1f MB".format(java.util.Locale.ROOT, bytes / 1_048_576.0)
+    else -> "$bytes B"
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun TolokaResultRow(hit: TolokaHit, selected: Boolean, enabled: Boolean, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    val background = when {
+        focused -> AppColors.NeonCyanLight
+        selected -> AppColors.NeonCyan
+        else -> AppColors.SurfaceCard
+    }
+    val foreground = if (focused || selected) AppColors.ButtonDarkText else Color.White
+    Card(
+        onClick = { if (enabled) onClick() },
+        scale = CardDefaults.scale(scale = 1f, focusedScale = 1f),
+        shape = CardDefaults.shape(RoundedCornerShape(10.dp)),
+        colors = CardDefaults.colors(containerColor = background, focusedContainerColor = background),
+        modifier = Modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused }
+            .neonGlow(focused = focused, borderRadius = 10.dp),
+    ) {
+        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Text(hit.title, color = foreground, fontWeight = FontWeight.Medium)
+            val details = buildList {
+                if (hit.sizeText.isNotBlank()) add(hit.sizeText)
+                hit.seeders?.let { add("Сіди: $it") }
+                hit.leechers?.let { add("Піри: $it") }
+            }.joinToString(" · ")
+            if (details.isNotBlank()) Text(details, color = foreground, fontSize = 12.sp)
         }
     }
 }
@@ -1046,6 +1339,10 @@ private fun DetailsScreenPreview() {
             onSelectRelease = {},
             onManualSearch = {},
             onResetManualSearch = {},
+            onTolokaSearch = {},
+            onSelectTolokaHit = {},
+            onRetryTolokaMetadata = {},
+            onPlayTolokaFile = {},
             onToggleFavorite = {},
             onSelectVoice = {},
             onSelectEpisode = {},

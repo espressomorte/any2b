@@ -13,8 +13,11 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.hls.HlsMediaSource
+import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import kotlinx.coroutines.*
 import okhttp3.OkHttpClient
+import okhttp3.Credentials
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import ua.any2b.core.anilist.AniListClient
 import ua.any2b.core.anitube.AnitubeClient
 import ua.any2b.core.anitube.AnitubeVoice
@@ -24,6 +27,7 @@ import ua.any2b.core.matcher.TitleMatcher
 import ua.any2b.tvplayer.data.SettingsManager
 import ua.any2b.tvplayer.data.VoiceCache
 import ua.any2b.tvplayer.data.WatchHistoryManager
+import ua.any2b.tvplayer.data.TorrServerAuthStore
 import ua.any2b.tvplayer.databinding.ActivityPlayerBinding
 import java.util.concurrent.TimeUnit
 
@@ -38,6 +42,8 @@ class PlayerActivity : FragmentActivity() {
         const val EXTRA_EPISODE_INDEX = "EPISODE_INDEX"
         const val EXTRA_EPISODE_NUMBER = "EPISODE_NUMBER"
         const val EXTRA_IS_MOVIE = "IS_MOVIE"
+        const val EXTRA_SOURCE_TYPE = "SOURCE_TYPE"
+        const val SOURCE_TOLOKA = "toloka"
     }
 
     private lateinit var binding: ActivityPlayerBinding
@@ -48,12 +54,17 @@ class PlayerActivity : FragmentActivity() {
     private var episodeIndex: Int = 0
     private var episodeNumber: Int = 1
     private var isMovie: Boolean = false
+    private var isToloka: Boolean = false
 
     private var nextEpisodeUrl: String? = null
     private var nextEpisodeIndex: Int = -1
     private var nextEpisodeNumber: Int = -1
     private var progressJob: Job? = null
     private var prefetchJob: Job? = null
+    private val tolokaServerBase by lazy { SettingsManager(this).torrServerUrl().toHttpUrlOrNull() }
+    private val tolokaBasicHeader by lazy {
+        TorrServerAuthStore(this).read()?.let { Credentials.basic(it.username, it.password) }
+    }
 
     private val okHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -67,6 +78,15 @@ class PlayerActivity : FragmentActivity() {
                     "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
                 )
                 .apply {
+                    if (isToloka) {
+                        val server = tolokaServerBase
+                        val auth = tolokaBasicHeader
+                        if (server != null && auth != null &&
+                            original.url.host == server.host && original.url.port == server.port &&
+                            original.url.scheme == server.scheme) {
+                            header("Authorization", auth)
+                        }
+                    }
                     if (host.contains("ashdi")) {
                         header("Referer", "https://ashdi.vip/")
                     } else if (host.contains("fenixplay")) {
@@ -90,6 +110,7 @@ class PlayerActivity : FragmentActivity() {
         episodeIndex = intent.getIntExtra(EXTRA_EPISODE_INDEX, 0)
         episodeNumber = intent.getIntExtra(EXTRA_EPISODE_NUMBER, episodeIndex + 1)
         isMovie = intent.getBooleanExtra(EXTRA_IS_MOVIE, false)
+        isToloka = intent.getStringExtra(EXTRA_SOURCE_TYPE) == SOURCE_TOLOKA
 
         if (url.isNullOrBlank()) {
             Log.w("NextEp", "finish(): url is null or blank")
@@ -106,14 +127,18 @@ class PlayerActivity : FragmentActivity() {
             }
         }
 
-        showStatus("⏳ Підключення до потоку…", url)
+        if (isToloka) binding.btnNextEpisode.visibility = View.GONE
+        showStatus("⏳ Підключення до потоку…", if (isToloka) "" else url)
         initPlayer(url)
     }
 
     private fun initPlayer(url: String) {
         val dataSourceFactory = OkHttpDataSource.Factory(okHttpClient)
-        val hlsMediaSource = HlsMediaSource.Factory(dataSourceFactory)
-            .createMediaSource(MediaItem.fromUri(url))
+        val mediaSource = if (isToloka) {
+            ProgressiveMediaSource.Factory(dataSourceFactory).createMediaSource(MediaItem.fromUri(url))
+        } else {
+            HlsMediaSource.Factory(dataSourceFactory).createMediaSource(MediaItem.fromUri(url))
+        }
 
         player = ExoPlayer.Builder(this).build().also { exo ->
             binding.playerView.player = exo
@@ -123,16 +148,18 @@ class PlayerActivity : FragmentActivity() {
                     Log.d("Player", "state=$state") // 1 IDLE, 2 BUFFERING, 3 READY, 4 ENDED
                     when (state) {
                         Player.STATE_READY   -> {
-                            showStatus("▶ Відтворення", url)
-                            startProgressReporting()
-                            startPreFetchingNextEpisode()
+                            showStatus("▶ Відтворення", if (isToloka) "" else url)
+                            if (!isToloka) {
+                                startProgressReporting()
+                                startPreFetchingNextEpisode()
+                            }
                         }
-                        Player.STATE_BUFFERING -> showStatus("⏳ Буферизація…", url)
+                        Player.STATE_BUFFERING -> showStatus("⏳ Буферизація…", if (isToloka) "" else url)
                         Player.STATE_ENDED   -> {
                             val current = exo.currentPosition
                             val duration = exo.duration
                             if (duration > 0 && current >= duration - 3000) {
-                                showStatus("✓ Завершено", url)
+                                showStatus("✓ Завершено", if (isToloka) "" else url)
                                 handlePlaybackEnded()
                             } else {
                                 Log.w(TAG, "Ignored premature STATE_ENDED at current=$current, duration=$duration")
@@ -143,9 +170,14 @@ class PlayerActivity : FragmentActivity() {
                 }
 
                 override fun onPlayerError(error: PlaybackException) {
-                    Log.e("Player", "ExoPlayer: ${error.errorCodeName} / ${error.message}", error)
-                    val msg = "✗ Помилка: ${error.errorCodeName} — ${error.message}"
-                    showStatus(msg, url)
+                    if (isToloka) {
+                        Log.e("Player", "TorrServer playback: ${error.errorCodeName}")
+                        showStatus("✗ Потік TorrServer недоступний (${error.errorCodeName}). Перевірте адресу сервера на цьому пристрої та стан роздачі.", "")
+                    } else {
+                        Log.e("Player", "ExoPlayer: ${error.errorCodeName} / ${error.message}", error)
+                        val msg = "✗ Помилка: ${error.errorCodeName} — ${error.message}"
+                        showStatus(msg, url)
+                    }
                 }
 
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -157,7 +189,7 @@ class PlayerActivity : FragmentActivity() {
                 }
             })
 
-            exo.setMediaSource(hlsMediaSource)
+            exo.setMediaSource(mediaSource)
             exo.playWhenReady = true
             exo.prepare()
         }
@@ -353,6 +385,10 @@ class PlayerActivity : FragmentActivity() {
     }
 
     private fun handlePlaybackEnded() {
+        if (isToloka) {
+            finish()
+            return
+        }
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 if (animeId > 0) {
