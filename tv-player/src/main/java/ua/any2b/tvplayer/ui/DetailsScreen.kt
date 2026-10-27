@@ -59,6 +59,7 @@ fun DetailsScreen(
     onTrailerClick: () -> Unit,
     onBackClick: () -> Unit,
     onOpenRelated: (AnimeCard) -> Unit,
+    onOpenGenre: (String) -> Unit,
     onMoreRelated: () -> Unit,
     onMoreRecommendations: () -> Unit,
 ) {
@@ -305,11 +306,26 @@ fun DetailsScreen(
                                     color = Color.White,
                                     fontWeight = FontWeight.Bold
                                 )
-                                state.details.title.romaji?.let {
-                                    if (it != state.details.title.display) {
-                                        Text(it, style = MaterialTheme.typography.titleMedium, color = AppColors.TextLight)
+                                val ukrainianTitle = (state.videoSource as? VideoSourceState.Success)
+                                    ?.release?.title ?: when (state.videoSource) {
+                                        VideoSourceState.Loading -> "Шукаємо українську назву..."
+                                        else -> "Українську назву не вибрано"
                                     }
-                                }
+                                var isUkrainianTitleFocused by remember { mutableStateOf(false) }
+                                Text(
+                                    text = ukrainianTitle,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = if (isUkrainianTitleFocused) AppColors.NeonCyan else AppColors.TextLight,
+                                    modifier = Modifier
+                                        .onFocusChanged { isUkrainianTitleFocused = it.isFocused }
+                                        .clickable {
+                                            onResetManualSearch()
+                                            showManualDialog = true
+                                        }
+                                        .semantics { contentDescription = "Уточнити реліз AniTube: $ukrainianTitle" },
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
                             }
 
                             // Metadata Pills
@@ -337,13 +353,29 @@ fun DetailsScreen(
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
                                     state.details.genres.forEach { genre ->
-                                        Box(
+                                        var isGenreFocused by remember(genre) { mutableStateOf(false) }
+                                        Card(
+                                            onClick = { onOpenGenre(genre) },
+                                            scale = CardDefaults.scale(scale = 1f, focusedScale = 1f),
+                                            shape = CardDefaults.shape(RoundedCornerShape(8.dp)),
+                                            glow = CardDefaults.glow(
+                                                glow = Glow.None,
+                                                focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 8.dp),
+                                            ),
+                                            colors = CardDefaults.colors(
+                                                containerColor = AppColors.SurfaceDark,
+                                                focusedContainerColor = AppColors.SurfaceDark,
+                                            ),
                                             modifier = Modifier
-                                                .clip(RoundedCornerShape(8.dp))
-                                                .background(AppColors.SurfaceDark)
-                                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                                                .zIndex(if (isGenreFocused) 1f else 0f)
+                                                .onFocusChanged { isGenreFocused = it.isFocused },
                                         ) {
-                                            Text(genre, color = AppColors.TextLight, fontSize = 12.sp)
+                                            Text(
+                                                genreLabel(genre),
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                                color = if (isGenreFocused) AppColors.NeonCyan else AppColors.TextLight,
+                                                fontSize = 12.sp,
+                                            )
                                         }
                                     }
                                 }
@@ -385,33 +417,6 @@ fun DetailsScreen(
                                     .padding(vertical = 12.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                val releaseTitle = (state.videoSource as? VideoSourceState.Success)
-                                    ?.release?.title ?: "Не вибрано"
-
-                                Column(
-                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    Text(
-                                        text = "AniTube",
-                                        color = AppColors.TextSecondary,
-                                        fontSize = 11.sp
-                                    )
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        Text(
-                                            text = releaseTitle,
-                                            color = Color.White,
-                                            style = MaterialTheme.typography.titleMedium,
-                                            modifier = Modifier.weight(1f, fill = false),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                }
-
                                 when (val source = state.videoSource) {
                                     VideoSourceState.Loading -> Row(
                                         modifier = Modifier.padding(horizontal = 16.dp),
@@ -1048,6 +1053,7 @@ private fun DetailsScreenPreview() {
             onTrailerClick = {},
             onBackClick = {},
             onOpenRelated = {},
+            onOpenGenre = {},
             onMoreRelated = {},
             onMoreRecommendations = {},
         )

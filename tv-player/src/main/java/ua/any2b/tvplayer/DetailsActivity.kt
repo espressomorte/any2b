@@ -15,11 +15,14 @@ import ua.any2b.tvplayer.ui.AppTheme
 import ua.any2b.tvplayer.ui.DetailsScreen
 import ua.any2b.tvplayer.ui.DetailsViewModel
 import ua.any2b.tvplayer.ui.DetailsState
+import ua.any2b.tvplayer.ui.genreLabel
 import ua.any2b.tvplayer.data.ExternalVideoPlayers
 import ua.any2b.tvplayer.data.SettingsManager
 import ua.any2b.core.anilist.trailerSearchUrl
 
 class DetailsActivity : ComponentActivity() {
+
+    private var refreshAfterPlayback = false
 
     private val animeId: Int by lazy {
         intent.getIntExtra("ANIME_ID", 1)
@@ -36,6 +39,7 @@ class DetailsActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        refreshAfterPlayback = savedInstanceState?.getBoolean("refresh_after_playback") ?: false
         setContent {
             AppTheme {
                 val state = viewModel.state.collectAsStateWithLifecycle().value
@@ -79,11 +83,27 @@ class DetailsActivity : ComponentActivity() {
                             putExtra("ANIME_ID", card.id)
                         })
                     },
+                    onOpenGenre = { genre ->
+                        openDetailsCategory("genre:$genre", genreLabel(genre))
+                    },
                     onMoreRelated = { openDetailsCategory("related:$animeId", "Пов’язані релізи") },
                     onMoreRecommendations = { openDetailsCategory("recommendations:$animeId", "Рекомендації") },
                 )
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (refreshAfterPlayback) {
+            refreshAfterPlayback = false
+            viewModel.refreshVoicesAfterPlayback()
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean("refresh_after_playback", refreshAfterPlayback)
+        super.onSaveInstanceState(outState)
     }
 
     private fun openPlayer(
@@ -100,6 +120,7 @@ class DetailsActivity : ComponentActivity() {
             if (externalIntent != null) {
                 try {
                     startActivity(externalIntent)
+                    refreshAfterPlayback = true
                     return
                 } catch (_: ActivityNotFoundException) {
                     // Плеєр могли видалити або оновити після вибору.
@@ -118,6 +139,7 @@ class DetailsActivity : ComponentActivity() {
             putExtra(PlayerActivity.EXTRA_EPISODE_NUMBER, episodeNumber)
             putExtra(PlayerActivity.EXTRA_IS_MOVIE, isMovie)
         })
+        refreshAfterPlayback = true
     }
 
     private fun openDetailsCategory(categoryId: String, title: String) {

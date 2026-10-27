@@ -14,6 +14,7 @@ import ua.any2b.core.anilist.Title
 import ua.any2b.core.anilist.HOME_FETCH_SIZE
 import ua.any2b.core.anilist.rowsWithLocal
 import ua.any2b.tvplayer.data.FavoritesManager
+import ua.any2b.tvplayer.data.SettingsManager
 import ua.any2b.tvplayer.data.WatchHistoryManager
 
 sealed interface HomeState {
@@ -27,6 +28,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val client = AniListClient()
     private val favoritesManager = FavoritesManager(application)
     private val historyManager = WatchHistoryManager(application)
+    private val settingsManager = SettingsManager(application)
+    private var catalogRows: List<HomeRow> = emptyList()
 
     private val _state = MutableStateFlow<HomeState>(HomeState.Loading)
     val state: StateFlow<HomeState> = _state
@@ -39,10 +42,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         _state.value = HomeState.Loading
         viewModelScope.launch {
             _state.value = try {
-                HomeState.Ready(rowsWithLocal(client.homeRows(perRow = HOME_FETCH_SIZE)))
+                catalogRows = client.homeRows(perRow = HOME_FETCH_SIZE)
+                HomeState.Ready(rowsWithLocal(catalogRows))
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                catalogRows = emptyList()
                 HomeState.Ready(rowsWithLocal(emptyList()), e.message ?: "Не вдалося завантажити каталог")
             }
         }
@@ -50,7 +55,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     fun refreshLocalRows() {
         val current = _state.value as? HomeState.Ready ?: return
-        val catalogRows = current.rows.filterNot { it.id == "favorites" || it.id == "history" }
         _state.value = current.copy(rows = rowsWithLocal(catalogRows))
     }
 
@@ -68,6 +72,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 nextEpisode = null,
             )
         }
-        return rowsWithLocal(catalogRows, history, favoritesManager.getFavorites())
+        val availableRows = rowsWithLocal(catalogRows, history, favoritesManager.getFavorites())
+        val byId = availableRows.associateBy { it.id }
+        return settingsManager.homeSections()
+            .filter { it.enabled }
+            .mapNotNull { byId[it.id] }
     }
 }
