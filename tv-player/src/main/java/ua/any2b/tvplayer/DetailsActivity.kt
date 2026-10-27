@@ -18,11 +18,13 @@ import ua.any2b.tvplayer.ui.DetailsState
 import ua.any2b.tvplayer.ui.genreLabel
 import ua.any2b.tvplayer.data.ExternalVideoPlayers
 import ua.any2b.tvplayer.data.SettingsManager
+import ua.any2b.tvplayer.data.TorrServerAuthStore
 import ua.any2b.core.anilist.trailerSearchUrl
 
 class DetailsActivity : ComponentActivity() {
 
     private var refreshAfterPlayback = false
+    private var launchingTolokaPlayer = false
 
     private val animeId: Int by lazy {
         intent.getIntExtra("ANIME_ID", 1)
@@ -50,6 +52,10 @@ class DetailsActivity : ComponentActivity() {
                     onSelectRelease = viewModel::selectRelease,
                     onManualSearch = viewModel::searchManualRelease,
                     onResetManualSearch = viewModel::resetManualReleaseSearch,
+                    onTolokaSearch = viewModel::searchToloka,
+                    onSelectTolokaHit = viewModel::selectTolokaHit,
+                    onRetryTolokaMetadata = viewModel::retryTolokaMetadata,
+                    onPlayTolokaFile = { fileId -> openTolokaFile(fileId) },
                     onToggleFavorite = viewModel::toggleFavorite,
                     onSelectVoice = viewModel::selectVoice,
                     onSelectEpisode = viewModel::selectEpisode,
@@ -95,6 +101,7 @@ class DetailsActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        launchingTolokaPlayer = false
         if (refreshAfterPlayback) {
             refreshAfterPlayback = false
             viewModel.refreshVoicesAfterPlayback()
@@ -140,6 +147,50 @@ class DetailsActivity : ComponentActivity() {
             putExtra(PlayerActivity.EXTRA_IS_MOVIE, isMovie)
         })
         refreshAfterPlayback = true
+    }
+
+    private fun openTolokaFile(fileId: Int) {
+        if (launchingTolokaPlayer) return
+        val url = viewModel.tolokaPlaybackUrl(fileId)
+        if (url == null) {
+            viewModel.reportTolokaPlaybackStatus("Не вдалося сформувати URL потоку для вибраного файлу")
+            Toast.makeText(this, "Відеофайл недоступний. Повторіть вибір роздачі", Toast.LENGTH_LONG).show()
+            return
+        }
+        viewModel.reportTolokaPlaybackStatus("URL потоку сформовано для індексу $fileId. Відкриваємо плеєр…")
+        launchingTolokaPlayer = true
+        val settings = SettingsManager(this)
+        val selectedPackage = settings.selectedPlayerPackage()
+        val serverRequiresAuth = TorrServerAuthStore(this).read() != null
+        if (selectedPackage != null && !serverRequiresAuth) {
+            val externalIntent = ExternalVideoPlayers(this).intentForVideo(url, selectedPackage)
+            if (externalIntent != null) {
+                try {
+                    startActivity(externalIntent)
+                    viewModel.reportTolokaPlaybackStatus("URL передано зовнішньому плеєру. Результат відтворення перевіряйте в ньому")
+                    return
+                } catch (_: ActivityNotFoundException) {
+                    // The selected player may have been removed.
+                } catch (_: SecurityException) {
+                    // The selected player no longer accepts explicit launches.
+                }
+            }
+            Toast.makeText(this, "Обраний плеєр недоступний. Відкриваємо вбудований", Toast.LENGTH_LONG).show()
+        }
+        if (selectedPackage != null && serverRequiresAuth) {
+            Toast.makeText(this, "Захищений TorrServer відкриваємо у вбудованому плеєрі", Toast.LENGTH_LONG).show()
+        }
+        try {
+            startActivity(Intent(this, PlayerActivity::class.java).apply {
+                putExtra(PlayerActivity.EXTRA_STREAM_URL, url)
+                putExtra(PlayerActivity.EXTRA_SOURCE_TYPE, PlayerActivity.SOURCE_TOLOKA)
+            })
+            viewModel.reportTolokaPlaybackStatus("URL передано вбудованому плеєру")
+        } catch (_: Exception) {
+            launchingTolokaPlayer = false
+            viewModel.reportTolokaPlaybackStatus("Не вдалося запустити плеєр після формування URL потоку")
+            Toast.makeText(this, "Не вдалося відкрити плеєр", Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun openDetailsCategory(categoryId: String, title: String) {

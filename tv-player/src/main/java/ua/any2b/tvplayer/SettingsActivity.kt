@@ -24,11 +24,17 @@ import kotlinx.coroutines.withContext
 import ua.any2b.core.update.AppRelease
 import ua.any2b.core.update.GitHubReleaseClient
 import ua.any2b.core.update.compareVersions
+import ua.any2b.core.toloka.WorkerFailure
+import ua.any2b.core.toloka.TorrServerProbe
+import ua.any2b.core.toloka.TorrServerBasicAuth
 import ua.any2b.tvplayer.data.SettingsManager
 import ua.any2b.tvplayer.data.HomeSectionSetting
 import ua.any2b.tvplayer.data.ExternalVideoPlayer
 import ua.any2b.tvplayer.data.ExternalVideoPlayers
 import ua.any2b.tvplayer.data.WatchHistoryManager
+import ua.any2b.tvplayer.data.WorkerKeyStore
+import ua.any2b.tvplayer.data.WorkerConnections
+import ua.any2b.tvplayer.data.TorrServerAuthStore
 import ua.any2b.tvplayer.ui.AppTheme
 import ua.any2b.tvplayer.ui.SettingsScreen
 
@@ -51,6 +57,25 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private val releaseClient = GitHubReleaseClient()
     private val downloads = application.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
     private val updatePrefs = application.getSharedPreferences("update_download", Context.MODE_PRIVATE)
+    private val workerKeyStore = WorkerKeyStore(application)
+    private val workerClient = WorkerConnections.client
+    private val torrServerProbe = TorrServerProbe()
+    private val torrServerAuthStore = TorrServerAuthStore(application)
+
+    private val _workerUrl = MutableStateFlow(settingsManager.workerUrl())
+    val workerUrl: StateFlow<String> = _workerUrl
+    private val _torrServerUrl = MutableStateFlow(settingsManager.torrServerUrl())
+    val torrServerUrl: StateFlow<String> = _torrServerUrl
+    private val _torrServerAuthConfigured = MutableStateFlow(torrServerAuthStore.read() != null)
+    val torrServerAuthConfigured: StateFlow<Boolean> = _torrServerAuthConfigured
+    private val _workerKeyConfigured = MutableStateFlow(workerKeyStore.read() != null)
+    val workerKeyConfigured: StateFlow<Boolean> = _workerKeyConfigured
+    private val _workerCheck = MutableStateFlow("")
+    val workerCheck: StateFlow<String> = _workerCheck
+    private val _torrServerCheck = MutableStateFlow("")
+    val torrServerCheck: StateFlow<String> = _torrServerCheck
+    private var checkingWorker = false
+    private var checkingTorrServer = false
 
     private val _autoPlayNext = MutableStateFlow(settingsManager.isAutoPlayNextEnabled())
     val autoPlayNext: StateFlow<Boolean> = _autoPlayNext
@@ -82,6 +107,92 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     fun setAutoPlayNext(enabled: Boolean) {
         settingsManager.setAutoPlayNextEnabled(enabled)
         _autoPlayNext.value = enabled
+    }
+
+    fun setWorkerUrl(value: String) {
+        settingsManager.setWorkerUrl(value)
+        _workerUrl.value = settingsManager.workerUrl()
+        _workerCheck.value = ""
+    }
+
+    fun setTorrServerUrl(value: String) {
+        settingsManager.setTorrServerUrl(value)
+        _torrServerUrl.value = settingsManager.torrServerUrl()
+        _torrServerCheck.value = ""
+    }
+
+    fun setWorkerKey(value: String) {
+        try {
+            workerKeyStore.write(value.trim())
+            _workerKeyConfigured.value = workerKeyStore.read() != null
+            _workerCheck.value = ""
+        } catch (_: Exception) {
+            _workerCheck.value = "Не вдалося захищено зберегти ключ Worker"
+        }
+    }
+
+    fun setTorrServerAuth(value: String) {
+        val text = value.trim()
+        if (text.isNotEmpty() && (!text.contains(':') || text.substringBefore(':').isBlank() ||
+                    text.substringAfter(':').isBlank())) {
+            _torrServerCheck.value = "Вкажіть дані у форматі користувач:пароль"
+            return
+        }
+        try {
+            torrServerAuthStore.write(text.substringBefore(':'), text.substringAfter(':', ""))
+            _torrServerAuthConfigured.value = torrServerAuthStore.read() != null
+            _torrServerCheck.value = ""
+        } catch (_: Exception) {
+            _torrServerCheck.value = "Не вдалося захищено зберегти дані TorrServer"
+        }
+    }
+
+    fun checkWorker() {
+        if (checkingWorker) return
+        checkingWorker = true
+        _workerCheck.value = "Перевіряємо Worker…"
+        viewModelScope.launch {
+            try {
+                val key = workerKeyStore.read() ?: throw IllegalArgumentException("Вкажіть ключ Worker")
+                val status = workerClient.status(_workerUrl.value, key)
+                _workerCheck.value = "Worker доступний · KV: ${if (status.kvConfigured) "так" else "ні"} · сесія: ${if (status.sessionStored) "так" else "ні"}"
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: WorkerFailure) {
+                _workerCheck.value = if (error is WorkerFailure.RateLimited)
+                    "Worker обмежив запити. Повторіть через ${error.waitSeconds} с"
+                else error.message.orEmpty()
+            } catch (error: IllegalArgumentException) {
+                _workerCheck.value = error.message.orEmpty()
+            } catch (_: Exception) {
+                _workerCheck.value = "Не вдалося перевірити Worker. Повторіть вручну"
+            } finally {
+                checkingWorker = false
+            }
+        }
+    }
+
+    fun checkTorrServer() {
+        if (checkingTorrServer) return
+        checkingTorrServer = true
+        _torrServerCheck.value = "Перевіряємо TorrServer…"
+        viewModelScope.launch {
+            try {
+                val auth = torrServerAuthStore.read()?.let { TorrServerBasicAuth(it.username, it.password) }
+                val version = torrServerProbe.version(_torrServerUrl.value, auth)
+                _torrServerCheck.value = "TorrServer доступний · версія $version"
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: IllegalArgumentException) {
+                _torrServerCheck.value = error.message.orEmpty()
+            } catch (error: IllegalStateException) {
+                _torrServerCheck.value = error.message.orEmpty()
+            } catch (_: Exception) {
+                _torrServerCheck.value = "Не вдалося з’єднатися з TorrServer. Перевірте адресу й мережу"
+            } finally {
+                checkingTorrServer = false
+            }
+        }
     }
 
     fun setHomeSectionEnabled(id: String, enabled: Boolean) {
@@ -208,6 +319,12 @@ class SettingsActivity : ComponentActivity() {
                 val availablePlayers = viewModel.availablePlayers.collectAsStateWithLifecycle().value
                 val selectedPlayerPackage = viewModel.selectedPlayerPackage.collectAsStateWithLifecycle().value
                 val updateState = viewModel.updateState.collectAsStateWithLifecycle().value
+                val workerUrl = viewModel.workerUrl.collectAsStateWithLifecycle().value
+                val torrServerUrl = viewModel.torrServerUrl.collectAsStateWithLifecycle().value
+                val torrServerAuthConfigured = viewModel.torrServerAuthConfigured.collectAsStateWithLifecycle().value
+                val workerKeyConfigured = viewModel.workerKeyConfigured.collectAsStateWithLifecycle().value
+                val workerCheck = viewModel.workerCheck.collectAsStateWithLifecycle().value
+                val torrServerCheck = viewModel.torrServerCheck.collectAsStateWithLifecycle().value
                 SettingsScreen(
                     autoPlayNext = autoPlay,
                     homeSections = homeSections,
@@ -215,6 +332,18 @@ class SettingsActivity : ComponentActivity() {
                     selectedPlayerPackage = selectedPlayerPackage,
                     currentVersion = viewModel.currentVersion,
                     updateState = updateState,
+                    workerUrl = workerUrl,
+                    torrServerUrl = torrServerUrl,
+                    torrServerAuthConfigured = torrServerAuthConfigured,
+                    workerKeyConfigured = workerKeyConfigured,
+                    workerCheck = workerCheck,
+                    torrServerCheck = torrServerCheck,
+                    onWorkerUrlChanged = viewModel::setWorkerUrl,
+                    onWorkerKeyChanged = viewModel::setWorkerKey,
+                    onTorrServerUrlChanged = viewModel::setTorrServerUrl,
+                    onTorrServerAuthChanged = viewModel::setTorrServerAuth,
+                    onCheckWorker = viewModel::checkWorker,
+                    onCheckTorrServer = viewModel::checkTorrServer,
                     onAutoPlayChanged = viewModel::setAutoPlayNext,
                     onHomeSectionEnabled = viewModel::setHomeSectionEnabled,
                     onMoveHomeSection = viewModel::moveHomeSection,

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- User supplied TorrServer hosts may be LAN IP addresses. HTTPS certificate checks remain enabled. -->
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

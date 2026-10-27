@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -21,12 +22,23 @@ import ua.any2b.core.anitube.AnitubeVoice
 import ua.any2b.core.anitube.playableVoices
 import ua.any2b.core.extractor.StreamResolver
 import ua.any2b.core.matcher.TitleMatcher
+import ua.any2b.core.toloka.TolokaHit
+import ua.any2b.core.toloka.TolokaHitFilter
+import ua.any2b.core.toloka.WorkerFailure
+import ua.any2b.core.toloka.TorrServerClient
+import ua.any2b.core.toloka.TorrServerFailure
+import ua.any2b.core.toloka.TorrServerTorrent
+import ua.any2b.core.toloka.TorrServerBasicAuth
 import ua.any2b.tvplayer.data.VoiceCache
 import ua.any2b.tvplayer.data.FavoritesManager
 import ua.any2b.tvplayer.data.WatchHistoryEntry
 import ua.any2b.tvplayer.data.WatchHistoryManager
 import ua.any2b.tvplayer.data.ReleaseMappingStore
 import ua.any2b.tvplayer.data.ReleaseSelection
+import ua.any2b.tvplayer.data.SettingsManager
+import ua.any2b.tvplayer.data.WorkerConnections
+import ua.any2b.tvplayer.data.WorkerKeyStore
+import ua.any2b.tvplayer.data.TorrServerAuthStore
 
 sealed interface VideoSourceState {
     data object Loading : VideoSourceState
@@ -42,12 +54,39 @@ sealed interface ManualReleaseSearchState {
     data class Error(val message: String) : ManualReleaseSearchState
 }
 
+sealed interface TolokaSearchState {
+    data object Idle : TolokaSearchState
+    data object Loading : TolokaSearchState
+    data class Results(
+        val query: String,
+        val hits: List<TolokaHit>,
+        val totalFound: Int,
+        val selectedId: String? = null,
+    ) : TolokaSearchState
+    data class Error(val message: String) : TolokaSearchState
+}
+
+sealed interface TolokaTransferState {
+    data object Idle : TolokaTransferState
+    data class Loading(val step: String, val lastSuccess: String) : TolokaTransferState
+    data class Files(val torrent: TorrServerTorrent) : TolokaTransferState
+    data class Error(
+        val message: String,
+        val lastSuccess: String = "Пошук роздачі",
+        val repeatSearch: Boolean = false,
+        val retryMetadata: Boolean = false,
+    ) : TolokaTransferState
+}
+
 sealed interface DetailsState {
     data object Loading : DetailsState
     data class Ready(
         val details: AnimeDetails,
         val videoSource: VideoSourceState = VideoSourceState.Loading,
         val manualReleaseSearch: ManualReleaseSearchState = ManualReleaseSearchState.Idle,
+        val tolokaSearch: TolokaSearchState = TolokaSearchState.Idle,
+        val tolokaTransfer: TolokaTransferState = TolokaTransferState.Idle,
+        val tolokaPlaybackStatus: String? = null,
         val isFavorite: Boolean = false,
         val selectedVoiceIndex: Int = 0,
         val selectedEpisodeIndex: Int = 0,
@@ -70,7 +109,16 @@ class DetailsViewModel(
     private val historyManager = WatchHistoryManager(context)
     private val favoritesManager = FavoritesManager(context)
     private val releaseMappings = ReleaseMappingStore.getInstance(context)
+    private val settingsManager = SettingsManager(context)
+    private val workerKeyStore = WorkerKeyStore(context)
+    private val torrServerAuthStore = TorrServerAuthStore(context)
+    private val workerClient = WorkerConnections.client
+    private val torrServerClient = TorrServerClient()
     private var manualSearchJob: Job? = null
+    private var tolokaSearchJob: Job? = null
+    private var tolokaTransferJob: Job? = null
+    private var uploadedTopicId: String? = null
+    private var uploadedTorrent: TorrServerTorrent? = null
     private var detailsJob: Job? = null
     private var videoSourceJob: Job? = null
 
@@ -84,6 +132,8 @@ class DetailsViewModel(
     fun loadDetails() {
         detailsJob?.cancel()
         videoSourceJob?.cancel()
+        tolokaSearchJob?.cancel()
+        tolokaTransferJob?.cancel()
         _state.value = DetailsState.Loading
         detailsJob = viewModelScope.launch {
             try {
@@ -228,6 +278,152 @@ class DetailsViewModel(
                 updateReady { it.copy(manualReleaseSearch = ManualReleaseSearchState.Error(e.message ?: "Помилка пошуку на AniTube")) }
             }
         }
+    }
+
+    fun searchToloka(query: String) {
+        if ((_state.value as? DetailsState.Ready)?.tolokaSearch == TolokaSearchState.Loading) return
+        val trimmed = query.trim()
+        if (trimmed.isBlank()) {
+            updateReady { it.copy(tolokaSearch = TolokaSearchState.Error("Введіть назву для пошуку")) }
+            return
+        }
+        val workerUrl = settingsManager.workerUrl()
+        val key = workerKeyStore.read()
+        if (workerUrl.isBlank() || key.isNullOrBlank()) {
+            updateReady { it.copy(tolokaSearch = TolokaSearchState.Error(
+                "Налаштуйте URL і ключ Worker у налаштуваннях застосунку",
+            )) }
+            return
+        }
+        tolokaTransferJob?.cancel()
+        uploadedTopicId = null
+        uploadedTorrent = null
+        updateReady { it.copy(tolokaSearch = TolokaSearchState.Loading,
+            tolokaTransfer = TolokaTransferState.Idle, tolokaPlaybackStatus = null) }
+        tolokaSearchJob = viewModelScope.launch {
+            try {
+                val results = workerClient.search(workerUrl, key, trimmed)
+                updateReady { ready ->
+                    val ukrainian = (ready.videoSource as? VideoSourceState.Success)?.release?.title
+                    ready.copy(tolokaSearch = TolokaSearchState.Results(trimmed,
+                        TolokaHitFilter.filter(ready.details, ukrainian, results.results),
+                        results.results.size))
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: WorkerFailure.RateLimited) {
+                updateReady { it.copy(tolokaSearch = TolokaSearchState.Error(
+                    "Зачекайте ${error.waitSeconds} с перед повторним пошуком",
+                )) }
+            } catch (error: WorkerFailure) {
+                updateReady { it.copy(tolokaSearch = TolokaSearchState.Error(error.message.orEmpty())) }
+            } catch (_: Exception) {
+                updateReady { it.copy(tolokaSearch = TolokaSearchState.Error(
+                    "Не вдалося виконати пошук. Спробуйте ще раз",
+                )) }
+            }
+        }
+    }
+
+    fun selectTolokaHit(topicId: String) {
+        val ready = _state.value as? DetailsState.Ready ?: return
+        if (ready.tolokaTransfer is TolokaTransferState.Loading) return
+        val results = ready.tolokaSearch as? TolokaSearchState.Results ?: return
+        if (results.hits.none { it.id == topicId }) return
+        val serverUrl = settingsManager.torrServerUrl()
+        val cached = uploadedTorrent?.takeIf { uploadedTopicId == topicId }
+        val workerUrl = settingsManager.workerUrl()
+        val key = workerKeyStore.read()
+        updateReady { it.copy(tolokaSearch = results.copy(selectedId = topicId), tolokaPlaybackStatus = null) }
+        if (serverUrl.isBlank() || (cached == null && (workerUrl.isBlank() || key.isNullOrBlank()))) {
+            updateReady { it.copy(tolokaTransfer = TolokaTransferState.Error(
+                "Налаштуйте Worker і TorrServer у налаштуваннях застосунку",
+            )) }
+            return
+        }
+        updateReady { it.copy(tolokaTransfer = TolokaTransferState.Loading(
+            if (cached == null) "Завантаження torrent із Worker" else "Читання файлів TorrServer",
+            if (cached == null) "Роздачу вибрано" else "Торент додано до TorrServer",
+        )) }
+        tolokaTransferJob = viewModelScope.launch {
+            var lastSuccess = if (cached == null) "Роздачу вибрано" else "Торент додано до TorrServer"
+            try {
+                val auth = torrServerAuthStore.read()?.let { TorrServerBasicAuth(it.username, it.password) }
+                val torrent = if (cached != null) cached else {
+                    val torrentBytes = workerClient.torrent(workerUrl, key!!, topicId)
+                    lastSuccess = "Torrent отримано з Worker"
+                    updateReady { it.copy(tolokaTransfer = TolokaTransferState.Loading(
+                        "Передавання torrent у TorrServer", lastSuccess)) }
+                    torrServerClient.upload(serverUrl, torrentBytes, auth).also {
+                        uploadedTopicId = topicId
+                        uploadedTorrent = it
+                    }
+                }
+                lastSuccess = "Торент додано до TorrServer"
+                updateReady { it.copy(tolokaTransfer = TolokaTransferState.Loading(
+                    "Читання списку файлів TorrServer", lastSuccess)) }
+                val withFiles = if (torrent.files.isNotEmpty()) torrent else {
+                    var found: TorrServerTorrent? = null
+                    for (attempt in 1..30) {
+                        delay(1000)
+                        val status = try { torrServerClient.get(serverUrl, torrent.hash, auth) }
+                        catch (error: TorrServerFailure.Http) {
+                            if (error.status == 404) continue else throw error
+                        }
+                        if (status.hash != torrent.hash) throw TorrServerFailure.InvalidResponse()
+                        if (status.files.isNotEmpty()) {
+                            found = status
+                            break
+                        }
+                    }
+                    found ?: throw TorrServerFailure.FilesUnavailable()
+                }
+                uploadedTorrent = withFiles
+                updateReady { it.copy(tolokaTransfer = TolokaTransferState.Files(withFiles)) }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: WorkerFailure.LinkExpired) {
+                updateReady { it.copy(tolokaTransfer = TolokaTransferState.Error(
+                    "Посилання на torrent протухло або відсутнє. Повторіть пошук Toloka.",
+                    lastSuccess = lastSuccess,
+                    repeatSearch = true,
+                )) }
+            } catch (error: WorkerFailure.RateLimited) {
+                updateReady { it.copy(tolokaTransfer = TolokaTransferState.Error(
+                    "Worker обмежив запити. Повторіть через ${error.waitSeconds} с",
+                    lastSuccess = lastSuccess,
+                )) }
+            } catch (error: WorkerFailure) {
+                updateReady { it.copy(tolokaTransfer = TolokaTransferState.Error(error.message.orEmpty(), lastSuccess)) }
+            } catch (error: TorrServerFailure) {
+                updateReady { it.copy(tolokaTransfer = TolokaTransferState.Error(error.message.orEmpty(), lastSuccess,
+                    retryMetadata = uploadedTopicId == topicId)) }
+            } catch (_: Exception) {
+                updateReady { it.copy(tolokaTransfer = TolokaTransferState.Error(
+                    "Помилка TorrServer. Перевірте його доступність і повторіть вручну.",
+                    lastSuccess = lastSuccess,
+                    retryMetadata = uploadedTopicId == topicId,
+                )) }
+            }
+        }
+    }
+
+    fun retryTolokaMetadata() {
+        val results = (_state.value as? DetailsState.Ready)?.tolokaSearch as? TolokaSearchState.Results ?: return
+        val id = results.selectedId ?: return
+        if (uploadedTopicId == id && uploadedTorrent != null) selectTolokaHit(id)
+    }
+
+    fun reportTolokaPlaybackStatus(message: String) {
+        updateReady { it.copy(tolokaPlaybackStatus = message) }
+    }
+
+    fun tolokaPlaybackUrl(fileId: Int): String? {
+        val files = ((_state.value as? DetailsState.Ready)?.tolokaTransfer as? TolokaTransferState.Files)
+            ?: return null
+        val file = files.torrent.videoFiles.firstOrNull { it.id == fileId } ?: return null
+        return try { torrServerClient.playbackUrl(settingsManager.torrServerUrl(), files.torrent, file) }
+        catch (_: Exception) { null }
     }
 
     fun selectRelease(candidate: AnitubeSearchResult) {
