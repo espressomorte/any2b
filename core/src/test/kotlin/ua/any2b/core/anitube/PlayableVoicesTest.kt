@@ -11,7 +11,7 @@ import kotlin.test.assertEquals
 
 class PlayableVoicesTest {
     @Test
-    fun seriesCountDistinctEpisodesAndKeepSeparateVoiceCategories() = runBlocking {
+    fun seriesStayWithinTheirStudioPlayerAndCategory() = runBlocking {
         val playlist = """
             <li data-id="0_0">СУБТИТРИ</li>
             <li data-id="0_0_0">Студія</li>
@@ -21,6 +21,7 @@ class PlayableVoicesTest {
             <li data-id="0_0_0_1">FENIX</li>
             <li data-id="0_0_0_1" data-file="https://fenixplay.xyz/one">1 серія</li>
             <li data-id="0_0_0_1" data-file="https://fenixplay.xyz/two">2 серія</li>
+            <li data-id="0_0_0_1" data-file="https://fenixplay.xyz/three">3 серія</li>
             <li data-id="0_0_0_2">MOON</li>
             <li data-id="0_0_0_2" data-file="https://moonanime.art/three">3 серія</li>
             <li data-id="0_1">ОЗВУЧЕННЯ</li>
@@ -32,11 +33,18 @@ class PlayableVoicesTest {
 
         val voices = playableVoices(raw, "TV")
 
-        assertEquals(2, voices.size)
-        assertEquals(listOf("СУБТИТРИ", "ОЗВУЧЕННЯ"), voices.map { it.category })
+        assertEquals(4, raw.size)
+        assertEquals(listOf("ASHDI", "FENIX", "MOON", "ASHDI"), raw.map { it.playerName })
+        assertEquals(3, voices.size)
+        assertEquals(listOf("СУБТИТРИ", "СУБТИТРИ", "ОЗВУЧЕННЯ"), voices.map { it.category })
+        assertEquals(listOf("Студія · ASHDI (СУБТИТРИ)", "Студія · FENIX (СУБТИТРИ)", "Студія · ASHDI"),
+            voices.map { it.displayName })
         assertEquals(listOf(1, 2), voices[0].episodes.map { it.episodeNumber })
         assertEquals(listOf("https://ashdi.vip/one", "https://ashdi.vip/two"), voices[0].episodes.map { it.fileUrl })
-        assertEquals(listOf(1), voices[1].episodes.map { it.episodeNumber })
+        assertEquals(listOf(1, 2, 3), voices[1].episodes.map { it.episodeNumber })
+        assertEquals("https://fenixplay.xyz/one", voices[1].episodes[0].fileUrl)
+        assertEquals("https://fenixplay.xyz/two", voices[1].episodes[1].fileUrl)
+        assertEquals(listOf(1), voices[2].episodes.map { it.episodeNumber })
     }
 
     @Test

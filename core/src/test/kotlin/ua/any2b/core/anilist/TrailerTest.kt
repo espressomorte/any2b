@@ -18,13 +18,16 @@ class TrailerTest {
           "id":1,"title":{"romaji":"Kimi no Na wa.","english":"Your Name","native":null},
           "coverImage":null,"bannerImage":null,"description":null,"averageScore":null,
           "episodes":1,"duration":106,"format":"MOVIE","status":"FINISHED",
-          "seasonYear":2016,"genres":[],"studios":{"nodes":[]},
+          "seasonYear":2016,"synonyms":["Kimi no Na wa"],"nextAiringEpisode":{"episode":2},
+          "genres":[],"studios":{"nodes":[]},
           "relations":{"edges":[]},"recommendations":{"pageInfo":{"hasNextPage":false},"nodes":[]},
           "trailer":{"id":"xU47nhruN-Q","site":"youtube"}
         }}}"""
         val http = OkHttpClient.Builder().addInterceptor { chain ->
             val payload = Buffer().also { chain.request().body?.writeTo(it) }.readUtf8()
             assertTrue(payload.contains("trailer { id site }"))
+            assertTrue(payload.contains("synonyms"))
+            assertTrue(payload.contains("nextAiringEpisode { episode }"))
             Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
                 .code(200).message("OK").body(response.toResponseBody()).build()
         }.build()
@@ -32,6 +35,8 @@ class TrailerTest {
         val details = AniListClient(http).animeDetails(1)
 
         assertEquals("https://www.youtube.com/watch?v=xU47nhruN-Q", details.trailer?.videoUrl())
+        assertEquals(listOf("Kimi no Na wa"), details.synonyms)
+        assertEquals(2, details.nextEpisode)
     }
 
     @Test
