@@ -222,7 +222,7 @@ class DetailsViewModel(
         VoiceCache.put(animeId, voices)
         updateReady { current ->
             val history = current.historyEntry.takeIf { restoreHistory }
-            val voiceIndex = history?.voiceIndex?.takeIf { it in voices.indices } ?: 0
+            val voiceIndex = history?.voiceIndex?.takeIf { it in voices.indices } ?: defaultVoiceIndex(voices)
             val episodeIndex = history?.let { saved ->
                 voices[voiceIndex].episodes.indexOfFirst { it.episodeNumber == saved.episodeNumber }
                     .takeIf { it >= 0 }

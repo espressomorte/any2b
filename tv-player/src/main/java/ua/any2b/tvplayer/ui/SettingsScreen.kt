@@ -1,6 +1,7 @@
 package ua.any2b.tvplayer.ui
 
 import android.net.Uri
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -42,7 +43,7 @@ fun SettingsScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF0A0B0E))
+            .background(AppColors.BackgroundDark)
             .padding(32.dp)
     ) {
         Column(
@@ -60,7 +61,7 @@ fun SettingsScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color(0xFF15171E), RoundedCornerShape(16.dp))
+                    .background(AppColors.SurfaceDark, RoundedCornerShape(16.dp))
                     .padding(20.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
@@ -68,21 +69,26 @@ fun SettingsScreen(
                     text = "Відтворення",
                     style = MaterialTheme.typography.titleMedium,
                     fontFamily = IbmPlexMono,
-                    color = Color(0xFFD0BCFF)
+                    color = AppColors.AccentLight
                 )
 
-                var isFocused by remember { mutableStateOf(false) }
+                var isFocusedAutoPlay by remember { mutableStateOf(false) }
 
                 Surface(
                     onClick = { onAutoPlayChanged(!autoPlayNext) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .onFocusChanged { isFocused = it.isFocused },
+                    scale = ClickableSurfaceDefaults.scale(scale = 1f, focusedScale = 1f),
+                    border = ClickableSurfaceDefaults.border(
+                        border = Border.None,
+                        focusedBorder = Border(BorderStroke(2.dp, AppColors.NeonCyan))
+                    ),
                     shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp)),
                     colors = ClickableSurfaceDefaults.colors(
-                        containerColor = if (isFocused) Color(0xFF4F378B).copy(alpha = 0.5f) else Color(0xFF20232D),
-                        focusedContainerColor = Color(0xFF4F378B).copy(alpha = 0.8f)
-                    )
+                        containerColor = AppColors.SurfaceCard,
+                        focusedContainerColor = AppColors.SurfaceCard
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onFocusChanged { isFocusedAutoPlay = it.isFocused },
                 ) {
                     Row(
                         modifier = Modifier
@@ -96,7 +102,7 @@ fun SettingsScreen(
                                 text = "По завершенню серії відтворення наступної",
                                 style = MaterialTheme.typography.bodyLarge,
                                 fontFamily = IbmPlexMono,
-                                color = Color.White,
+                                color = if (isFocusedAutoPlay) AppColors.NeonCyan else Color.White,
                                 fontWeight = FontWeight.Medium
                             )
                             Spacer(Modifier.height(4.dp))
@@ -104,14 +110,14 @@ fun SettingsScreen(
                                 text = if (autoPlayNext) "Увімкнено (автоматичний перехід)" else "Вимкнено (закривати плеєр)",
                                 style = MaterialTheme.typography.bodySmall,
                                 fontFamily = IbmPlexMono,
-                                color = Color(0xFF94A3B8)
+                                color = AppColors.TextSecondary
                             )
                         }
                         Box(
                             modifier = Modifier
                                 .size(32.dp)
                                 .clip(RoundedCornerShape(8.dp))
-                                .background(if (autoPlayNext) Color(0xFFD0BCFF) else Color(0xFF333842)),
+                                .background(if (autoPlayNext) AppColors.AccentLight else Color(0xFF333842)),
                             contentAlignment = Alignment.Center
                         ) {
                             if (autoPlayNext) {
@@ -126,25 +132,33 @@ fun SettingsScreen(
                 val selectedPlayerName = availablePlayers.firstOrNull {
                     it.packageName == selectedPlayerPackage
                 }?.label ?: "Вбудований плеєр"
+                var isFocusedPlayer by remember { mutableStateOf(false) }
                 Surface(
                     onClick = { showPlayers = !showPlayers },
-                    modifier = Modifier.fillMaxWidth(),
+                    scale = ClickableSurfaceDefaults.scale(scale = 1f, focusedScale = 1f),
+                    border = ClickableSurfaceDefaults.border(
+                        border = Border.None,
+                        focusedBorder = Border(BorderStroke(2.dp, AppColors.NeonCyan))
+                    ),
                     shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp)),
                     colors = ClickableSurfaceDefaults.colors(
-                        containerColor = Color(0xFF20232D),
-                        focusedContainerColor = Color(0xFF4F378B).copy(alpha = 0.8f)
-                    )
+                        containerColor = AppColors.SurfaceCard,
+                        focusedContainerColor = AppColors.SurfaceCard
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onFocusChanged { isFocusedPlayer = it.isFocused },
                 ) {
                     Column(Modifier.padding(16.dp)) {
-                        Text("Плеєр для відео", color = Color.White, fontFamily = IbmPlexMono)
+                        Text("Плеєр для відео", color = if (isFocusedPlayer) AppColors.NeonCyan else Color.White, fontFamily = IbmPlexMono)
                         Spacer(Modifier.height(4.dp))
-                        Text(selectedPlayerName, color = Color(0xFF94A3B8), fontFamily = IbmPlexMono)
+                        Text(selectedPlayerName, color = AppColors.TextSecondary, fontFamily = IbmPlexMono)
                     }
                 }
                 if (selectedPlayerPackage != null) {
                     Text(
                         "Зовнішній плеєр не передає прогрес перегляду й не запускає наступну серію автоматично",
-                        color = Color(0xFF94A3B8),
+                        color = AppColors.TextSecondary,
                         style = MaterialTheme.typography.bodySmall,
                         fontFamily = IbmPlexMono
                     )
@@ -170,7 +184,7 @@ fun SettingsScreen(
                             )
                         }
                         if (availablePlayers.isEmpty()) {
-                            Text("Інших плеєрів не знайдено", color = Color(0xFF94A3B8))
+                            Text("Інших плеєрів не знайдено", color = AppColors.TextSecondary)
                         }
                     }
                 }
@@ -178,7 +192,7 @@ fun SettingsScreen(
 
             Column(
                 modifier = Modifier.fillMaxWidth()
-                    .background(Color(0xFF15171E), RoundedCornerShape(16.dp))
+                    .background(AppColors.SurfaceDark, RoundedCornerShape(16.dp))
                     .padding(20.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
@@ -186,21 +200,29 @@ fun SettingsScreen(
                     "Історія",
                     style = MaterialTheme.typography.titleMedium,
                     fontFamily = IbmPlexMono,
-                    color = Color(0xFFD0BCFF),
+                    color = AppColors.AccentLight,
                 )
+                var isFocusedHistory by remember { mutableStateOf(false) }
                 Surface(
                     onClick = { showClearHistoryDialog = true },
-                    modifier = Modifier.fillMaxWidth(),
+                    scale = ClickableSurfaceDefaults.scale(scale = 1f, focusedScale = 1f),
+                    border = ClickableSurfaceDefaults.border(
+                        border = Border.None,
+                        focusedBorder = Border(BorderStroke(2.dp, AppColors.NeonCyan))
+                    ),
                     shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp)),
                     colors = ClickableSurfaceDefaults.colors(
-                        containerColor = Color(0xFF20232D),
-                        focusedContainerColor = Color(0xFF4F378B).copy(alpha = 0.8f),
+                        containerColor = AppColors.SurfaceCard,
+                        focusedContainerColor = AppColors.SurfaceCard,
                     ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onFocusChanged { isFocusedHistory = it.isFocused },
                 ) {
                     Text(
                         "Очистити історію",
                         modifier = Modifier.padding(16.dp),
-                        color = Color.White,
+                        color = if (isFocusedHistory) AppColors.NeonCyan else Color.White,
                         fontFamily = IbmPlexMono,
                     )
                 }
@@ -208,7 +230,7 @@ fun SettingsScreen(
 
             Column(
                 modifier = Modifier.fillMaxWidth()
-                    .background(Color(0xFF15171E), RoundedCornerShape(16.dp))
+                    .background(AppColors.SurfaceDark, RoundedCornerShape(16.dp))
                     .padding(20.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
@@ -216,12 +238,12 @@ fun SettingsScreen(
                     "Оновлення",
                     style = MaterialTheme.typography.titleMedium,
                     fontFamily = IbmPlexMono,
-                    color = Color(0xFFD0BCFF),
+                    color = AppColors.AccentLight,
                 )
-                Text("Поточна версія: $currentVersion", color = Color(0xFF94A3B8))
+                Text("Поточна версія: $currentVersion", color = AppColors.TextSecondary)
                 when (updateState) {
                     UpdateState.Idle -> Button(onClick = onCheckUpdates) { Text("Перевірити оновлення") }
-                    UpdateState.Checking -> Text("Перевіряємо GitHub Releases...", color = Color(0xFF94A3B8))
+                    UpdateState.Checking -> Text("Перевіряємо GitHub Releases...", color = AppColors.TextSecondary)
                     UpdateState.UpToDate -> {
                         Text("Встановлено останню версію", color = Color.White)
                         Button(onClick = onCheckUpdates) { Text("Перевірити ще раз") }
@@ -253,7 +275,7 @@ fun SettingsScreen(
                         Button(onClick = { onInstallUpdate(updateState.uri) }) { Text("Встановити") }
                     }
                     is UpdateState.Error -> {
-                        Text(updateState.message, color = Color(0xFFFFB4AB))
+                        Text(updateState.message, color = AppColors.ErrorRed)
                         Button(onClick = onCheckUpdates) { Text("Повторити перевірку") }
                     }
                 }
@@ -263,7 +285,7 @@ fun SettingsScreen(
             Dialog(onDismissRequest = { showClearHistoryDialog = false }) {
                 Column(
                     modifier = Modifier
-                        .background(Color(0xFF20232D), RoundedCornerShape(16.dp))
+                        .background(AppColors.SurfaceCard, RoundedCornerShape(16.dp))
                         .padding(24.dp),
                     verticalArrangement = Arrangement.spacedBy(20.dp),
                 ) {
@@ -275,7 +297,7 @@ fun SettingsScreen(
                     )
                     Text(
                         "Усю історію перегляду буде видалено.",
-                        color = Color(0xFF94A3B8),
+                        color = AppColors.TextSecondary,
                         fontFamily = IbmPlexMono,
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -298,19 +320,27 @@ fun SettingsScreen(
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun PlayerChoice(label: String, selected: Boolean, onClick: () -> Unit) {
+    var isFocused by remember { mutableStateOf(false) }
     Surface(
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
+        scale = ClickableSurfaceDefaults.scale(scale = 1f, focusedScale = 1f),
+        border = ClickableSurfaceDefaults.border(
+            border = Border.None,
+            focusedBorder = Border(BorderStroke(2.dp, AppColors.NeonCyan))
+        ),
         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp)),
         colors = ClickableSurfaceDefaults.colors(
-            containerColor = if (selected) Color(0xFF4F378B) else Color(0xFF20232D),
-            focusedContainerColor = Color(0xFF4F378B).copy(alpha = 0.8f)
-        )
+            containerColor = if (selected) AppColors.PrimaryPurple else AppColors.SurfaceCard,
+            focusedContainerColor = if (selected) AppColors.PrimaryPurple else AppColors.SurfaceCard
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .onFocusChanged { isFocused = it.isFocused },
     ) {
         Text(
             text = label,
             modifier = Modifier.padding(16.dp),
-            color = Color.White,
+            color = if (isFocused) AppColors.NeonCyan else Color.White,
             fontFamily = IbmPlexMono,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
         )

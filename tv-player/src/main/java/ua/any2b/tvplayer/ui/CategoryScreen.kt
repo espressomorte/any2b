@@ -12,6 +12,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Button
 import androidx.tv.material3.MaterialTheme
@@ -40,7 +41,7 @@ fun CategoryScreen(
     }
 
     Column(
-        modifier = Modifier.fillMaxSize().background(Color(0xFF0A0B0E)).padding(32.dp),
+        modifier = Modifier.fillMaxSize().background(AppColors.BackgroundDark).padding(32.dp),
         verticalArrangement = Arrangement.spacedBy(24.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
@@ -49,20 +50,20 @@ fun CategoryScreen(
         }
         if (state.error != null) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(state.error, color = Color(0xFFFFB4AB))
+                Text(state.error, color = AppColors.ErrorRed)
                 Button(onClick = onLoadMore) { Text("Повторити") }
             }
         }
         if (state.items.isEmpty() && !state.loadingMore && state.error == null) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("У цій категорії поки що немає тайтлів", color = Color(0xFF94A3B8))
+                Text("У цій категорії поки що немає тайтлів", color = AppColors.TextSecondary)
             }
         } else {
             LazyVerticalGrid(
                 columns = GridCells.Fixed(5),
                 state = gridState,
-                modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(bottom = 32.dp),
+                modifier = Modifier.weight(1f).graphicsLayer { clip = false },
+                contentPadding = PaddingValues(top = 12.dp, bottom = 32.dp),
                 horizontalArrangement = Arrangement.spacedBy(20.dp),
                 verticalArrangement = Arrangement.spacedBy(28.dp),
             ) {
@@ -76,7 +77,7 @@ fun CategoryScreen(
                     )
                 }
                 if (state.loadingMore) {
-                    item(key = "loading") { Text("Завантаження...", color = Color(0xFF94A3B8)) }
+                    item(key = "loading") { Text("Завантаження...", color = AppColors.TextSecondary) }
                 }
             }
         }

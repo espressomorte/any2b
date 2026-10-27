@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
@@ -31,6 +32,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.zIndex
 import androidx.tv.material3.*
 import androidx.compose.ui.tooling.preview.Preview
 import coil.compose.AsyncImage
@@ -41,7 +43,7 @@ import ua.any2b.core.anitube.AnitubeEpisode
 import ua.any2b.core.anitube.AnitubeSearchResult
 import ua.any2b.core.anitube.AnitubeVoice
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalTvMaterial3Api::class)
 @Composable
 fun DetailsScreen(
     state: DetailsState,
@@ -63,13 +65,13 @@ fun DetailsScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF0A0B0E))
+            .background(AppColors.BackgroundDark)
             .padding(32.dp)
     ) {
         when (state) {
             DetailsState.Loading -> {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("Завантаження деталей тайтла...", style = MaterialTheme.typography.titleMedium, color = Color(0xFFD0BCFF))
+                    Text("Завантаження деталей тайтла...", style = MaterialTheme.typography.titleMedium, color = AppColors.AccentLight)
                 }
             }
             is DetailsState.Error -> {
@@ -78,8 +80,18 @@ fun DetailsScreen(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
+                    var isRetryFocused by remember { mutableStateOf(false) }
                     Text(state.message, color = Color.Red, style = MaterialTheme.typography.titleMedium)
-                    Button(onClick = onRetry) { Text("Повторити") }
+                    Button(
+                        onClick = onRetry,
+                        scale = ButtonDefaults.scale(scale = 1f, focusedScale = 1f),
+                        shape = ButtonDefaults.shape(RoundedCornerShape(12.dp)),
+                        glow = ButtonDefaults.glow(glow = Glow.None, focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 10.dp)),
+                        modifier = Modifier
+                            .zIndex(if (isRetryFocused) 1f else 0f)
+                            .onFocusChanged { isRetryFocused = it.isFocused }
+                            .neonGlow(focused = isRetryFocused, borderRadius = 12.dp)
+                    ) { Text("Повторити") }
                 }
             }
             is DetailsState.Ready -> {
@@ -116,7 +128,7 @@ fun DetailsScreen(
                                     .fillMaxWidth()
                                     .aspectRatio(2f / 3f)
                                     .clip(RoundedCornerShape(16.dp))
-                                    .background(Color(0xFF15171E))
+                                    .background(AppColors.SurfaceDark)
                             ) {
                                 AsyncImage(
                                     model = state.details.cover,
@@ -146,7 +158,7 @@ fun DetailsScreen(
                                             } else {
                                                 "Переглянуто: серія ${state.historyEntry.episodeNumber}"
                                             },
-                                            color = Color(0xFF94A3B8),
+                                            color = AppColors.TextSecondary,
                                             fontSize = 11.sp
                                         )
                                         Box(
@@ -154,13 +166,13 @@ fun DetailsScreen(
                                                 .fillMaxWidth()
                                                 .height(4.dp)
                                                 .clip(RoundedCornerShape(2.dp))
-                                                .background(Color(0xFF20232D))
+                                                .background(AppColors.SurfaceCard)
                                         ) {
                                             Box(
                                                 modifier = Modifier
                                                     .fillMaxWidth(state.historyEntry.progress.coerceIn(0f, 1f))
                                                     .fillMaxHeight()
-                                                    .background(Color(0xFFD0BCFF))
+                                                    .background(AppColors.AccentLight)
                                             )
                                         }
                                     }
@@ -180,14 +192,27 @@ fun DetailsScreen(
                                         isMovie -> "Дивитися фільм"
                                         else -> "Дивитися серію"
                                     }
+                                    var isWatchFocused by remember { mutableStateOf(false) }
                                     Button(
                                         onClick = onWatchClick,
                                         enabled = !state.resolvingStream && selectedEpisode != null,
-                                        colors = ButtonDefaults.colors(
-                                            containerColor = Color(0xFF80F5FF),
-                                            contentColor = Color(0xFF0F172A)
+                                        scale = ButtonDefaults.scale(scale = 1f, focusedScale = 1f),
+                                        shape = ButtonDefaults.shape(RoundedCornerShape(12.dp)),
+                                        glow = ButtonDefaults.glow(
+                                            glow = Glow.None,
+                                            focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 12.dp)
                                         ),
-                                        modifier = Modifier.fillMaxWidth()
+                                        colors = ButtonDefaults.colors(
+                                            containerColor = AppColors.PrimaryPurple,
+                                            contentColor = Color.White,
+                                            focusedContainerColor = AppColors.PrimaryPurple,
+                                            focusedContentColor = Color.White
+                                        ),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .zIndex(if (isWatchFocused) 1f else 0f)
+                                            .onFocusChanged { isWatchFocused = it.isFocused }
+                                            .neonGlow(focused = isWatchFocused, borderRadius = 12.dp)
                                     ) {
                                         Text(buttonText, fontWeight = FontWeight.Bold)
                                     }
@@ -197,24 +222,52 @@ fun DetailsScreen(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
+                                    var isFavFocused by remember { mutableStateOf(false) }
                                     OutlinedButton(
                                         onClick = onToggleFavorite,
-                                        colors = OutlinedButtonDefaults.colors(
-                                            containerColor = Color(0xFF15171E),
-                                            contentColor = Color(0xFFD0BCFF)
+                                        scale = OutlinedButtonDefaults.scale(scale = 1f, focusedScale = 1f),
+                                        shape = OutlinedButtonDefaults.shape(RoundedCornerShape(12.dp)),
+                                        border = OutlinedButtonDefaults.border(border = Border.None, focusedBorder = Border.None),
+                                        glow = OutlinedButtonDefaults.glow(
+                                            glow = Glow.None,
+                                            focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 10.dp)
                                         ),
-                                        modifier = Modifier.weight(1f)
+                                        colors = OutlinedButtonDefaults.colors(
+                                            containerColor = AppColors.SurfaceDark,
+                                            contentColor = AppColors.AccentLight,
+                                            focusedContainerColor = AppColors.SurfaceDark,
+                                            focusedContentColor = AppColors.NeonCyan
+                                        ),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .zIndex(if (isFavFocused) 1f else 0f)
+                                            .onFocusChanged { isFavFocused = it.isFocused }
+                                            .neonGlow(focused = isFavFocused, borderRadius = 12.dp)
                                     ) {
                                         Text(if (state.isFavorite) "В обраному" else "В обране", fontSize = 11.sp)
                                     }
 
+                                    var isTrailerFocused by remember { mutableStateOf(false) }
                                     OutlinedButton(
                                         onClick = onTrailerClick,
-                                        colors = OutlinedButtonDefaults.colors(
-                                            containerColor = Color(0xFF15171E),
-                                            contentColor = Color(0xFFD0BCFF)
+                                        scale = OutlinedButtonDefaults.scale(scale = 1f, focusedScale = 1f),
+                                        shape = OutlinedButtonDefaults.shape(RoundedCornerShape(12.dp)),
+                                        border = OutlinedButtonDefaults.border(border = Border.None, focusedBorder = Border.None),
+                                        glow = OutlinedButtonDefaults.glow(
+                                            glow = Glow.None,
+                                            focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 10.dp)
                                         ),
-                                        modifier = Modifier.weight(1f)
+                                        colors = OutlinedButtonDefaults.colors(
+                                            containerColor = AppColors.SurfaceDark,
+                                            contentColor = AppColors.AccentLight,
+                                            focusedContainerColor = AppColors.SurfaceDark,
+                                            focusedContentColor = AppColors.NeonCyan
+                                        ),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .zIndex(if (isTrailerFocused) 1f else 0f)
+                                            .onFocusChanged { isTrailerFocused = it.isFocused }
+                                            .neonGlow(focused = isTrailerFocused, borderRadius = 12.dp)
                                     ) {
                                         Text(
                                             if (state.details.trailer?.videoUrl() != null) "Трейлер" else "Знайти трейлер",
@@ -240,7 +293,7 @@ fun DetailsScreen(
                                 )
                                 state.details.title.romaji?.let {
                                     if (it != state.details.title.display) {
-                                        Text(it, style = MaterialTheme.typography.titleMedium, color = Color(0xFFCCC2DC))
+                                        Text(it, style = MaterialTheme.typography.titleMedium, color = AppColors.TextLight)
                                     }
                                 }
                             }
@@ -252,13 +305,13 @@ fun DetailsScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 state.details.format?.let { format ->
-                                    MetadataBadge(format, Color(0xFF20232D), Color(0xFFD0BCFF))
+                                    MetadataBadge(format, AppColors.SurfaceCard, AppColors.AccentLight)
                                 }
                                 state.details.status?.let { status ->
-                                    MetadataBadge(status, Color(0xFF20232D), Color(0xFFA855F7))
+                                    MetadataBadge(status, AppColors.SurfaceCard, AppColors.PrimaryPurple)
                                 }
                                 state.details.seasonYear?.let { year ->
-                                    MetadataBadge("$year", Color(0xFF20232D), Color.LightGray)
+                                    MetadataBadge("$year", AppColors.SurfaceCard, Color.LightGray)
                                 }
                             }
 
@@ -273,10 +326,10 @@ fun DetailsScreen(
                                         Box(
                                             modifier = Modifier
                                                 .clip(RoundedCornerShape(8.dp))
-                                                .background(Color(0xFF15171E))
+                                                .background(AppColors.SurfaceDark)
                                                 .padding(horizontal = 10.dp, vertical = 6.dp)
                                         ) {
-                                            Text(genre, color = Color(0xFFCCC2DC), fontSize = 12.sp)
+                                            Text(genre, color = AppColors.TextLight, fontSize = 12.sp)
                                         }
                                     }
                                 }
@@ -297,14 +350,14 @@ fun DetailsScreen(
                                 Text(
                                     text = cleanDesc,
                                     style = MaterialTheme.typography.bodyMedium,
-                                    color = Color(0xFFB0B3C1),
+                                    color = AppColors.TextMuted,
                                     maxLines = if (isDescriptionExpanded) Int.MAX_VALUE else 2,
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 if (hasDescription) {
                                     Text(
                                         text = if (isDescriptionExpanded) "Згорнути опис" else "Читати повністю",
-                                        color = Color(0xFFD0BCFF),
+                                        color = AppColors.AccentLight,
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Medium
                                     )
@@ -314,22 +367,20 @@ fun DetailsScreen(
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(top = 8.dp)
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(Color(0xFF15171E))
-                                    .padding(16.dp),
-                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                                    .background(AppColors.SurfaceDark, RoundedCornerShape(14.dp))
+                                    .padding(vertical = 12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 val releaseTitle = (state.videoSource as? VideoSourceState.Success)
-                                    ?.release?.title ?: "Реліз ще не вибрано"
+                                    ?.release?.title ?: "Не вибрано"
 
                                 Column(
-                                    modifier = Modifier.fillMaxWidth(),
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                                     verticalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
                                     Text(
-                                        text = "AniTube · українська назва",
-                                        color = Color(0xFF94A3B8),
+                                        text = "AniTube",
+                                        color = AppColors.TextSecondary,
                                         fontSize = 11.sp
                                     )
                                     Row(
@@ -344,26 +395,12 @@ fun DetailsScreen(
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
                                         )
-                                        IconButton(
-                                            onClick = {
-                                                onResetManualSearch()
-                                                showManualDialog = true
-                                            },
-                                            modifier = Modifier
-                                                .size(32.dp)
-                                                .semantics { contentDescription = "Змінити реліз" }
-                                        ) {
-                                            FontAwesomeIcon(
-                                                icon = FaIcons.PENCIL,
-                                                color = Color.White,
-                                                size = MaterialTheme.typography.titleMedium.fontSize
-                                            )
-                                        }
                                     }
                                 }
 
                                 when (val source = state.videoSource) {
                                     VideoSourceState.Loading -> Row(
+                                        modifier = Modifier.padding(horizontal = 16.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                                     ) {
@@ -372,13 +409,14 @@ fun DetailsScreen(
                                                 Box(
                                                     modifier = Modifier.width(width).height(7.dp)
                                                         .clip(RoundedCornerShape(4.dp))
-                                                        .background(Color(0xFF45405A))
+                                                        .background(AppColors.SkeletonBg)
                                                 )
                                             }
                                         }
-                                        Text("Шукаємо озвучки на AniTube...", color = Color(0xFFCCC2DC), fontSize = 13.sp)
+                                        Text("Шукаємо озвучки на AniTube...", color = AppColors.TextLight, fontSize = 13.sp)
                                     }
                                     is VideoSourceState.Ambiguous -> VideoSourceNotice(
+                                        modifier = Modifier.padding(horizontal = 16.dp),
                                         message = if (source.candidates.size == 1) {
                                             "Перевірте знайдений реліз перед відтворенням"
                                         } else {
@@ -388,6 +426,7 @@ fun DetailsScreen(
                                         onClick = { showReleaseDialog = true }
                                     )
                                     is VideoSourceState.Error -> VideoSourceNotice(
+                                        modifier = Modifier.padding(horizontal = 16.dp),
                                         message = "Не вдалося завантажити відео з AniTube",
                                         detail = source.message,
                                         action = if (source.candidates.isNotEmpty()) "Вибрати вручну" else "Повторити спробу",
@@ -396,30 +435,92 @@ fun DetailsScreen(
                                         } else onRetryVideoSource
                                     )
                                     is VideoSourceState.Success -> {
+                                        val groups = remember(source.voices) { voiceCategoryGroups(source.voices) }
+                                        val selectedGroup = groups.firstOrNull { group ->
+                                            group.variants.any { it.index == state.selectedVoiceIndex }
+                                        }
+                                        val rememberedVariants = remember(state.details.id, source.release.newsId, source.voices) {
+                                            mutableStateMapOf<String, Int>().apply {
+                                                if (selectedGroup != null) put(selectedGroup.key, state.selectedVoiceIndex)
+                                            }
+                                        }
+                                        var menuGroup by remember(state.details.id, source.release.newsId, source.voices) {
+                                            mutableStateOf<VoiceCategoryGroup?>(null)
+                                        }
                                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                            Text("Озвучення / Студії:", color = Color(0xFFCCC2DC), fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                                            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                                itemsIndexed(source.voices) { index, voice ->
-                                                    val isSelected = index == state.selectedVoiceIndex
-                                                    val bg = if (isSelected) Color(0xFFA855F7) else Color(0xFF20232D)
-                                                    val textColor = if (isSelected) Color.White else Color(0xFF94A3B8)
+                                            LazyRow(
+                                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                itemsIndexed(groups) { _, group ->
+                                                    var isStudioFocused by remember { mutableStateOf(false) }
+                                                    val isSelected = group.key == selectedGroup?.key
+                                                    val displayedIndex = if (isSelected) state.selectedVoiceIndex
+                                                        else rememberedVariants[group.key] ?: group.preferredIndex
+                                                    val displayedVoice = group.variants.firstOrNull { it.index == displayedIndex }
+                                                        ?.value ?: group.variants.first().value
+                                                    val bg = if (isSelected) AppColors.PrimaryPurple else AppColors.SurfaceCard
+                                                    val textColor = if (isSelected) Color.White else AppColors.TextSecondary
 
-                                                    Box(
+                                                    Card(
+                                                        onClick = {
+                                                            if (isSelected && group.variants.size > 1) {
+                                                                menuGroup = group
+                                                            } else {
+                                                                val index = rememberedVariants[group.key] ?: group.preferredIndex
+                                                                rememberedVariants[group.key] = index
+                                                                onSelectVoice(index)
+                                                            }
+                                                        },
+                                                        onLongClick = { if (group.variants.size > 1) menuGroup = group },
+                                                        scale = CardDefaults.scale(scale = 1f, focusedScale = 1f),
+                                                        shape = CardDefaults.shape(RoundedCornerShape(12.dp)),
+                                                        border = CardDefaults.border(border = Border.None, focusedBorder = Border.None),
+                                                        glow = CardDefaults.glow(
+                                                            glow = Glow.None,
+                                                            focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 10.dp)
+                                                        ),
+                                                        colors = CardDefaults.colors(
+                                                            containerColor = bg,
+                                                            focusedContainerColor = bg
+                                                        ),
                                                         modifier = Modifier
-                                                            .clip(RoundedCornerShape(16.dp))
-                                                            .background(bg)
-                                                            .clickable { onSelectVoice(index) }
-                                                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                                                            .zIndex(if (isStudioFocused) 1f else 0f)
+                                                            .onFocusChanged { isStudioFocused = it.isFocused }
                                                     ) {
-                                                        Text(
-                                                            text = voice.displayName,
-                                                            color = textColor,
-                                                            fontSize = 11.sp,
-                                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                                                        )
+                                                        Row(
+                                                            modifier = Modifier
+                                                                .heightIn(min = 36.dp)
+                                                                .padding(horizontal = 12.dp),
+                                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                            verticalAlignment = Alignment.CenterVertically,
+                                                        ) {
+                                                            Text(
+                                                                text = voiceButtonLabel(group, displayedVoice),
+                                                                color = textColor,
+                                                                fontSize = 12.sp,
+                                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                                            )
+                                                            if (group.variants.size > 1) {
+                                                                FontAwesomeIcon(FaIcons.ANGLE_DOWN, color = textColor, size = 12.sp)
+                                                            }
+                                                        }
                                                     }
                                                 }
                                             }
+                                        }
+                                        menuGroup?.let { group ->
+                                            StudioVoiceDialog(
+                                                group = group,
+                                                selectedVoiceIndex = state.selectedVoiceIndex,
+                                                onDismiss = { menuGroup = null },
+                                                onSelect = { index ->
+                                                    rememberedVariants[group.key] = index
+                                                    onSelectVoice(index)
+                                                    menuGroup = null
+                                                },
+                                            )
                                         }
                                     }
                                 }
@@ -430,40 +531,64 @@ fun DetailsScreen(
                                 } else null
                                 val watchedEpNumber = state.historyEntry?.episodeNumber ?: -1
                                 if (!isMovie && currentVoice != null && currentVoice.episodes.isNotEmpty()) {
-                                    Spacer(Modifier.height(4.dp))
-                                    Text("Серії:", color = Color(0xFFCCC2DC), fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                    Text(
+                                        "Серії:",
+                                        modifier = Modifier.padding(horizontal = 16.dp),
+                                        color = AppColors.TextLight,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Medium,
+                                    )
                                     LazyRow(
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        modifier = Modifier.fillMaxWidth()
                                     ) {
                                         itemsIndexed(currentVoice.episodes) { epIndex, episode ->
+                                            var isEpFocused by remember { mutableStateOf(false) }
                                             val isEpSelected = epIndex == state.selectedEpisodeIndex
                                             val isWatched = episode.episodeNumber < watchedEpNumber ||
                                                     (state.historyEntry != null && episode.episodeNumber == watchedEpNumber && state.historyEntry.progress >= 0.99f)
-                                            val bg = if (isEpSelected) Color(0xFFA855F7) else Color(0xFF1E222D)
+                                            val bg = if (isEpSelected) AppColors.PrimaryPurple else AppColors.SurfaceCardHover
                                             val textColor = when {
                                                 isEpSelected -> Color.White
-                                                isWatched -> Color(0xFF475569)
-                                                else -> Color(0xFF94A3B8)
+                                                isWatched -> AppColors.TextWatched
+                                                else -> AppColors.TextSecondary
                                             }
                                             val epText = episode.title.takeIf { it.isNotBlank() && !it.contains("серія", true) }
                                                 ?: "Серія ${episode.episodeNumber}"
 
-                                            Box(
+                                            Surface(
+                                                onClick = { onSelectEpisode(epIndex) },
+                                                scale = ClickableSurfaceDefaults.scale(scale = 1f, focusedScale = 1f),
+                                                shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(10.dp)),
+                                                border = ClickableSurfaceDefaults.border(border = Border.None, focusedBorder = Border.None),
+                                                glow = ClickableSurfaceDefaults.glow(
+                                                    glow = Glow.None,
+                                                    focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 8.dp)
+                                                ),
+                                                colors = ClickableSurfaceDefaults.colors(
+                                                    containerColor = bg,
+                                                    focusedContainerColor = bg
+                                                ),
                                                 modifier = Modifier
-                                                    .height(34.dp)
-                                                    .clip(RoundedCornerShape(10.dp))
-                                                    .background(bg)
-                                                    .clickable { onSelectEpisode(epIndex) }
-                                                    .padding(horizontal = 10.dp),
-                                                contentAlignment = Alignment.Center
+                                                    .height(36.dp)
+                                                    .zIndex(if (isEpFocused) 1f else 0f)
+                                                    .onFocusChanged { isEpFocused = it.isFocused }
                                             ) {
-                                                Text(
-                                                    text = epText,
-                                                    color = textColor,
-                                                    fontSize = 11.sp,
-                                                    fontWeight = if (isEpSelected) FontWeight.Bold else FontWeight.Normal,
-                                                    maxLines = 1
-                                                )
+                                                Box(
+                                                    modifier = Modifier
+                                                        .fillMaxHeight()
+                                                        .padding(horizontal = 10.dp),
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    Text(
+                                                        text = epText,
+                                                        color = textColor,
+                                                        fontSize = 12.sp,
+                                                        fontWeight = if (isEpSelected) FontWeight.Bold else FontWeight.Normal,
+                                                        maxLines = 1
+                                                    )
+                                                }
                                             }
                                         }
                                     }
@@ -531,7 +656,7 @@ private fun DetailsTitleRow(
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text(title, style = MaterialTheme.typography.titleLarge)
         LazyRow(
-            contentPadding = PaddingValues(vertical = 12.dp, horizontal = 4.dp),
+            contentPadding = PaddingValues(vertical = 12.dp, horizontal = 0.dp),
             horizontalArrangement = Arrangement.spacedBy(20.dp),
             modifier = Modifier.graphicsLayer { clip = false }
         ) {
@@ -568,22 +693,22 @@ private fun ManualReleaseSearchDialog(
                 .width(620.dp)
                 .heightIn(max = 600.dp)
                 .clip(RoundedCornerShape(18.dp))
-                .background(Color(0xFF15171E))
+                .background(AppColors.SurfaceDark)
                 .padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             Text("Змінити реліз AniTube", color = Color.White, style = MaterialTheme.typography.titleLarge)
-            Text("Введіть українську назву. Пошук виконується на AniTube.", color = Color(0xFF94A3B8), fontSize = 13.sp)
+            Text("Введіть українську назву. Пошук виконується на AniTube.", color = AppColors.TextSecondary, fontSize = 13.sp)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(52.dp)
                     .clip(RoundedCornerShape(10.dp))
-                    .background(Color(0xFF20232D))
+                    .background(AppColors.SurfaceCard)
                     .padding(horizontal = 14.dp),
                 contentAlignment = Alignment.CenterStart
             ) {
-                if (query.isBlank()) Text("Назва українською", color = Color(0xFF94A3B8))
+                if (query.isBlank()) Text("Назва українською", color = AppColors.TextSecondary)
                 BasicTextField(
                     value = query,
                     onValueChange = { query = it },
@@ -597,21 +722,43 @@ private fun ManualReleaseSearchDialog(
                     modifier = Modifier.fillMaxWidth().focusRequester(focusRequester)
                 )
             }
-            Button(onClick = { onSearch(query) }, enabled = query.isNotBlank()) { Text("Шукати на AniTube") }
+            var isSearchBtnFocused by remember { mutableStateOf(false) }
+            Button(
+                onClick = { onSearch(query) },
+                enabled = query.isNotBlank(),
+                scale = ButtonDefaults.scale(scale = 1f, focusedScale = 1f),
+                shape = ButtonDefaults.shape(RoundedCornerShape(12.dp)),
+                glow = ButtonDefaults.glow(glow = Glow.None, focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 10.dp)),
+                modifier = Modifier
+                    .zIndex(if (isSearchBtnFocused) 1f else 0f)
+                    .onFocusChanged { isSearchBtnFocused = it.isFocused }
+                    .neonGlow(focused = isSearchBtnFocused, borderRadius = 12.dp)
+            ) { Text("Шукати на AniTube") }
             Column(
                 modifier = Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 when (searchState) {
                     ManualReleaseSearchState.Idle -> Unit
-                    ManualReleaseSearchState.Loading -> Text("Шукаємо релізи...", color = Color(0xFFCCC2DC))
-                    is ManualReleaseSearchState.Error -> Text(searchState.message, color = Color(0xFFFFB4AB))
+                    ManualReleaseSearchState.Loading -> Text("Шукаємо релізи...", color = AppColors.TextLight)
+                    is ManualReleaseSearchState.Error -> Text(searchState.message, color = AppColors.ErrorRed)
                     is ManualReleaseSearchState.Results -> {
                         if (searchState.candidates.isEmpty()) {
-                            Text("На AniTube нічого не знайдено", color = Color(0xFFCCC2DC))
+                            Text("На AniTube нічого не знайдено", color = AppColors.TextLight)
                         } else {
                             searchState.candidates.forEach { candidate ->
-                                Button(onClick = { onSelect(candidate) }, modifier = Modifier.fillMaxWidth()) {
+                                var isCandFocused by remember { mutableStateOf(false) }
+                                Button(
+                                    onClick = { onSelect(candidate) },
+                                    scale = ButtonDefaults.scale(scale = 1f, focusedScale = 1f),
+                                    shape = ButtonDefaults.shape(RoundedCornerShape(12.dp)),
+                                    glow = ButtonDefaults.glow(glow = Glow.None, focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 10.dp)),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .zIndex(if (isCandFocused) 1f else 0f)
+                                        .onFocusChanged { isCandFocused = it.isFocused }
+                                        .neonGlow(focused = isCandFocused, borderRadius = 12.dp)
+                                ) {
                                     Text(candidate.title, maxLines = 2)
                                 }
                             }
@@ -619,29 +766,50 @@ private fun ManualReleaseSearchDialog(
                     }
                 }
             }
-            OutlinedButton(onClick = onDismiss) { Text("Скасувати") }
+            var isDismissFocused by remember { mutableStateOf(false) }
+            OutlinedButton(
+                onClick = onDismiss,
+                scale = OutlinedButtonDefaults.scale(scale = 1f, focusedScale = 1f),
+                shape = OutlinedButtonDefaults.shape(RoundedCornerShape(12.dp)),
+                glow = OutlinedButtonDefaults.glow(glow = Glow.None, focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 10.dp)),
+                modifier = Modifier
+                    .zIndex(if (isDismissFocused) 1f else 0f)
+                    .onFocusChanged { isDismissFocused = it.isFocused }
+                    .neonGlow(focused = isDismissFocused, borderRadius = 12.dp)
+            ) { Text("Скасувати") }
         }
     }
 }
 
 @Composable
 private fun VideoSourceNotice(
+    modifier: Modifier = Modifier,
     message: String,
     action: String,
     onClick: () -> Unit,
     detail: String? = null,
 ) {
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(Color(0xFF20232D))
+            .background(AppColors.SurfaceCard)
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Text(message, color = Color.White, style = MaterialTheme.typography.titleSmall)
-        if (!detail.isNullOrBlank()) Text(detail, color = Color(0xFFB0B3C1), fontSize = 12.sp)
-        Button(onClick = onClick) { Text(action) }
+        if (!detail.isNullOrBlank()) Text(detail, color = AppColors.TextMuted, fontSize = 12.sp)
+        var isNoticeFocused by remember { mutableStateOf(false) }
+        Button(
+            onClick = onClick,
+            scale = ButtonDefaults.scale(scale = 1f, focusedScale = 1f),
+            shape = ButtonDefaults.shape(RoundedCornerShape(12.dp)),
+            glow = ButtonDefaults.glow(glow = Glow.None, focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 10.dp)),
+            modifier = Modifier
+                .zIndex(if (isNoticeFocused) 1f else 0f)
+                .onFocusChanged { isNoticeFocused = it.isFocused }
+                .neonGlow(focused = isNoticeFocused, borderRadius = 12.dp)
+        ) { Text(action) }
     }
 }
 
@@ -657,7 +825,7 @@ private fun ReleaseSelectionDialog(
                 .width(620.dp)
                 .heightIn(max = 600.dp)
                 .clip(RoundedCornerShape(18.dp))
-                .background(Color(0xFF15171E))
+                .background(AppColors.SurfaceDark)
                 .padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -667,12 +835,92 @@ private fun ReleaseSelectionDialog(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 candidates.forEach { candidate ->
-                    Button(onClick = { onSelect(candidate) }, modifier = Modifier.fillMaxWidth()) {
+                    var isCandFocused by remember { mutableStateOf(false) }
+                    Button(
+                        onClick = { onSelect(candidate) },
+                        scale = ButtonDefaults.scale(scale = 1f, focusedScale = 1f),
+                        shape = ButtonDefaults.shape(RoundedCornerShape(12.dp)),
+                        glow = ButtonDefaults.glow(glow = Glow.None, focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 10.dp)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .zIndex(if (isCandFocused) 1f else 0f)
+                            .onFocusChanged { isCandFocused = it.isFocused }
+                            .neonGlow(focused = isCandFocused, borderRadius = 12.dp)
+                    ) {
                         Text(candidate.title, maxLines = 2)
                     }
                 }
             }
-            OutlinedButton(onClick = onDismiss) { Text("Скасувати") }
+            var isDismissFocused by remember { mutableStateOf(false) }
+            OutlinedButton(
+                onClick = onDismiss,
+                scale = OutlinedButtonDefaults.scale(scale = 1f, focusedScale = 1f),
+                shape = OutlinedButtonDefaults.shape(RoundedCornerShape(12.dp)),
+                glow = OutlinedButtonDefaults.glow(glow = Glow.None, focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 10.dp)),
+                modifier = Modifier
+                    .zIndex(if (isDismissFocused) 1f else 0f)
+                    .onFocusChanged { isDismissFocused = it.isFocused }
+                    .neonGlow(focused = isDismissFocused, borderRadius = 12.dp)
+            ) { Text("Скасувати") }
+        }
+    }
+}
+
+@Composable
+private fun StudioVoiceDialog(
+    group: VoiceCategoryGroup,
+    selectedVoiceIndex: Int,
+    onDismiss: () -> Unit,
+    onSelect: (Int) -> Unit,
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .width(520.dp)
+                .heightIn(max = 600.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .background(AppColors.SurfaceDark)
+                .padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Text(group.name, color = Color.White, style = MaterialTheme.typography.titleLarge)
+            Column(
+                modifier = Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                group.variants.forEachIndexed { position, (index, voice) ->
+                    val player = voice.playerName.ifBlank { "Плеєр ${position + 1}" }
+                    val studio = voice.name.ifBlank { "Невідома студія" }
+                    var isVoiceFocused by remember { mutableStateOf(false) }
+                    Button(
+                        onClick = { onSelect(index) },
+                        scale = ButtonDefaults.scale(scale = 1f, focusedScale = 1f),
+                        shape = ButtonDefaults.shape(RoundedCornerShape(12.dp)),
+                        glow = ButtonDefaults.glow(glow = Glow.None, focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 10.dp)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .zIndex(if (isVoiceFocused) 1f else 0f)
+                            .onFocusChanged { isVoiceFocused = it.isFocused }
+                            .neonGlow(focused = isVoiceFocused, borderRadius = 12.dp)
+                    ) {
+                        Text(
+                            text = "$studio · $player" + if (index == selectedVoiceIndex) " · обрано" else "",
+                            maxLines = 1,
+                        )
+                    }
+                }
+            }
+            var isDismissFocused by remember { mutableStateOf(false) }
+            OutlinedButton(
+                onClick = onDismiss,
+                scale = OutlinedButtonDefaults.scale(scale = 1f, focusedScale = 1f),
+                shape = OutlinedButtonDefaults.shape(RoundedCornerShape(12.dp)),
+                glow = OutlinedButtonDefaults.glow(glow = Glow.None, focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 10.dp)),
+                modifier = Modifier
+                    .zIndex(if (isDismissFocused) 1f else 0f)
+                    .onFocusChanged { isDismissFocused = it.isFocused }
+                    .neonGlow(focused = isDismissFocused, borderRadius = 12.dp)
+            ) { Text("Скасувати") }
         }
     }
 }
