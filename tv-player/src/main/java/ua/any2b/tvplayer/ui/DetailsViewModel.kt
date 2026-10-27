@@ -118,47 +118,46 @@ class DetailsViewModel(
 
     private suspend fun searchVideoSource(details: AnimeDetails) {
         try {
-            val query = details.title.romaji ?: details.title.english
+            val query = details.title.romaji ?: details.title.english ?: details.title.native
             if (query.isNullOrBlank()) {
                 updateReady { it.copy(videoSource = VideoSourceState.Error("Немає назви для пошуку на AniTube")) }
                 return
             }
             val results = anitubeClient.search(query)
-            val matched = TitleMatcher.match(details.title, results)
-            val best = matched.firstOrNull()
-            // AniTube often returns Ukrainian titles, so several search hits can have no
-            // text match against AniList's romaji/English names at all.
-            val needsYearSearch = results.size > 1 && (
-                best == null || best.score < 0.65 ||
-                    (matched.size > 1 && best.score - matched[1].score <= 0.1)
-                )
-            when {
-                results.size == 1 -> loadVoices(results.single())
-                needsYearSearch -> {
-                    val refinedResults = details.seasonYear?.let { year ->
-                        try {
-                            anitubeClient.search("$query $year")
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (_: Exception) {
-                            emptyList()
-                        }
-                    }.orEmpty()
+            val initialMatches = TitleMatcher.match(details, results)
+            val initialChoice = TitleMatcher.confidentBest(initialMatches)
+            if (initialChoice != null) {
+                loadVoices(initialChoice)
+                return
+            }
 
-                    if (refinedResults.size == 1) {
-                        loadVoices(refinedResults.single())
-                    } else {
-                        val candidates = (results + refinedResults).distinctBy { it.newsId }
-                        updateReady { it.copy(videoSource = VideoSourceState.Ambiguous(candidates)) }
-                    }
+            // A year-qualified search can reveal better candidates when the first page
+            // has only weak title matches or missing metadata.
+            val refinedResults = details.seasonYear?.let { year ->
+                try {
+                    anitubeClient.search("$query $year")
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    emptyList()
                 }
-                best == null -> updateReady {
-                    it.copy(videoSource = VideoSourceState.Error("Відповідний реліз не знайдено", results))
+            }.orEmpty()
+            val candidates = (results + refinedResults).groupBy { it.newsId }.values.map { hits ->
+                hits.maxByOrNull { hit ->
+                    listOf(hit.year, hit.airedEpisodes, hit.totalEpisodes, hit.durationMinutes)
+                        .count { it != null }
+                }!!
+            }
+            val matches = TitleMatcher.match(details, candidates)
+            val choice = TitleMatcher.confidentBest(matches)
+            when {
+                choice != null -> loadVoices(choice)
+                matches.isNotEmpty() -> updateReady {
+                    it.copy(videoSource = VideoSourceState.Ambiguous(matches.map { match -> match.result }))
                 }
-                best.score < 0.65 -> updateReady {
-                    it.copy(videoSource = VideoSourceState.Ambiguous(results))
+                else -> updateReady {
+                    it.copy(videoSource = VideoSourceState.Error("Відповідний реліз не знайдено"))
                 }
-                else -> loadVoices(best.result)
             }
         } catch (e: CancellationException) {
             throw e

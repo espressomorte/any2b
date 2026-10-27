@@ -379,7 +379,11 @@ fun DetailsScreen(
                                         Text("Шукаємо озвучки на AniTube...", color = Color(0xFFCCC2DC), fontSize = 13.sp)
                                     }
                                     is VideoSourceState.Ambiguous -> VideoSourceNotice(
-                                        message = "Знайдено кілька схожих релізів, виберіть потрібний",
+                                        message = if (source.candidates.size == 1) {
+                                            "Перевірте знайдений реліз перед відтворенням"
+                                        } else {
+                                            "Знайдено кілька схожих релізів, виберіть потрібний"
+                                        },
                                         action = "Вибрати реліз",
                                         onClick = { showReleaseDialog = true }
                                     )

@@ -196,8 +196,8 @@ class PlayerActivity : FragmentActivity() {
             val details = aniListClient.animeDetails(animeId)
             val query = details.title.romaji ?: details.title.english ?: ""
             val searchResults = anitubeClient.search(query)
-            val matched = TitleMatcher.match(details.title, searchResults)
-            val best = matched.firstOrNull()?.result ?: searchResults.firstOrNull() ?: return null
+            val best = TitleMatcher.confidentBest(TitleMatcher.match(details, searchResults))
+                ?: return null
             val voices = playableVoices(anitubeClient.getVoices(best.pageUrl), details.format)
             VoiceCache.put(animeId, voices)
             return voices

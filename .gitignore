@@ -20,6 +20,9 @@ tv-player/release/
 # Local configuration file (sdk path, etc.)
 local.properties
 
+# Local requirements working document
+/req.md
+
 # Log files
 *.log
 
