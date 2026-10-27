@@ -16,6 +16,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -153,8 +154,9 @@ fun SearchScreen(
                                 color = Color.White
                             )
                             LazyRow(
-                                contentPadding = PaddingValues(vertical = 8.dp),
+                                contentPadding = PaddingValues(vertical = 12.dp, horizontal = 4.dp),
                                 horizontalArrangement = Arrangement.spacedBy(20.dp),
+                                modifier = Modifier.graphicsLayer { clip = false }
                             ) {
                                 items(searchResults, key = { it.id }) { card ->
                                     PosterCard(
