@@ -900,7 +900,7 @@ private fun RelatedDialog(
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun TolokaSearchPanel(
+internal fun TolokaSearchPanel(
     query: String,
     searchState: TolokaSearchState,
     transferState: TolokaTransferState,
@@ -911,13 +911,14 @@ private fun TolokaSearchPanel(
     onSelect: (String) -> Unit,
     onRetryMetadata: () -> Unit,
     onPlayFile: (Int) -> Unit,
+    manualSearch: Boolean = false,
 ) {
     Column(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         when (searchState) {
-            TolokaSearchState.Idle -> Text("Пошук роздач почнеться автоматично.",
+            TolokaSearchState.Idle -> Text(if (manualSearch) "Введіть назву й натисніть «Шукати»." else "Пошук роздач почнеться автоматично.",
                 color = AppColors.TextSecondary)
             TolokaSearchState.Loading -> Text("Шукаємо роздачі…", color = AppColors.TextLight)
             is TolokaSearchState.Error -> {
@@ -929,10 +930,10 @@ private fun TolokaSearchPanel(
                     Text("Пошук за новим запитом…",
                         color = AppColors.TextSecondary)
                 } else if (searchState.hits.isEmpty()) {
-                    Text("Підхожих роздач немає. Знайдено: ${searchState.totalFound}; відсіяно за назвою, роком або сезоном.",
+                    Text(if (manualSearch) "Роздач за цим запитом не знайдено." else "Підхожих роздач немає. Знайдено: ${searchState.totalFound}; відсіяно за назвою, роком або сезоном.",
                         color = AppColors.TextLight)
                 } else {
-                    Text("Підхожих роздач: ${searchState.hits.size} із ${searchState.totalFound}",
+                    Text(if (manualSearch) "Знайдено роздач: ${searchState.hits.size}" else "Підхожих роздач: ${searchState.hits.size} із ${searchState.totalFound}",
                         color = AppColors.TextSecondary, fontSize = 12.sp)
                     searchState.hits.forEach { hit ->
                         TolokaResultRow(

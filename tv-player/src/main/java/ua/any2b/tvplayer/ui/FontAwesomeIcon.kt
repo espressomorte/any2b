@@ -16,6 +16,7 @@ object FaIcons {
     const val PENCIL = "\uf303"
     const val COG = "\uf013"
     const val SEARCH = "\uf002"
+    const val SEARCH_PLUS = "\uf00e"
     const val LINK = "\uf0c1"
     const val BOOKMARK = "\uf02e"
     const val FILM = "\uf008"
