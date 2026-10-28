@@ -174,6 +174,10 @@ fun HomeScreen(
                         context.startActivity(intent)
                     }
                     Spacer(Modifier.width(12.dp))
+                    HomeActionButton(FaIcons.SEARCH_PLUS, "Пошук довільного тайтлу на Toloka") {
+                        context.startActivity(Intent(context, ua.any2b.tvplayer.TolokaSearchActivity::class.java))
+                    }
+                    Spacer(Modifier.width(12.dp))
                     HomeActionButton(FaIcons.COG, "Налаштування") {
                         val intent = Intent(context, ua.any2b.tvplayer.SettingsActivity::class.java)
                         context.startActivity(intent)

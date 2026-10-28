@@ -75,6 +75,11 @@
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
             android:exported="false" />
 
+        <activity
+            android:name=".TolokaSearchActivity"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
+            android:exported="false" />
+
         <!-- Плеєр: запускається з каталогу / деталей -->
         <activity
             android:name=".PlayerActivity"
