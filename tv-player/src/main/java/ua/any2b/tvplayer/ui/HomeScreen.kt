@@ -174,7 +174,7 @@ fun HomeScreen(
                         context.startActivity(intent)
                     }
                     Spacer(Modifier.width(12.dp))
-                    HomeActionButton(FaIcons.SEARCH_PLUS, "Пошук довільного тайтлу на Toloka") {
+                    HomeActionButton(FaIcons.SEARCH_PLUS, "Пошук тайтла для торента через TMDB") {
                         context.startActivity(Intent(context, ua.any2b.tvplayer.TolokaSearchActivity::class.java))
                     }
                     Spacer(Modifier.width(12.dp))
