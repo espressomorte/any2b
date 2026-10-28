@@ -18,6 +18,8 @@ object FaIcons {
     const val SEARCH = "\uf002"
     const val LINK = "\uf0c1"
     const val BOOKMARK = "\uf02e"
+    const val FILM = "\uf008"
+    const val EYE = "\uf06e"
     const val ANGLE_DOWN = "\uf107"
     const val ARROW_UP = "\uf062"
     const val ARROW_DOWN = "\uf063"

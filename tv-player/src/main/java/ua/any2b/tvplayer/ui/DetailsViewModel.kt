@@ -39,6 +39,7 @@ import ua.any2b.tvplayer.data.SettingsManager
 import ua.any2b.tvplayer.data.WorkerConnections
 import ua.any2b.tvplayer.data.WorkerKeyStore
 import ua.any2b.tvplayer.data.TorrServerAuthStore
+import ua.any2b.tvplayer.data.TolokaPlaybackStore
 
 sealed interface VideoSourceState {
     data object Loading : VideoSourceState
@@ -87,6 +88,8 @@ sealed interface DetailsState {
         val tolokaSearch: TolokaSearchState = TolokaSearchState.Idle,
         val tolokaTransfer: TolokaTransferState = TolokaTransferState.Idle,
         val tolokaPlaybackStatus: String? = null,
+        val tolokaOpenedTopics: Set<String> = emptySet(),
+        val tolokaOpenedFiles: Set<Int> = emptySet(),
         val isFavorite: Boolean = false,
         val selectedVoiceIndex: Int = 0,
         val selectedEpisodeIndex: Int = 0,
@@ -112,6 +115,7 @@ class DetailsViewModel(
     private val settingsManager = SettingsManager(context)
     private val workerKeyStore = WorkerKeyStore(context)
     private val torrServerAuthStore = TorrServerAuthStore(context)
+    private val tolokaPlaybackStore = TolokaPlaybackStore(context)
     private val workerClient = WorkerConnections.client
     private val torrServerClient = TorrServerClient()
     private var manualSearchJob: Job? = null
@@ -281,7 +285,6 @@ class DetailsViewModel(
     }
 
     fun searchToloka(query: String) {
-        if ((_state.value as? DetailsState.Ready)?.tolokaSearch == TolokaSearchState.Loading) return
         val trimmed = query.trim()
         if (trimmed.isBlank()) {
             updateReady { it.copy(tolokaSearch = TolokaSearchState.Error("Введіть назву для пошуку")) }
@@ -295,6 +298,7 @@ class DetailsViewModel(
             )) }
             return
         }
+        tolokaSearchJob?.cancel()
         tolokaTransferJob?.cancel()
         uploadedTopicId = null
         uploadedTorrent = null
@@ -305,9 +309,13 @@ class DetailsViewModel(
                 val results = workerClient.search(workerUrl, key, trimmed)
                 updateReady { ready ->
                     val ukrainian = (ready.videoSource as? VideoSourceState.Success)?.release?.title
+                    val hits = TolokaHitFilter.filter(ready.details, ukrainian, results.results)
                     ready.copy(tolokaSearch = TolokaSearchState.Results(trimmed,
-                        TolokaHitFilter.filter(ready.details, ukrainian, results.results),
-                        results.results.size))
+                        hits, results.results.size),
+                        tolokaOpenedTopics = hits.mapNotNull { hit ->
+                            hit.id.takeIf { tolokaPlaybackStore.hasOpenedFile(animeId, it) }
+                        }.toSet(),
+                        tolokaOpenedFiles = emptySet())
                 }
             } catch (error: CancellationException) {
                 throw error
@@ -334,7 +342,9 @@ class DetailsViewModel(
         val cached = uploadedTorrent?.takeIf { uploadedTopicId == topicId }
         val workerUrl = settingsManager.workerUrl()
         val key = workerKeyStore.read()
-        updateReady { it.copy(tolokaSearch = results.copy(selectedId = topicId), tolokaPlaybackStatus = null) }
+        updateReady { it.copy(tolokaSearch = results.copy(selectedId = topicId),
+            tolokaPlaybackStatus = null,
+            tolokaOpenedFiles = tolokaPlaybackStore.openedFileIds(animeId, topicId)) }
         if (serverUrl.isBlank() || (cached == null && (workerUrl.isBlank() || key.isNullOrBlank()))) {
             updateReady { it.copy(tolokaTransfer = TolokaTransferState.Error(
                 "Налаштуйте Worker і TorrServer у налаштуваннях застосунку",
@@ -424,6 +434,29 @@ class DetailsViewModel(
         val file = files.torrent.videoFiles.firstOrNull { it.id == fileId } ?: return null
         return try { torrServerClient.playbackUrl(settingsManager.torrServerUrl(), files.torrent, file) }
         catch (_: Exception) { null }
+    }
+
+    fun tolokaSelectedTopicId(fileId: Int): String? {
+        val ready = _state.value as? DetailsState.Ready ?: return null
+        val results = ready.tolokaSearch as? TolokaSearchState.Results ?: return null
+        val files = ready.tolokaTransfer as? TolokaTransferState.Files ?: return null
+        return results.selectedId?.takeIf { selected ->
+            results.hits.any { it.id == selected } && files.torrent.videoFiles.any { it.id == fileId }
+        }
+    }
+
+    fun refreshTolokaPlaybackMarks() {
+        updateReady { ready ->
+            val results = ready.tolokaSearch as? TolokaSearchState.Results ?: return@updateReady ready
+            ready.copy(
+                tolokaOpenedTopics = results.hits.mapNotNull { hit ->
+                    hit.id.takeIf { tolokaPlaybackStore.hasOpenedFile(animeId, it) }
+                }.toSet(),
+                tolokaOpenedFiles = results.selectedId?.let {
+                    tolokaPlaybackStore.openedFileIds(animeId, it)
+                }.orEmpty(),
+            )
+        }
     }
 
     fun selectRelease(candidate: AnitubeSearchResult) {

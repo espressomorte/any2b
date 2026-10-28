@@ -28,6 +28,7 @@ import ua.any2b.tvplayer.data.SettingsManager
 import ua.any2b.tvplayer.data.VoiceCache
 import ua.any2b.tvplayer.data.WatchHistoryManager
 import ua.any2b.tvplayer.data.TorrServerAuthStore
+import ua.any2b.tvplayer.data.TolokaPlaybackStore
 import ua.any2b.tvplayer.databinding.ActivityPlayerBinding
 import java.util.concurrent.TimeUnit
 
@@ -44,6 +45,8 @@ class PlayerActivity : FragmentActivity() {
         const val EXTRA_IS_MOVIE = "IS_MOVIE"
         const val EXTRA_SOURCE_TYPE = "SOURCE_TYPE"
         const val SOURCE_TOLOKA = "toloka"
+        const val EXTRA_TOLOKA_TOPIC_ID = "TOLOKA_TOPIC_ID"
+        const val EXTRA_TOLOKA_FILE_ID = "TOLOKA_FILE_ID"
     }
 
     private lateinit var binding: ActivityPlayerBinding
@@ -55,6 +58,7 @@ class PlayerActivity : FragmentActivity() {
     private var episodeNumber: Int = 1
     private var isMovie: Boolean = false
     private var isToloka: Boolean = false
+    private var tolokaPlaybackMarked: Boolean = false
 
     private var nextEpisodeUrl: String? = null
     private var nextEpisodeIndex: Int = -1
@@ -182,6 +186,14 @@ class PlayerActivity : FragmentActivity() {
 
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
                     if (isPlaying) {
+                        if (isToloka && !tolokaPlaybackMarked) {
+                            val topicId = intent.getStringExtra(EXTRA_TOLOKA_TOPIC_ID)
+                            val fileId = intent.getIntExtra(EXTRA_TOLOKA_FILE_ID, -1)
+                            if (animeId > 0 && topicId?.matches(Regex("[0-9]+")) == true && fileId > 0) {
+                                TolokaPlaybackStore(this@PlayerActivity).markOpened(animeId, topicId, fileId)
+                                tolokaPlaybackMarked = true
+                            }
+                        }
                         binding.statusOverlay.postDelayed({
                             binding.statusOverlay.visibility = View.GONE
                         }, 3000)

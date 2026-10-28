@@ -26,6 +26,7 @@ data class TolokaHit(
     val sizeText: String,
     val seeders: Int?,
     val leechers: Int?,
+    val author: String? = null,
 )
 
 data class TolokaSearch(
@@ -86,6 +87,9 @@ class WorkerClient(
                 sizeText = item.optString("sizeText"),
                 seeders = item.optIntOrNull("seeders"),
                 leechers = item.optIntOrNull("leechers"),
+                author = if (item.has("author") && !item.isNull("author")) {
+                    item.optString("author").trim().takeIf(String::isNotBlank)
+                } else null,
             ).also { if (it.id.isBlank() || it.title.isBlank()) throw WorkerFailure.InvalidResponse() }
         }
         return TolokaSearch(

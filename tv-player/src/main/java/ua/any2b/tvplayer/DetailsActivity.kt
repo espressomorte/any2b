@@ -19,6 +19,7 @@ import ua.any2b.tvplayer.ui.genreLabel
 import ua.any2b.tvplayer.data.ExternalVideoPlayers
 import ua.any2b.tvplayer.data.SettingsManager
 import ua.any2b.tvplayer.data.TorrServerAuthStore
+import ua.any2b.tvplayer.data.TolokaPlaybackStore
 import ua.any2b.core.anilist.trailerSearchUrl
 
 class DetailsActivity : ComponentActivity() {
@@ -102,6 +103,7 @@ class DetailsActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         launchingTolokaPlayer = false
+        viewModel.refreshTolokaPlaybackMarks()
         if (refreshAfterPlayback) {
             refreshAfterPlayback = false
             viewModel.refreshVoicesAfterPlayback()
@@ -151,8 +153,9 @@ class DetailsActivity : ComponentActivity() {
 
     private fun openTolokaFile(fileId: Int) {
         if (launchingTolokaPlayer) return
+        val topicId = viewModel.tolokaSelectedTopicId(fileId)
         val url = viewModel.tolokaPlaybackUrl(fileId)
-        if (url == null) {
+        if (url == null || topicId == null) {
             viewModel.reportTolokaPlaybackStatus("Не вдалося сформувати URL потоку для вибраного файлу")
             Toast.makeText(this, "Відеофайл недоступний. Повторіть вибір роздачі", Toast.LENGTH_LONG).show()
             return
@@ -167,6 +170,8 @@ class DetailsActivity : ComponentActivity() {
             if (externalIntent != null) {
                 try {
                     startActivity(externalIntent)
+                    TolokaPlaybackStore(this).markOpened(animeId, topicId, fileId)
+                    viewModel.refreshTolokaPlaybackMarks()
                     viewModel.reportTolokaPlaybackStatus("URL передано зовнішньому плеєру. Результат відтворення перевіряйте в ньому")
                     return
                 } catch (_: ActivityNotFoundException) {
@@ -184,6 +189,9 @@ class DetailsActivity : ComponentActivity() {
             startActivity(Intent(this, PlayerActivity::class.java).apply {
                 putExtra(PlayerActivity.EXTRA_STREAM_URL, url)
                 putExtra(PlayerActivity.EXTRA_SOURCE_TYPE, PlayerActivity.SOURCE_TOLOKA)
+                putExtra(PlayerActivity.EXTRA_ANIME_ID, animeId)
+                putExtra(PlayerActivity.EXTRA_TOLOKA_TOPIC_ID, topicId)
+                putExtra(PlayerActivity.EXTRA_TOLOKA_FILE_ID, fileId)
             })
             viewModel.reportTolokaPlaybackStatus("URL передано вбудованому плеєру")
         } catch (_: Exception) {

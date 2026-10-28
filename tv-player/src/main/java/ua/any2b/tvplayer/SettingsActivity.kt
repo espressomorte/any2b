@@ -35,6 +35,7 @@ import ua.any2b.tvplayer.data.WatchHistoryManager
 import ua.any2b.tvplayer.data.WorkerKeyStore
 import ua.any2b.tvplayer.data.WorkerConnections
 import ua.any2b.tvplayer.data.TorrServerAuthStore
+import ua.any2b.tvplayer.data.TolokaPlaybackStore
 import ua.any2b.tvplayer.ui.AppTheme
 import ua.any2b.tvplayer.ui.SettingsScreen
 
@@ -205,6 +206,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     fun clearHistory() {
         watchHistory.clearHistory()
+        TolokaPlaybackStore(getApplication()).clear()
     }
 
     fun refreshPlayers() {
