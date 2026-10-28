@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -7,6 +9,17 @@ plugins {
 android {
     namespace = "ua.any2b.tvplayer"
     compileSdk = 35
+
+    // Local experiment: the token is packaged only in debug APKs.
+    val tmdbToken = Properties().apply {
+        val localProperties = rootProject.file("local.properties")
+        if (localProperties.isFile) localProperties.inputStream().use(::load)
+    }.getProperty("tmdb.token").orEmpty()
+    val tmdbTokenLiteral = "\"" + tmdbToken
+        .replace("\\", "\\\\")
+        .replace("\"", "\\\"")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r") + "\""
 
     val githubTag = providers.environmentVariable("GITHUB_REF_TYPE").orNull
         .takeIf { it == "tag" }
@@ -39,8 +52,12 @@ android {
     }
 
     buildTypes {
+        debug {
+            buildConfigField("String", "TMDB_TOKEN", tmdbTokenLiteral)
+        }
         release {
             isMinifyEnabled = false
+            buildConfigField("String", "TMDB_TOKEN", "\"\"")
             if (keystorePath != null) {
                 signingConfig = signingConfigs.getByName("release")
             }
@@ -57,6 +74,7 @@ android {
     }
 
     buildFeatures {
+        buildConfig = true
         viewBinding = true
         compose = true
     }

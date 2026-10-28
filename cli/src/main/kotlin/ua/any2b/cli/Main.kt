@@ -3,18 +3,42 @@ package ua.any2b.cli
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONObject
 import ua.any2b.core.anilist.AniListClient
 import ua.any2b.core.anilist.Title
 import ua.any2b.core.anitube.AnitubeClient
 import ua.any2b.core.extractor.StreamResolver
 import ua.any2b.core.matcher.TitleMatcher
 import java.net.URI
+import java.nio.file.Files
+import java.nio.file.Path
+import java.util.Properties
 import java.util.concurrent.TimeUnit
 
 fun main(args: Array<String>) = runBlocking {
     val command = args.firstOrNull()?.lowercase() ?: "menu"
 
     when (command) {
+        "tmdb-movie" -> {
+            val movieId = args.getOrNull(1)?.let {
+                it.toIntOrNull() ?: error("TMDB ID фільму має бути числом")
+            } ?: 157336 // Interstellar
+            require(movieId > 0) { "TMDB ID фільму має бути додатним числом" }
+            val language = args.getOrNull(2) ?: "uk-UA"
+            require(language.matches(Regex("[a-z]{2}-[A-Z]{2}"))) { "Мова має бути у форматі uk-UA" }
+            printTmdbMovie(movieId, language)
+        }
+
+        "tmdb-tv" -> {
+            val seriesId = args.getOrNull(1)?.let {
+                it.toIntOrNull() ?: error("TMDB ID серіалу має бути числом")
+            } ?: 1429 // Attack on Titan
+            require(seriesId > 0) { "TMDB ID серіалу має бути додатним числом" }
+            val language = args.getOrNull(2) ?: "uk-UA"
+            require(language.matches(Regex("[a-z]{2}-[A-Z]{2}"))) { "Мова має бути у форматі uk-UA" }
+            printTmdbTv(seriesId, language)
+        }
+
         "anilist", "home" -> {
             println("═══ AniList: Головна сторінка ═══")
             val client = AniListClient()
@@ -128,10 +152,73 @@ fun main(args: Array<String>) = runBlocking {
                   flow [query]         - перевірка ланцюжка для ВСІХ студій через StreamResolver
                   resolve <embedUrl>   - витягнути HLS з конкретного URL плеєра (Ashdi/Fenix)
                   probe <streamUrl>    - HLS probe перевірка стріму
+                  tmdb-movie [id] [uk-UA] - дані фільму TMDB (за замовчуванням Interstellar)
+                  tmdb-tv [id] [uk-UA] - дані серіалу TMDB (за замовчуванням Attack on Titan)
                 ═════════════════════════════════════════════════════════
             """.trimIndent())
         }
     }
+}
+
+private fun printTmdbMovie(movieId: Int, language: String) {
+    val movie = fetchTmdbJson("movie/$movieId", language)
+    val genres = movie.optJSONArray("genres")?.let { array ->
+        (0 until array.length()).mapNotNull { array.optJSONObject(it)?.optString("name") }
+            .filter(String::isNotBlank).joinToString(", ")
+    }.orEmpty()
+    println("═══ TMDB: фільм #${movie.optInt("id")} ═══")
+    println("Назва: ${movie.optString("title")}")
+    println("Оригінальна назва: ${movie.optString("original_title")}")
+    println("Дата виходу: ${movie.optString("release_date").ifBlank { "—" }}")
+    println("Тривалість: ${movie.optInt("runtime").takeIf { it > 0 }?.let { "$it хв" } ?: "—"}")
+    println("Жанри: ${genres.ifBlank { "—" }}")
+    println("Оцінка: ${movie.optDouble("vote_average").takeIf { !it.isNaN() } ?: "—"}")
+    println("Опис: ${movie.optString("overview").ifBlank { "—" }}")
+}
+
+private fun printTmdbTv(seriesId: Int, language: String) {
+    val series = fetchTmdbJson("tv/$seriesId", language)
+    val genres = series.optJSONArray("genres")?.let { array ->
+        (0 until array.length()).mapNotNull { array.optJSONObject(it)?.optString("name") }
+            .filter(String::isNotBlank).joinToString(", ")
+    }.orEmpty()
+    println("═══ TMDB: серіал #${series.optInt("id")} ═══")
+    println("Назва: ${series.optString("name")}")
+    println("Оригінальна назва: ${series.optString("original_name")}")
+    println("Перша трансляція: ${series.optString("first_air_date").ifBlank { "—" }}")
+    println("Сезонів: ${series.optInt("number_of_seasons")}")
+    println("Серій: ${series.optInt("number_of_episodes")}")
+    println("Жанри: ${genres.ifBlank { "—" }}")
+    println("Оцінка: ${series.optDouble("vote_average").takeIf { !it.isNaN() } ?: "—"}")
+    println("Опис: ${series.optString("overview").ifBlank { "—" }}")
+}
+
+private fun fetchTmdbJson(path: String, language: String): JSONObject {
+    val token = System.getenv("TMDB_TOKEN")?.trim()?.takeIf(String::isNotBlank)
+        ?: localTmdbToken()
+        ?: error("Вкажіть tmdb.token у локальному local.properties або TMDB_TOKEN у середовищі")
+    val http = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
+        .callTimeout(30, TimeUnit.SECONDS)
+        .build()
+    val request = Request.Builder()
+        .url("https://api.themoviedb.org/3/$path?language=$language")
+        .header("Authorization", "Bearer $token")
+        .header("Accept", "application/json")
+        .build()
+    return http.newCall(request).execute().use { response ->
+        if (!response.isSuccessful) error("TMDB відповів HTTP ${response.code}")
+        JSONObject(response.body?.string() ?: error("TMDB повернув порожню відповідь"))
+    }
+}
+
+private fun localTmdbToken(): String? {
+    val file = listOf(Path.of("local.properties"), Path.of("..", "local.properties"))
+        .firstOrNull { Files.isRegularFile(it) } ?: return null
+    val properties = Properties()
+    Files.newInputStream(file).use(properties::load)
+    return properties.getProperty("tmdb.token")?.trim()?.takeIf(String::isNotBlank)
 }
 
 private fun probeHlsStream(streamUrl: String, headers: Map<String, String> = emptyMap()) {
