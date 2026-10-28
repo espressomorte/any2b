@@ -26,7 +26,7 @@ class WorkerClientTest {
             fixture(request, 200, """{
               "query":"$query","count":2,"parsedRows":2,"cached":true,"extra":42,
               "results":[
-                {"id":"668277","title":"Повний сезон","pageUrl":"https://toloka.to/t668277","sizeText":"6.54 GB","seeders":0,"leechers":null,"extra":"ok"},
+                {"id":"668277","title":"Повний сезон","author":"Студія А","pageUrl":"https://toloka.to/t668277","sizeText":"6.54 GB","seeders":0,"leechers":null,"extra":"ok"},
                 {"id":"668278","title":"Інший сезон","pageUrl":"https://toloka.to/t668278","sizeText":"3 GB","seeders":null,"leechers":2}
               ]
             }""")
@@ -36,8 +36,10 @@ class WorkerClientTest {
         assertEquals("Bearer sample-user-key", bearer)
         assertEquals(2, result.results.size)
         assertEquals(0, result.results[0].seeders)
+        assertEquals("Студія А", result.results[0].author)
         assertNull(result.results[0].leechers)
         assertNull(result.results[1].seeders)
+        assertNull(result.results[1].author)
         assertNull(result.sessionReused)
     }
 
@@ -46,6 +48,16 @@ class WorkerClientTest {
         val result = client { request -> fixture(request, 200, """{"query":"x","results":[]}""") }
             .search(base, "key", "x")
         assertTrue(result.results.isEmpty())
+    }
+
+    @Test
+    fun nullAndBlankAuthorsAreHidden() = runBlocking {
+        val result = client { request -> fixture(request, 200, """{"query":"x","results":[
+            {"id":"1","title":"A","author":null},
+            {"id":"2","title":"B","author":"   "},
+            {"id":"3","title":"C"}
+        ]}""") }.search(base, "key", "x")
+        assertTrue(result.results.all { it.author == null })
     }
 
     @Test
