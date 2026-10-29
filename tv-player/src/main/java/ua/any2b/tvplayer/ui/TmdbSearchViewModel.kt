@@ -9,11 +9,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import ua.any2b.core.tmdb.TmdbClient
 import ua.any2b.core.tmdb.TmdbFailure
 import ua.any2b.core.tmdb.TmdbTitle
-import ua.any2b.tvplayer.BuildConfig
 import ua.any2b.tvplayer.data.TmdbSearchHistoryStore
+import ua.any2b.tvplayer.data.workerTmdbConnection
 
 data class TmdbSearchState(
     val query: String = "",
@@ -26,7 +25,6 @@ data class TmdbSearchState(
 )
 
 class TmdbSearchViewModel(application: Application) : AndroidViewModel(application) {
-    private val client = TmdbClient()
     private val history = TmdbSearchHistoryStore(application)
     private val _state = MutableStateFlow(TmdbSearchState(recentTitles = history.recentTitles()))
     val state: StateFlow<TmdbSearchState> = _state
@@ -76,7 +74,9 @@ class TmdbSearchViewModel(application: Application) : AndroidViewModel(applicati
     private suspend fun executeSearch(query: String) {
         _state.value = _state.value.copy(showRecentTitles = false)
         try {
-            val hits = client.search(query, BuildConfig.TMDB_TOKEN)
+            val connection = workerTmdbConnection(getApplication())
+                ?: throw TmdbFailure.MissingToken()
+            val hits = connection.client.search(query, connection.accessKey)
             _state.value = _state.value.copy(results = hits, loading = false, searched = true)
         } catch (error: CancellationException) {
             throw error

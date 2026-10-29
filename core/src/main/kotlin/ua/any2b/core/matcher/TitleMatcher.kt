@@ -20,8 +20,9 @@ object TitleMatcher {
     private const val MIN_AUTO_SCORE = 3.0
     private const val MIN_AUTO_MARGIN = 1.5
 
-    fun match(details: AnimeDetails, candidates: List<AnitubeSearchResult>): List<MatchResult> =
-        rank(details.title, details.synonyms, details.seasonYear, details.episodes,
+    fun match(details: AnimeDetails, candidates: List<AnitubeSearchResult>,
+        additionalNames: List<String> = emptyList()): List<MatchResult> =
+        rank(details.title, details.synonyms + additionalNames, details.seasonYear, details.episodes,
             details.durationMinutes, details.nextEpisode, candidates)
 
     /** Title-only matching is also used by the CLI when AniList details are unavailable. */

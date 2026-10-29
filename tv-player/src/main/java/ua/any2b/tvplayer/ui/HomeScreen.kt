@@ -5,6 +5,7 @@ import android.content.Intent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -19,6 +20,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.graphicsLayer
@@ -26,6 +28,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -178,6 +181,10 @@ fun HomeScreen(
                         context.startActivity(Intent(context, ua.any2b.tvplayer.TolokaSearchActivity::class.java))
                     }
                     Spacer(Modifier.width(12.dp))
+                    HomeActionButton(null, "TMDB: обране та популярне", vector = R.drawable.fa_rebel) {
+                        context.startActivity(Intent(context, ua.any2b.tvplayer.TmdbLibraryActivity::class.java))
+                    }
+                    Spacer(Modifier.width(12.dp))
                     HomeActionButton(FaIcons.COG, "Налаштування") {
                         val intent = Intent(context, ua.any2b.tvplayer.SettingsActivity::class.java)
                         context.startActivity(intent)
@@ -201,7 +208,8 @@ fun HomeScreen(
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun HomeActionButton(icon: String, label: String, onClick: () -> Unit) {
+private fun HomeActionButton(icon: String?, label: String, vector: Int? = null,
+    onClick: () -> Unit) {
     var isFocused by remember { mutableStateOf(false) }
 
     Surface(
@@ -222,7 +230,10 @@ private fun HomeActionButton(icon: String, label: String, onClick: () -> Unit) {
             .onFocusChanged { isFocused = it.isFocused },
     ) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            FontAwesomeIcon(icon, color = if (isFocused) AppColors.NeonCyan else AppColors.TextLight)
+            val color = if (isFocused) AppColors.NeonCyan else AppColors.TextLight
+            if (vector != null) Image(painterResource(vector), contentDescription = null,
+                modifier = Modifier.size(22.dp), colorFilter = ColorFilter.tint(color))
+            else FontAwesomeIcon(icon.orEmpty(), color = color)
         }
     }
 }
@@ -347,8 +358,6 @@ fun MoreCard(onClick: () -> Unit) {
                 Text("Більше", color = textColor, fontWeight = FontWeight.Bold)
             }
         }
-        Spacer(Modifier.height(8.dp))
-        Text("Усі тайтли", color = if (isFocused) AppColors.NeonCyan else AppColors.TextSecondary)
     }
 }
 

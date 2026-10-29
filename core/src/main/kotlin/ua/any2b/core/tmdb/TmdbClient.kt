@@ -3,6 +3,8 @@ package ua.any2b.core.tmdb
 import java.io.IOException
 import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -14,8 +16,15 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import org.json.JSONObject
+import java.net.URLEncoder
 
 enum class TmdbMediaType(val path: String) { MOVIE("movie"), TV("tv") }
+
+enum class TmdbListSort { POPULARITY, RATING, YEAR }
+
+data class TmdbPage(val titles: List<TmdbTitle>, val page: Int, val totalPages: Int) {
+    val hasMore: Boolean get() = page < totalPages
+}
 
 data class TmdbTitle(
     val id: Int,
@@ -29,6 +38,10 @@ data class TmdbTitle(
     val ukrainianTitle: String? = null,
     val englishTitle: String? = null,
     val originalLanguage: String? = null,
+    val genreIds: Set<Int> = emptySet(),
+    val originCountries: Set<String> = emptySet(),
+    val matchedSeasonTitle: String? = null,
+    val matchedSeasonYear: Int? = null,
 ) {
     fun searchNames(query: String): List<String> {
         val original = originalTitle?.takeIf { originalLanguage != "en" && originalLanguage != "uk" }
@@ -52,11 +65,24 @@ data class TmdbDetails(
     val seasons: Int?,
     val episodes: Int?,
     val collectionName: String?,
+    val seasonEntries: List<TmdbSeason> = emptyList(),
+    val directors: List<String> = emptyList(),
+    val cast: List<String> = emptyList(),
+    val countryCodes: List<String> = emptyList(),
+    val alternativeTitles: List<String> = emptyList(),
 )
 
+fun TmdbDetails.trailerSearchUrl(): String {
+    val query = listOfNotNull(title.originalTitle ?: title.title,
+        title.year?.toString(), "trailer").joinToString(" ")
+    return "https://www.youtube.com/results?search_query=${URLEncoder.encode(query, "UTF-8")}"
+}
+
+data class TmdbSeason(val number: Int, val name: String?, val year: Int?)
+
 sealed class TmdbFailure(message: String) : IOException(message) {
-    class MissingToken : TmdbFailure("TMDB токен не налаштовано для цієї збірки")
-    class Unauthorized : TmdbFailure("TMDB відхилив токен доступу")
+    class MissingToken : TmdbFailure("Ключ доступу не налаштовано")
+    class Unauthorized : TmdbFailure("Worker відхилив ключ доступу")
     class Http(val status: Int) : TmdbFailure("TMDB відповів HTTP $status")
     class Timeout : TmdbFailure("Час очікування TMDB вичерпано")
     class Network : TmdbFailure("Не вдалося з’єднатися з TMDB")
@@ -71,14 +97,50 @@ class TmdbClient(
         .build(),
     private val baseUrl: HttpUrl = "https://api.themoviedb.org/3/".toHttpUrl(),
 ) {
-    suspend fun search(query: String, token: String): List<TmdbTitle> {
-        if (query.isBlank()) return emptyList()
+    suspend fun popular(type: TmdbMediaType, token: String): List<TmdbTitle> =
+        listPage(type, token, TmdbListSort.POPULARITY, 1).titles
+
+    suspend fun listPage(type: TmdbMediaType, token: String, sort: TmdbListSort, page: Int): TmdbPage {
+        require(page in 1..500)
+        val json = if (sort == TmdbListSort.POPULARITY) {
+            request(listOf(type.path, "popular"), token, "uk-UA", "page" to page.toString())
+        } else {
+            val sortBy = when (sort) {
+                TmdbListSort.RATING -> "vote_average.desc"
+                TmdbListSort.YEAR -> if (type == TmdbMediaType.MOVIE) "primary_release_date.desc" else "first_air_date.desc"
+                TmdbListSort.POPULARITY -> error("Handled above")
+            }
+            request(listOf("discover", type.path), token, "uk-UA", "page" to page.toString(),
+                "sort_by" to sortBy, "vote_count.gte" to if (sort == TmdbListSort.RATING) "100" else "0")
+        }
+        return TmdbPage(parseList(json, type, "uk-UA"), page,
+            json.optInt("total_pages", page).coerceIn(page, 500))
+    }
+
+    suspend fun related(type: TmdbMediaType, id: Int, token: String): List<TmdbTitle> {
+        require(id > 0)
+        val json = request(listOf(type.path, id.toString(), "recommendations"),
+            token, "uk-UA", "page" to "1")
+        return parseList(json, type, "uk-UA").filterNot { it.id == id }
+    }
+
+    private fun parseList(json: JSONObject, type: TmdbMediaType, language: String): List<TmdbTitle> {
+        val array = json.optJSONArray("results") ?: throw TmdbFailure.InvalidResponse()
+        return (0 until array.length()).mapNotNull { index ->
+            array.optJSONObject(index)?.takeUnless { it.optBoolean("adult") }
+                ?.toTitle(type, language)
+        }
+    }
+    suspend fun search(query: String, token: String): List<TmdbTitle> = coroutineScope {
+        if (query.isBlank()) return@coroutineScope emptyList()
         val primaryLanguage = if (query.any { it in '\u0400'..'\u04FF' }) "uk-UA" else "en-US"
-        val primary = searchLocale(query, token, primaryLanguage)
         val secondaryLanguage = if (primaryLanguage == "uk-UA") "en-US" else "uk-UA"
-        val secondary = searchLocale(query, token, secondaryLanguage)
+        val primaryRequest = async { searchLocale(query, token, primaryLanguage) }
+        val secondaryRequest = async { searchLocale(query, token, secondaryLanguage) }
+        val primary = primaryRequest.await()
+        val secondary = secondaryRequest.await()
         val otherById = secondary.associateBy { it.type to it.id }
-        return (primary + secondary.filter { item -> primary.none { it.type == item.type && it.id == item.id } })
+        (primary + secondary.filter { item -> primary.none { it.type == item.type && it.id == item.id } })
             .map { item ->
                 val other = otherById[item.type to item.id]
                 if (other == null) item else item.copy(
@@ -112,6 +174,41 @@ class TmdbClient(
         }.orEmpty()
         val runtime = if (type == TmdbMediaType.MOVIE) json.optInt("runtime")
             else json.optJSONArray("episode_run_time")?.optInt(0) ?: 0
+        val credits = json.optJSONObject("credits")
+        val directors = credits?.optJSONArray("crew")?.let { crew ->
+            (0 until crew.length()).mapNotNull { index ->
+                crew.optJSONObject(index)?.takeIf { it.optString("job") == "Director" }
+                    ?.optionalString("name")
+            }.distinct()
+        }.orEmpty()
+        val cast = credits?.optJSONArray("cast")?.let { actors ->
+            (0 until actors.length()).mapNotNull { index ->
+                actors.optJSONObject(index)?.optionalString("name")
+            }.distinct()
+        }.orEmpty()
+        val countryCodes = if (type == TmdbMediaType.MOVIE) {
+            json.optJSONArray("production_countries")?.let { countries ->
+                (0 until countries.length()).mapNotNull { index ->
+                    countries.optJSONObject(index)?.optionalString("iso_3166_1")
+                }
+            }.orEmpty()
+        } else {
+            json.optJSONArray("origin_country")?.let { countries ->
+                (0 until countries.length()).mapNotNull { index ->
+                    countries.optString(index).takeIf(String::isNotBlank)
+                }
+            }.orEmpty()
+        }.distinct()
+        val alternativeTitles = json.optJSONObject("alternative_titles")?.let { alternatives ->
+            val entries = alternatives.optJSONArray("titles") ?: alternatives.optJSONArray("results")
+            entries?.let { array ->
+                (0 until array.length()).mapNotNull { index ->
+                    array.optJSONObject(index)?.let { item ->
+                        item.optionalString("title") ?: item.optionalString("name")
+                    }
+                }
+            }
+        }.orEmpty().distinctBy { it.lowercase() }
         return TmdbDetails(
             title = title,
             genres = genres,
@@ -121,17 +218,28 @@ class TmdbClient(
             episodes = json.optInt("number_of_episodes").takeIf { type == TmdbMediaType.TV && it > 0 },
             collectionName = if (type == TmdbMediaType.MOVIE)
                 json.optJSONObject("belongs_to_collection")?.optionalString("name") else null,
+            seasonEntries = if (type == TmdbMediaType.TV) json.optJSONArray("seasons")?.let { array ->
+                (0 until array.length()).mapNotNull { index ->
+                    val season = array.optJSONObject(index) ?: return@mapNotNull null
+                    TmdbSeason(season.optInt("season_number"), season.optionalString("name"),
+                        season.optionalString("air_date")?.take(4)?.toIntOrNull())
+                }
+            }.orEmpty() else emptyList(),
+            directors = directors,
+            cast = cast,
+            countryCodes = countryCodes,
+            alternativeTitles = alternativeTitles,
         )
     }
 
     private suspend fun request(
-        segments: List<String>, token: String, language: String, parameter: Pair<String, String>? = null,
+        segments: List<String>, token: String, language: String, vararg parameters: Pair<String, String>,
     ): JSONObject {
         if (token.isBlank()) throw TmdbFailure.MissingToken()
         val url = baseUrl.newBuilder().apply {
             segments.forEach(::addPathSegment)
             addQueryParameter("language", language)
-            parameter?.let { addQueryParameter(it.first, it.second) }
+            parameters.forEach { addQueryParameter(it.first, it.second) }
         }.build()
         val call = http.newCall(Request.Builder().url(url)
             .header("Authorization", "Bearer $token")
@@ -184,6 +292,12 @@ private fun JSONObject.toTitle(type: TmdbMediaType, language: String): TmdbTitle
         ukrainianTitle = title.takeIf { language == "uk-UA" },
         englishTitle = title.takeIf { language == "en-US" },
         originalLanguage = optionalString("original_language"),
+        genreIds = optJSONArray("genre_ids")?.let { array ->
+            (0 until array.length()).map { array.optInt(it) }.filter { it > 0 }.toSet()
+        }.orEmpty(),
+        originCountries = optJSONArray("origin_country")?.let { array ->
+            (0 until array.length()).mapNotNull { array.optString(it).takeIf(String::isNotBlank) }.toSet()
+        }.orEmpty(),
     )
 }
 

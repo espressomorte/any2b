@@ -22,6 +22,13 @@ import ua.any2b.core.anitube.AnitubeVoice
 import ua.any2b.core.anitube.playableVoices
 import ua.any2b.core.extractor.StreamResolver
 import ua.any2b.core.matcher.TitleMatcher
+import ua.any2b.core.tmdb.AniListTmdbMatcher
+import ua.any2b.core.tmdb.TmdbFailure
+import ua.any2b.core.tmdb.TmdbMatch
+import ua.any2b.core.tmdb.TmdbMediaType
+import ua.any2b.core.tmdb.TmdbTitle
+import ua.any2b.core.tmdb.TmdbClient
+import ua.any2b.core.tmdb.TmdbSeasonMatcher
 import ua.any2b.core.toloka.TolokaHit
 import ua.any2b.core.toloka.TolokaHitFilter
 import ua.any2b.core.toloka.WorkerFailure
@@ -40,13 +47,31 @@ import ua.any2b.tvplayer.data.WorkerConnections
 import ua.any2b.tvplayer.data.WorkerKeyStore
 import ua.any2b.tvplayer.data.TorrServerAuthStore
 import ua.any2b.tvplayer.data.TolokaPlaybackStore
+import ua.any2b.tvplayer.data.TmdbMapping
+import ua.any2b.tvplayer.data.TmdbMappingStore
+import ua.any2b.tvplayer.data.workerTmdbConnection
 
 sealed interface VideoSourceState {
     data object Loading : VideoSourceState
+    data object NotFound : VideoSourceState
     data class Success(val release: AnitubeSearchResult, val voices: List<AnitubeVoice>) : VideoSourceState
     data class Ambiguous(val candidates: List<AnitubeSearchResult>) : VideoSourceState
     data class Error(val message: String, val candidates: List<AnitubeSearchResult> = emptyList()) : VideoSourceState
 }
+
+sealed interface TmdbLinkState {
+    data object Loading : TmdbLinkState
+    data class Candidates(val matches: List<TmdbMatch>, val suggested: TmdbTitle?) : TmdbLinkState
+    data class Confirmed(val title: TmdbTitle) : TmdbLinkState
+    data class Error(val message: String) : TmdbLinkState
+}
+
+val TmdbLinkState.ukrainianTitle: String?
+    get() = when (this) {
+        is TmdbLinkState.Confirmed -> title.matchedSeasonTitle ?: title.ukrainianTitle ?: title.title
+        is TmdbLinkState.Candidates -> suggested?.matchedSeasonTitle ?: suggested?.ukrainianTitle
+        else -> null
+    }
 
 sealed interface ManualReleaseSearchState {
     data object Idle : ManualReleaseSearchState
@@ -83,6 +108,7 @@ sealed interface DetailsState {
     data object Loading : DetailsState
     data class Ready(
         val details: AnimeDetails,
+        val tmdbLink: TmdbLinkState = TmdbLinkState.Loading,
         val videoSource: VideoSourceState = VideoSourceState.Loading,
         val manualReleaseSearch: ManualReleaseSearchState = ManualReleaseSearchState.Idle,
         val tolokaSearch: TolokaSearchState = TolokaSearchState.Idle,
@@ -112,6 +138,8 @@ class DetailsViewModel(
     private val historyManager = WatchHistoryManager(context)
     private val favoritesManager = FavoritesManager(context)
     private val releaseMappings = ReleaseMappingStore.getInstance(context)
+    private val tmdbMappings = TmdbMappingStore.getInstance(context)
+    private val appContext = context.applicationContext
     private val settingsManager = SettingsManager(context)
     private val workerKeyStore = WorkerKeyStore(context)
     private val torrServerAuthStore = TorrServerAuthStore(context)
@@ -125,6 +153,8 @@ class DetailsViewModel(
     private var uploadedTorrent: TorrServerTorrent? = null
     private var detailsJob: Job? = null
     private var videoSourceJob: Job? = null
+    private var tmdbJob: Job? = null
+    private var retriedAniTubeWithTmdb = false
 
     private val _state = MutableStateFlow<DetailsState>(DetailsState.Loading)
     val state: StateFlow<DetailsState> = _state
@@ -136,6 +166,8 @@ class DetailsViewModel(
     fun loadDetails() {
         detailsJob?.cancel()
         videoSourceJob?.cancel()
+        tmdbJob?.cancel()
+        retriedAniTubeWithTmdb = false
         tolokaSearchJob?.cancel()
         tolokaTransferJob?.cancel()
         _state.value = DetailsState.Loading
@@ -160,11 +192,105 @@ class DetailsViewModel(
                     historyEntry = historyEntry
                 )
                 videoSourceJob = viewModelScope.launch { loadVideoSource(details) }
+                tmdbJob = viewModelScope.launch { loadTmdbLink(details) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 _state.value = DetailsState.Error(e.message ?: "Не вдалося завантажити деталі")
             }
+        }
+    }
+
+    fun retryTmdbLink(ignoreSaved: Boolean = false) {
+        val details = (_state.value as? DetailsState.Ready)?.details ?: return
+        tmdbJob?.cancel()
+        updateReady { it.copy(tmdbLink = TmdbLinkState.Loading) }
+        tmdbJob = viewModelScope.launch { loadTmdbLink(details, ignoreSaved) }
+    }
+
+    fun confirmTmdbLink(candidate: TmdbTitle) {
+        val ready = _state.value as? DetailsState.Ready ?: return
+        val matches = (ready.tmdbLink as? TmdbLinkState.Candidates)?.matches ?: return
+        if (matches.none { it.title.id == candidate.id && it.title.type == candidate.type }) return
+        tmdbJob?.cancel()
+        tmdbJob = viewModelScope.launch {
+            try {
+                tmdbMappings.put(animeId, TmdbMapping(candidate.type, candidate.id))
+                updateReady { it.copy(tmdbLink = TmdbLinkState.Confirmed(candidate)) }
+                maybeRetryAniTubeWithTmdb()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                updateReady { it.copy(tmdbLink = TmdbLinkState.Error("Не вдалося зберегти зв’язок TMDB")) }
+            }
+        }
+    }
+
+    private suspend fun loadTmdbLink(details: AnimeDetails, ignoreSaved: Boolean = false) {
+        try {
+            val connection = workerTmdbConnection(appContext)
+                ?: throw TmdbFailure.MissingToken()
+            val saved = if (ignoreSaved) null else tmdbMappings.get(animeId)
+            if (saved != null) {
+                val tmdbDetails = connection.client.details(saved.type, saved.id, connection.accessKey)
+                val title = TmdbSeasonMatcher.enrich(details, tmdbDetails.title,
+                    tmdbDetails.seasonEntries)
+                updateReady { it.copy(tmdbLink = TmdbLinkState.Confirmed(title)) }
+                maybeRetryAniTubeWithTmdb()
+                return
+            }
+            val queries = listOf(details.title.english, details.title.romaji)
+                .filterNotNull().map(String::trim).filter(String::isNotBlank).distinct()
+            val first = queries.firstOrNull() ?: throw IllegalArgumentException("Немає назви для пошуку TMDB")
+            val firstMatches = AniListTmdbMatcher.rank(details,
+                enrichSeasonCandidates(details, connection.client, connection.accessKey,
+                    connection.client.search(first, connection.accessKey)))
+            val matches = if (firstMatches.isEmpty() && queries.size > 1) {
+                AniListTmdbMatcher.rank(details,
+                    enrichSeasonCandidates(details, connection.client, connection.accessKey,
+                        connection.client.search(queries[1], connection.accessKey)))
+            } else firstMatches
+            updateReady { it.copy(tmdbLink = TmdbLinkState.Candidates(
+                matches, AniListTmdbMatcher.clearSuggestion(matches))) }
+            maybeRetryAniTubeWithTmdb()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: TmdbFailure) {
+            updateReady { it.copy(tmdbLink = TmdbLinkState.Error(error.message.orEmpty())) }
+        } catch (_: Exception) {
+            updateReady { it.copy(tmdbLink = TmdbLinkState.Error("Не вдалося знайти назву TMDB")) }
+        }
+    }
+
+    private suspend fun enrichSeasonCandidates(
+        anime: AnimeDetails, client: TmdbClient, key: String, candidates: List<TmdbTitle>,
+    ): List<TmdbTitle> {
+        var lookups = 0
+        return candidates.map { candidate ->
+            if (!TmdbSeasonMatcher.shouldInspect(anime, candidate) || lookups >= 4) {
+                candidate
+            } else {
+                lookups++
+                try {
+                    val details = client.details(TmdbMediaType.TV, candidate.id, key)
+                    TmdbSeasonMatcher.enrich(anime, candidate, details.seasonEntries)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    candidate
+                }
+            }
+        }
+    }
+
+    private fun maybeRetryAniTubeWithTmdb() {
+        val ready = _state.value as? DetailsState.Ready ?: return
+        if (retriedAniTubeWithTmdb || ready.tmdbLink.ukrainianTitle == null) return
+        if (ready.videoSource is VideoSourceState.NotFound ||
+            ready.videoSource is VideoSourceState.Error ||
+            ready.videoSource is VideoSourceState.Ambiguous) {
+            retriedAniTubeWithTmdb = true
+            retryVideoSource()
         }
     }
 
@@ -211,13 +337,15 @@ class DetailsViewModel(
 
     private suspend fun searchVideoSource(details: AnimeDetails) {
         try {
+            val tmdbName = (_state.value as? DetailsState.Ready)?.tmdbLink?.ukrainianTitle
+            val extraNames = listOfNotNull(tmdbName)
             val query = details.title.romaji ?: details.title.english ?: details.title.native
             if (query.isNullOrBlank()) {
-                updateReady { it.copy(videoSource = VideoSourceState.Error("Немає назви для пошуку на AniTube")) }
+                updateReady { it.copy(videoSource = VideoSourceState.NotFound) }
                 return
             }
             val results = anitubeClient.search(query)
-            val initialMatches = TitleMatcher.match(details, results)
+            val initialMatches = TitleMatcher.match(details, results, extraNames)
             val initialChoice = TitleMatcher.confidentBest(initialMatches)
             if (initialChoice != null) {
                 loadVoices(initialChoice, selection = ReleaseSelection.AUTOMATIC)
@@ -235,13 +363,22 @@ class DetailsViewModel(
                     emptyList()
                 }
             }.orEmpty()
-            val candidates = (results + refinedResults).groupBy { it.newsId }.values.map { hits ->
+            val translatedResults = tmdbName?.takeIf { it != query }?.let { name ->
+                try {
+                    anitubeClient.search(name)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    emptyList()
+                }
+            }.orEmpty()
+            val candidates = (results + refinedResults + translatedResults).groupBy { it.newsId }.values.map { hits ->
                 hits.maxByOrNull { hit ->
                     listOf(hit.year, hit.airedEpisodes, hit.totalEpisodes, hit.durationMinutes)
                         .count { it != null }
                 }!!
             }
-            val matches = TitleMatcher.match(details, candidates)
+            val matches = TitleMatcher.match(details, candidates, extraNames)
             val choice = TitleMatcher.confidentBest(matches)
             when {
                 choice != null -> loadVoices(choice, selection = ReleaseSelection.AUTOMATIC)
@@ -249,7 +386,7 @@ class DetailsViewModel(
                     it.copy(videoSource = VideoSourceState.Ambiguous(matches.map { match -> match.result }))
                 }
                 else -> updateReady {
-                    it.copy(videoSource = VideoSourceState.Error("Відповідний реліз не знайдено"))
+                    it.copy(videoSource = VideoSourceState.NotFound)
                 }
             }
         } catch (e: CancellationException) {
@@ -309,7 +446,8 @@ class DetailsViewModel(
                 val results = workerClient.search(workerUrl, key, trimmed)
                 updateReady { ready ->
                     val ukrainian = (ready.videoSource as? VideoSourceState.Success)?.release?.title
-                    val hits = TolokaHitFilter.filter(ready.details, ukrainian, results.results)
+                    val hits = TolokaHitFilter.filter(ready.details, ukrainian, results.results,
+                        listOfNotNull(ready.tmdbLink.ukrainianTitle))
                     ready.copy(tolokaSearch = TolokaSearchState.Results(trimmed,
                         hits, results.results.size),
                         tolokaOpenedTopics = hits.mapNotNull { hit ->

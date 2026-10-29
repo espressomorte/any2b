@@ -29,6 +29,9 @@ import ua.any2b.tvplayer.data.VoiceCache
 import ua.any2b.tvplayer.data.WatchHistoryManager
 import ua.any2b.tvplayer.data.TorrServerAuthStore
 import ua.any2b.tvplayer.data.TolokaPlaybackStore
+import ua.any2b.tvplayer.data.TmdbWatchHistoryStore
+import ua.any2b.core.tmdb.TmdbMediaType
+import ua.any2b.core.tmdb.TmdbTitle
 import ua.any2b.tvplayer.databinding.ActivityPlayerBinding
 import java.util.concurrent.TimeUnit
 
@@ -47,6 +50,13 @@ class PlayerActivity : FragmentActivity() {
         const val SOURCE_TOLOKA = "toloka"
         const val EXTRA_TOLOKA_TOPIC_ID = "TOLOKA_TOPIC_ID"
         const val EXTRA_TOLOKA_FILE_ID = "TOLOKA_FILE_ID"
+        const val EXTRA_TMDB_ID = "TMDB_ID"
+        const val EXTRA_TMDB_TYPE = "TMDB_TYPE"
+        const val EXTRA_TMDB_TITLE = "TMDB_TITLE"
+        const val EXTRA_TMDB_ORIGINAL_TITLE = "TMDB_ORIGINAL_TITLE"
+        const val EXTRA_TMDB_YEAR = "TMDB_YEAR"
+        const val EXTRA_TMDB_POSTER_URL = "TMDB_POSTER_URL"
+        const val EXTRA_TMDB_RATING = "TMDB_RATING"
     }
 
     private lateinit var binding: ActivityPlayerBinding
@@ -192,6 +202,26 @@ class PlayerActivity : FragmentActivity() {
                             if (animeId > 0 && topicId?.matches(Regex("[0-9]+")) == true && fileId > 0) {
                                 TolokaPlaybackStore(this@PlayerActivity).markOpened(animeId, topicId, fileId)
                                 tolokaPlaybackMarked = true
+                            } else {
+                                val type = TmdbMediaType.entries.firstOrNull {
+                                    it.path == intent.getStringExtra(EXTRA_TMDB_TYPE)
+                                }
+                                val tmdbId = intent.getIntExtra(EXTRA_TMDB_ID, -1)
+                                val tmdbTitle = intent.getStringExtra(EXTRA_TMDB_TITLE)
+                                if (type != null && tmdbId > 0 && !tmdbTitle.isNullOrBlank() &&
+                                    topicId?.matches(Regex("[0-9]+")) == true && fileId > 0) {
+                                    TolokaPlaybackStore(this@PlayerActivity)
+                                        .markTmdbOpened(type.path, tmdbId, topicId, fileId)
+                                    TmdbWatchHistoryStore(this@PlayerActivity).record(TmdbTitle(
+                                        tmdbId, type, tmdbTitle,
+                                        intent.getStringExtra(EXTRA_TMDB_ORIGINAL_TITLE),
+                                        intent.getIntExtra(EXTRA_TMDB_YEAR, 0).takeIf { it > 0 },
+                                        intent.getStringExtra(EXTRA_TMDB_POSTER_URL), null,
+                                        intent.getDoubleExtra(EXTRA_TMDB_RATING, Double.NaN)
+                                            .takeIf(Double::isFinite),
+                                    ))
+                                    tolokaPlaybackMarked = true
+                                }
                             }
                         }
                         binding.statusOverlay.postDelayed({

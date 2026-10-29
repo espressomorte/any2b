@@ -15,9 +15,11 @@ object TolokaHitFilter {
         Regex("""\bs(\d{1,2})\b""", RegexOption.IGNORE_CASE),
     )
 
-    fun filter(details: AnimeDetails, ukrainianTitle: String?, hits: List<TolokaHit>): List<TolokaHit> {
+    fun filter(details: AnimeDetails, ukrainianTitle: String?, hits: List<TolokaHit>,
+        additionalNames: List<String> = emptyList()): List<TolokaHit> {
         val names = (listOfNotNull(ukrainianTitle, details.title.english, details.title.romaji,
-            details.title.native) + details.synonyms).map(::normalize).filter { it.length >= 4 }.distinct()
+            details.title.native) + details.synonyms + additionalNames)
+            .map(::normalize).filter { it.length >= 4 }.distinct()
         val expectedSeason = (listOfNotNull(ukrainianTitle, details.title.english, details.title.romaji,
             details.title.native) + details.synonyms).firstNotNullOfOrNull(::seasonNumber)
         return hits.filter { hit ->

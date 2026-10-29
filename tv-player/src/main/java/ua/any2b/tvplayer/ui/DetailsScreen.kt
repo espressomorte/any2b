@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -24,6 +25,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
@@ -48,8 +50,10 @@ import ua.any2b.core.anitube.AnitubeEpisode
 import ua.any2b.core.anitube.AnitubeSearchResult
 import ua.any2b.core.anitube.AnitubeVoice
 import ua.any2b.core.toloka.TolokaHit
+import ua.any2b.core.toloka.shortenedSearchNames
+import ua.any2b.core.tmdb.TmdbTitle
 
-@OptIn(ExperimentalLayoutApi::class, ExperimentalTvMaterial3Api::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class, ExperimentalTvMaterial3Api::class)
 @Composable
 fun DetailsScreen(
     state: DetailsState,
@@ -58,6 +62,8 @@ fun DetailsScreen(
     onSelectRelease: (AnitubeSearchResult) -> Unit,
     onManualSearch: (String) -> Unit,
     onResetManualSearch: () -> Unit,
+    onSelectTmdb: (TmdbTitle) -> Unit,
+    onFindTmdbCandidates: () -> Unit,
     onTolokaSearch: (String) -> Unit,
     onSelectTolokaHit: (String) -> Unit,
     onRetryTolokaMetadata: () -> Unit,
@@ -111,13 +117,17 @@ fun DetailsScreen(
                 var initialWatchFocusSet by remember(state.details.id) { mutableStateOf(false) }
                 var showReleaseDialog by remember(state.details.id) { mutableStateOf(false) }
                 var showManualDialog by remember(state.details.id) { mutableStateOf(false) }
+                var showTmdbDialog by remember(state.details.id) { mutableStateOf(false) }
                 var showRelatedDialog by remember(state.details.id) { mutableStateOf(false) }
                 var showTolokaQueryDialog by remember(state.details.id) { mutableStateOf(false) }
                 var videoTab by rememberSaveable(state.details.id) { mutableStateOf("online") }
-                val tolokaUkrainianTitle = (state.videoSource as? VideoSourceState.Success)?.release?.title
+                val anitubeUkrainianTitle = (state.videoSource as? VideoSourceState.Success)?.release?.title
+                val tmdbUkrainianTitle = state.tmdbLink.ukrainianTitle
+                val tolokaUkrainianTitle = anitubeUkrainianTitle ?: tmdbUkrainianTitle
                 val customTolokaQueries = remember(state.details.id) { mutableStateListOf<String>() }
                 val tolokaOptions = (customTolokaQueries.map { "Власний" to it } +
-                    tolokaQueryOptions(state.details, tolokaUkrainianTitle)).distinctBy { it.second.lowercase() }
+                    tolokaQueryOptions(state.details, anitubeUkrainianTitle, tmdbUkrainianTitle))
+                    .distinctBy { it.second.lowercase() }
                 var tolokaQueryCustomized by rememberSaveable(state.details.id) { mutableStateOf(false) }
                 var tolokaQuery by rememberSaveable(state.details.id) {
                     mutableStateOf(tolokaOptions.firstOrNull()?.second.orEmpty())
@@ -316,13 +326,33 @@ fun DetailsScreen(
                     ) {
                         // Fixed title block above the scrolling source content.
                         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                            val tmdbTitle = when (val link = state.tmdbLink) {
+                                is TmdbLinkState.Confirmed -> link.title.matchedSeasonTitle
+                                    ?: link.title.ukrainianTitle ?: link.title.title
+                                is TmdbLinkState.Candidates -> link.suggested?.let { candidate ->
+                                    candidate.matchedSeasonTitle ?: candidate.ukrainianTitle
+                                        ?: candidate.title
+                                }
+                                else -> null
+                            }
+                            val sourceTitle = anitubeUkrainianTitle ?: tmdbTitle
                             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Row(modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                                     verticalAlignment = Alignment.CenterVertically) {
                                     Text(
                                         text = state.details.title.display,
-                                        modifier = Modifier.weight(1f, fill = false),
+                                        modifier = Modifier.weight(1f, fill = false)
+                                            .then(if (sourceTitle == null) Modifier.combinedClickable(
+                                                onClick = {
+                                                    onResetManualSearch()
+                                                    showManualDialog = true
+                                                },
+                                                onLongClick = {
+                                                    if (state.tmdbLink is TmdbLinkState.Error) onFindTmdbCandidates()
+                                                    showTmdbDialog = true
+                                                },
+                                            ) else Modifier),
                                         style = MaterialTheme.typography.headlineLarge,
                                         color = Color.White,
                                         fontWeight = FontWeight.Bold,
@@ -333,26 +363,36 @@ fun DetailsScreen(
                                         Text("$year", color = AppColors.TextSecondary, fontSize = 16.sp)
                                     }
                                 }
-                                val ukrainianTitle = (state.videoSource as? VideoSourceState.Success)
-                                    ?.release?.title ?: when (state.videoSource) {
-                                        VideoSourceState.Loading -> "Шукаємо українську назву..."
-                                        else -> "Українську назву не вибрано"
-                                    }
-                                var isUkrainianTitleFocused by remember { mutableStateOf(false) }
-                                Text(
-                                    text = ukrainianTitle,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = if (isUkrainianTitleFocused) AppColors.NeonCyan else AppColors.TextLight,
-                                    modifier = Modifier
-                                        .onFocusChanged { isUkrainianTitleFocused = it.isFocused }
-                                        .clickable {
-                                            onResetManualSearch()
-                                            showManualDialog = true
-                                        }
-                                        .semantics { contentDescription = "Уточнити реліз AniTube: $ukrainianTitle" },
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
+                                if (sourceTitle != null) {
+                                    val displayTitle = if (anitubeUkrainianTitle != null) sourceTitle
+                                        else "$sourceTitle · TMDB"
+                                    var sourceTitleFocused by remember { mutableStateOf(false) }
+                                    Text(
+                                        text = displayTitle,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = if (sourceTitleFocused) AppColors.NeonCyan else AppColors.TextLight,
+                                        modifier = Modifier
+                                            .onFocusChanged { sourceTitleFocused = it.isFocused }
+                                            .combinedClickable(
+                                                onClick = {
+                                                    onResetManualSearch()
+                                                    showManualDialog = true
+                                                },
+                                                onLongClick = {
+                                                    if (state.tmdbLink is TmdbLinkState.Confirmed ||
+                                                        state.tmdbLink is TmdbLinkState.Error) {
+                                                        onFindTmdbCandidates()
+                                                    }
+                                                    showTmdbDialog = true
+                                                },
+                                            )
+                                            .semantics {
+                                                contentDescription = "Назва релізу: $displayTitle. OK — змінити реліз AniTube; утримувати — уточнити TMDB"
+                                            },
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
                             }
 
                         }
@@ -438,6 +478,7 @@ fun DetailsScreen(
                                     }
 
                                     when (val source = state.videoSource) {
+                                        VideoSourceState.NotFound -> Unit
                                         VideoSourceState.Loading -> Row(
                                             modifier = Modifier.padding(horizontal = 16.dp),
                                             verticalAlignment = Alignment.CenterVertically,
@@ -787,6 +828,71 @@ fun DetailsScreen(
                         }
                     )
                 }
+                if (showTmdbDialog) {
+                    TmdbMatchDialog(state.tmdbLink,
+                        onDismiss = { showTmdbDialog = false },
+                        onRetry = onFindTmdbCandidates,
+                        onSelect = { selected ->
+                            showTmdbDialog = false
+                            onSelectTmdb(selected)
+                        })
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun TmdbMatchDialog(
+    link: TmdbLinkState,
+    onDismiss: () -> Unit,
+    onRetry: () -> Unit,
+    onSelect: (TmdbTitle) -> Unit,
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            Modifier.width(600.dp).heightIn(max = 620.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .background(AppColors.SurfaceDark).padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text("Уточнити назву TMDB", style = MaterialTheme.typography.titleLarge,
+                color = AppColors.TextLight)
+            Text("Виберіть відповідний тайтл. Зв’язок збережеться після підтвердження.",
+                color = AppColors.TextSecondary)
+            Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                when (link) {
+                    TmdbLinkState.Loading -> Text("Пошук кандидатів…", color = AppColors.TextLight)
+                    is TmdbLinkState.Error -> Text(link.message, color = AppColors.ErrorRed)
+                    is TmdbLinkState.Confirmed -> Text("Пошук кандидатів…", color = AppColors.TextLight)
+                    is TmdbLinkState.Candidates -> {
+                        if (link.matches.isEmpty()) Text("Відповідників не знайдено", color = AppColors.TextSecondary)
+                        link.matches.forEach { match ->
+                            val title = match.title
+                            val secondary = listOfNotNull(title.englishTitle,
+                                title.originalTitle).distinct().filter { it != title.ukrainianTitle }
+                                .take(2).joinToString(" · ")
+                            Button(onClick = { onSelect(title) }, modifier = Modifier.fillMaxWidth()) {
+                                Column(Modifier.fillMaxWidth()) {
+                                    Text(title.matchedSeasonTitle ?: title.ukrainianTitle ?: title.title,
+                                        maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                    if (secondary.isNotBlank()) Text(secondary,
+                                        style = MaterialTheme.typography.labelSmall)
+                                    Text("${if (title.type == ua.any2b.core.tmdb.TmdbMediaType.MOVIE) "Фільм" else "TV"} · " +
+                                        "${title.matchedSeasonYear ?: title.year ?: "рік невідомий"}" +
+                                        if (16 in title.genreIds) " · Animation" else "",
+                                        style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Button(onClick = onRetry) { Text("Шукати знову") }
+                Button(onClick = onDismiss) { Text("Закрити") }
             }
         }
     }
@@ -954,17 +1060,27 @@ internal fun TolokaSearchPanel(
     }
 }
 
-private fun tolokaQueryOptions(details: AnimeDetails, releaseTitle: String?): List<Pair<String, String>> {
+private fun tolokaQueryOptions(details: AnimeDetails, releaseTitle: String?,
+    tmdbTitle: String?): List<Pair<String, String>> {
     val ukrainian = releaseTitle?.takeIf(String::isNotBlank)
+        ?: tmdbTitle?.takeIf(String::isNotBlank)
         ?: details.synonyms.firstOrNull { it.contains(Regex("[іїєґІЇЄҐ]")) }
     val year = details.seasonYear?.toString()
     return buildList {
-        fun addName(label: String, name: String?) {
-            val value = name?.trim()?.takeIf(String::isNotBlank) ?: return
+        fun addVariant(label: String, value: String) {
             add(label to value)
             if (year != null) add("$label + рік" to "$value $year")
         }
+        fun addName(label: String, name: String?) {
+            val value = name?.trim()?.takeIf(String::isNotBlank) ?: return
+            addVariant(label, value)
+            shortenedSearchNames(value).forEach { short ->
+                addVariant("$label · без уточнення", short)
+            }
+        }
         addName("Українська", ukrainian)
+        if (releaseTitle != null && tmdbTitle != null && releaseTitle != tmdbTitle)
+            addName("Українська TMDB", tmdbTitle)
         addName("English", details.title.english)
         addName("Romaji", details.title.romaji)
         addName("Native", details.title.native)
@@ -977,7 +1093,7 @@ private fun tolokaQueryOptions(details: AnimeDetails, releaseTitle: String?): Li
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun TolokaQueryDialog(
+internal fun TolokaQueryDialog(
     options: List<Pair<String, String>>,
     selectedQuery: String,
     onDismiss: () -> Unit,
@@ -1147,15 +1263,13 @@ private fun TolokaTransferContent(
                             verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(file.path, color = when {
                                 focused -> AppColors.ButtonDarkText
-                                opened -> AppColors.TextMuted
                                 else -> Color.White
-                            })
+                            }.let { if (opened) lerp(it, Color.Black, 0.3f) else it })
                             Text(formatFileSize(file.length), fontSize = 12.sp,
                                 color = when {
                                     focused -> AppColors.ButtonDarkText
-                                    opened -> AppColors.TextMuted
                                     else -> AppColors.TextSecondary
-                                })
+                                }.let { if (opened) lerp(it, Color.Black, 0.3f) else it })
                         }
                     }
                 }
@@ -1552,6 +1666,7 @@ private fun DetailsGenreTags(genres: List<String>, onOpenGenre: (String) -> Unit
     FlowRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
+        maxLines = 3,
         modifier = Modifier.fillMaxWidth(),
     ) {
         genres.forEach { genre ->
@@ -1580,7 +1695,7 @@ private fun DetailsGenreTags(genres: List<String>, onOpenGenre: (String) -> Unit
                     genreLabel(genre),
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                     color = if (isFocused) AppColors.ButtonDarkText else AppColors.TextLight,
-                    fontSize = 11.sp,
+                    fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
                 )
             }
@@ -1663,6 +1778,8 @@ private fun DetailsScreenPreview() {
             onSelectRelease = {},
             onManualSearch = {},
             onResetManualSearch = {},
+            onSelectTmdb = {},
+            onFindTmdbCandidates = {},
             onTolokaSearch = {},
             onSelectTolokaHit = {},
             onRetryTolokaMetadata = {},

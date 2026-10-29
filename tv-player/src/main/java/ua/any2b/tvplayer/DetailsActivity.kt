@@ -53,6 +53,8 @@ class DetailsActivity : ComponentActivity() {
                     onSelectRelease = viewModel::selectRelease,
                     onManualSearch = viewModel::searchManualRelease,
                     onResetManualSearch = viewModel::resetManualReleaseSearch,
+                    onSelectTmdb = viewModel::confirmTmdbLink,
+                    onFindTmdbCandidates = { viewModel.retryTmdbLink(ignoreSaved = true) },
                     onTolokaSearch = viewModel::searchToloka,
                     onSelectTolokaHit = viewModel::selectTolokaHit,
                     onRetryTolokaMetadata = viewModel::retryTolokaMetadata,

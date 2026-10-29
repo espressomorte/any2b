@@ -37,6 +37,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -69,8 +70,18 @@ fun TmdbSearchScreen(
     onOpen: (TmdbTitle) -> Unit,
 ) {
     val inputFocus = remember { FocusRequester() }
+    val searchFocus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    val finishInput = { keyboard?.hide(); focusManager.clearFocus(force = true) }
+    var focusSearchAfterHistory by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { inputFocus.requestFocus() }
+    LaunchedEffect(focusSearchAfterHistory, state.query, state.showRecentTitles) {
+        if (focusSearchAfterHistory && state.query.isNotBlank() && !state.showRecentTitles) {
+            searchFocus.requestFocus()
+            focusSearchAfterHistory = false
+        }
+    }
 
     Column(
         modifier = Modifier.fillMaxSize().background(AppColors.BackgroundDark).padding(32.dp),
@@ -95,16 +106,17 @@ fun TmdbSearchScreen(
                     singleLine = true,
                     textStyle = TextStyle(color = Color.White, fontSize = 16.sp),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(onSearch = { keyboard?.hide(); onSearch() }),
+                    keyboardActions = KeyboardActions(onSearch = { finishInput(); onSearch() }),
                     modifier = Modifier.fillMaxWidth().focusRequester(inputFocus),
                 )
             }
             TmdbSearchActionIcon(FaIcons.SEARCH, "Шукати у TMDB",
-                enabled = state.query.isNotBlank()) { keyboard?.hide(); onSearch() }
+                enabled = state.query.isNotBlank(),
+                modifier = Modifier.focusRequester(searchFocus)) { finishInput(); onSearch() }
             TmdbSearchActionIcon(FaIcons.RECYCLE, "Очистити історію пошуку",
                 enabled = state.recentTitles.isNotEmpty() || state.query.isNotEmpty() ||
                     state.results.isNotEmpty() || state.error != null,
-                onClick = onClearHistory)
+                onClick = { finishInput(); onClearHistory() })
         }
 
         if (state.showRecentTitles && state.recentTitles.isNotEmpty()) {
@@ -120,7 +132,11 @@ fun TmdbSearchScreen(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.fillMaxWidth()
                             .onFocusChanged { focused = it.isFocused }
-                            .clickable { onSelectRecentTitle(title) },
+                            .clickable {
+                                finishInput()
+                                focusSearchAfterHistory = true
+                                onSelectRecentTitle(title)
+                            },
                     )
                 }
             }
@@ -155,7 +171,8 @@ fun TmdbSearchScreen(
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun TmdbSearchActionIcon(icon: String, label: String, enabled: Boolean, onClick: () -> Unit) {
+private fun TmdbSearchActionIcon(icon: String, label: String, enabled: Boolean,
+    modifier: Modifier = Modifier, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     Surface(
         onClick = onClick,
@@ -167,7 +184,7 @@ private fun TmdbSearchActionIcon(icon: String, label: String, enabled: Boolean, 
             containerColor = AppColors.SurfaceCard,
             focusedContainerColor = AppColors.NeonCyanLight,
         ),
-        modifier = Modifier.size(48.dp)
+        modifier = modifier.size(48.dp)
             .semantics { contentDescription = label }
             .onFocusChanged { focused = it.isFocused },
     ) {
@@ -179,7 +196,7 @@ private fun TmdbSearchActionIcon(icon: String, label: String, enabled: Boolean, 
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun TmdbPosterCard(title: TmdbTitle, query: String, onClick: () -> Unit) {
+internal fun TmdbPosterCard(title: TmdbTitle, query: String = "", onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     Column(Modifier.width(160.dp).padding(4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Card(
@@ -204,7 +221,7 @@ private fun TmdbPosterCard(title: TmdbTitle, query: String, onClick: () -> Unit)
                 }
             }
         }
-        Text(title.searchNames(query).joinToString(" · "),
+        Text((if (query.isBlank()) listOf(title.title) else title.searchNames(query)).joinToString(" · "),
             color = if (focused) AppColors.NeonCyan else AppColors.TextLight,
             maxLines = 3, overflow = TextOverflow.Ellipsis,
             style = MaterialTheme.typography.labelMedium)

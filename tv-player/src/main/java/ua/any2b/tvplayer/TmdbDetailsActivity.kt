@@ -2,16 +2,22 @@ package ua.any2b.tvplayer
 
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ua.any2b.core.tmdb.TmdbMediaType
+import ua.any2b.core.tmdb.trailerSearchUrl
 import ua.any2b.tvplayer.data.ExternalVideoPlayers
 import ua.any2b.tvplayer.data.SettingsManager
 import ua.any2b.tvplayer.data.TorrServerAuthStore
+import ua.any2b.tvplayer.data.TolokaPlaybackStore
 import ua.any2b.tvplayer.ui.AppTheme
 import ua.any2b.tvplayer.ui.TmdbDetailsScreen
 import ua.any2b.tvplayer.ui.TmdbDetailsViewModel
@@ -30,6 +36,10 @@ class TmdbDetailsActivity : ComponentActivity() {
     private val detailsViewModel: TmdbDetailsViewModel by viewModels()
     private val tolokaViewModel: TolokaSearchViewModel by viewModels()
     private var launchingPlayer = false
+    private var openedFiles by mutableStateOf(emptySet<Int>())
+    private var selectedTopicId: String? = null
+    private var tmdbId = -1
+    private var tmdbType = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -39,6 +49,8 @@ class TmdbDetailsActivity : ComponentActivity() {
             finish()
             return
         }
+        tmdbId = id
+        tmdbType = type.path
         val query = intent.getStringExtra(EXTRA_SEARCH_QUERY).orEmpty()
         val preferredTitle = intent.getStringExtra(EXTRA_PREFERRED_TITLE)
         val originalLanguage = intent.getStringExtra(EXTRA_ORIGINAL_LANGUAGE)
@@ -49,14 +61,39 @@ class TmdbDetailsActivity : ComponentActivity() {
                 TmdbDetailsScreen(
                     state = detailsViewModel.state.collectAsStateWithLifecycle().value,
                     toloka = tolokaViewModel.state.collectAsStateWithLifecycle().value,
+                    openedFiles = openedFiles,
                     onRetryDetails = {
                         detailsViewModel.load(type, id, query, preferredTitle,
                             originalLanguage, originalTitle, force = true)
                     },
                     onSearchTorrent = tolokaViewModel::search,
-                    onSelectTorrent = tolokaViewModel::selectHit,
+                    onSelectTorrent = { topicId ->
+                        selectedTopicId = topicId
+                        openedFiles = TolokaPlaybackStore(this).openedTmdbFileIds(
+                            tmdbType, tmdbId, topicId)
+                        tolokaViewModel.selectHit(topicId)
+                    },
                     onRetryMetadata = tolokaViewModel::retryMetadata,
                     onPlayFile = ::openFile,
+                    onToggleFavorite = detailsViewModel::toggleFavorite,
+                    onTrailer = {
+                        val details = (detailsViewModel.state.value as?
+                            ua.any2b.tvplayer.ui.TmdbDetailsState.Ready)?.details
+                        if (details != null) try {
+                            startActivity(Intent(Intent.ACTION_VIEW,
+                                Uri.parse(details.trailerSearchUrl())))
+                        } catch (_: ActivityNotFoundException) {
+                            Toast.makeText(this, "Немає застосунку для відкриття трейлера",
+                                Toast.LENGTH_LONG).show()
+                        }
+                    },
+                    onRetryRelated = detailsViewModel::retryRelated,
+                    onOpenRelated = { related ->
+                        startActivity(Intent(this, TmdbDetailsActivity::class.java).apply {
+                            putExtra(EXTRA_TMDB_ID, related.id)
+                            putExtra(EXTRA_TMDB_TYPE, related.type.path)
+                        })
+                    },
                     onBack = ::finish,
                 )
             }
@@ -66,6 +103,10 @@ class TmdbDetailsActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         launchingPlayer = false
+        selectedTopicId?.let { topicId ->
+            openedFiles = TolokaPlaybackStore(this).openedTmdbFileIds(
+                tmdbType, tmdbId, topicId)
+        }
     }
 
     private fun openFile(fileId: Int) {
@@ -99,9 +140,22 @@ class TmdbDetailsActivity : ComponentActivity() {
             Toast.makeText(this, "Захищений TorrServer відкриваємо у вбудованому плеєрі", Toast.LENGTH_LONG).show()
         }
         try {
+            val title = (detailsViewModel.state.value as?
+                ua.any2b.tvplayer.ui.TmdbDetailsState.Ready)?.details?.title
             startActivity(Intent(this, PlayerActivity::class.java).apply {
                 putExtra(PlayerActivity.EXTRA_STREAM_URL, url)
                 putExtra(PlayerActivity.EXTRA_SOURCE_TYPE, PlayerActivity.SOURCE_TOLOKA)
+                selectedTopicId?.let { putExtra(PlayerActivity.EXTRA_TOLOKA_TOPIC_ID, it) }
+                putExtra(PlayerActivity.EXTRA_TOLOKA_FILE_ID, fileId)
+                title?.let {
+                    putExtra(PlayerActivity.EXTRA_TMDB_ID, it.id)
+                    putExtra(PlayerActivity.EXTRA_TMDB_TYPE, it.type.path)
+                    putExtra(PlayerActivity.EXTRA_TMDB_TITLE, it.title)
+                    putExtra(PlayerActivity.EXTRA_TMDB_ORIGINAL_TITLE, it.originalTitle)
+                    putExtra(PlayerActivity.EXTRA_TMDB_YEAR, it.year ?: 0)
+                    putExtra(PlayerActivity.EXTRA_TMDB_POSTER_URL, it.posterUrl)
+                    putExtra(PlayerActivity.EXTRA_TMDB_RATING, it.rating ?: Double.NaN)
+                }
             })
             tolokaViewModel.reportPlaybackStatus("URL передано вбудованому плеєру")
         } catch (_: Exception) {
