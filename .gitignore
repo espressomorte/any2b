@@ -44,6 +44,7 @@ key.properties
 *credentials*
 *password*
 *signing*
+!tv-player/src/main/java/ua/any2b/tvplayer/data/TolokaCredentialStore.kt
 
 # External native build folders
 .externalNativeBuild/
