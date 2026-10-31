@@ -54,6 +54,8 @@ jobs:
 
       - name: Build release APK
         env:
+          CURL_GIST_URL: ${{ vars.CURL_GIST_URL }}
+          MAL_CLIENT_ID: ${{ secrets.MAL_CLIENT_ID }}
           ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/keystore/release.jks
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
