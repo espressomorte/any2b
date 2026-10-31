@@ -14,12 +14,14 @@ class EncryptedIntegrationConfigTest {
     @Test
     fun decryptsNestedJsonWithExpectedWireFormat() {
         val payload = encrypt("""{"worker":{"url":"https://example.com","key":"worker-test"},
-            "tmdb":{"token":"tmdb-test"},"fanart":{"key":"fanart-test"}}""", "password")
+            "tmdb":{"token":"tmdb-test"},"fanart":{"key":"fanart-test"},
+            "mal":{"clientid":"0123456789abcdef0123456789abcdef"}}""", "password")
         val config = EncryptedIntegrationConfig.decrypt(payload, "password".toCharArray())
         assertEquals("https://example.com", config.workerUrl)
         assertEquals("worker-test", config.workerKey)
         assertEquals("tmdb-test", config.tmdbToken)
         assertEquals("fanart-test", config.fanartKey)
+        assertEquals("0123456789abcdef0123456789abcdef", config.malClientId)
     }
 
     @Test

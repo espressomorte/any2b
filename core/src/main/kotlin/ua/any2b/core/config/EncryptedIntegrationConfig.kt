@@ -18,9 +18,10 @@ data class IntegrationConfig(
     val tmdbToken: String? = null,
     val tolokaUser: String? = null,
     val tolokaPassword: String? = null,
+    val malClientId: String? = null,
 ) {
     val hasValues: Boolean get() = listOf(workerUrl, workerKey, torrServerUrl,
-        fanartKey, tmdbToken, tolokaUser).any { !it.isNullOrBlank() }
+        fanartKey, tmdbToken, tolokaUser, malClientId).any { !it.isNullOrBlank() }
 }
 
 /** Wire format: 16-byte salt, 12-byte IV, AES-256-GCM ciphertext and tag. */
@@ -78,6 +79,8 @@ object EncryptedIntegrationConfig {
             tolokaUser = get("tolokaUser", "tolokaUsername", "toloka.username",
                 "tolokaLogin", "toloka.login"),
             tolokaPassword = get("tolokaPassword", "toloka.password"),
+            malClientId = get("malClientId", "mal.clientid", "mal.clientId",
+                "myAnimeListClientId", "myanimelist.clientid"),
         ).also { require(it.hasValues) { "Конфіг не містить підтримуваних полів" } }
     }
 }

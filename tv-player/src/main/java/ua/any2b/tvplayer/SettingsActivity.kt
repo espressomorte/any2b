@@ -36,6 +36,7 @@ import ua.any2b.tvplayer.data.WatchHistoryManager
 import ua.any2b.tvplayer.data.WorkerKeyStore
 import ua.any2b.tvplayer.data.FanartKeyStore
 import ua.any2b.tvplayer.data.TmdbKeyStore
+import ua.any2b.tvplayer.data.MalClientIdStore
 import ua.any2b.tvplayer.data.TolokaCredentialStore
 import ua.any2b.tvplayer.data.TolokaConnections
 import ua.any2b.tvplayer.data.EncryptedConfigSource
@@ -68,6 +69,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private val workerKeyStore = WorkerKeyStore(application)
     private val fanartKeyStore = FanartKeyStore(application)
     private val tmdbKeyStore = TmdbKeyStore(application)
+    private val malClientIdStore = MalClientIdStore(application)
     private val tolokaCredentialStore = TolokaCredentialStore(application)
     private val encryptedConfigSource = EncryptedConfigSource(application)
     private val fanartClient = FanartClient()
@@ -87,6 +89,11 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     val fanartKeyConfigured: StateFlow<Boolean> = _fanartKeyConfigured
     private val _tmdbTokenConfigured = MutableStateFlow(tmdbKeyStore.read() != null)
     val tmdbTokenConfigured: StateFlow<Boolean> = _tmdbTokenConfigured
+    private val _malClientIdConfigured = MutableStateFlow(
+        malClientIdStore.read() != null || BuildConfig.MAL_CLIENT_ID.isNotBlank())
+    val malClientIdConfigured: StateFlow<Boolean> = _malClientIdConfigured
+    private val _malClientIdError = MutableStateFlow("")
+    val malClientIdError: StateFlow<String> = _malClientIdError
     private val _fanartKeyError = MutableStateFlow("")
     val fanartKeyError: StateFlow<String> = _fanartKeyError
     private val _fanartCheck = MutableStateFlow("")
@@ -179,6 +186,11 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                         !config.tolokaPassword.isNullOrBlank()) {
                         "Для автономного режиму потрібні токен TMDB і логін/пароль Toloka у конфігу"
                     }
+                    config.malClientId?.let { value ->
+                        require(value.matches(Regex("[0-9a-fA-F]{32}"))) {
+                            "Некоректний MyAnimeList Client ID у конфігу"
+                        }
+                    }
                     config.workerUrl?.let(::setWorkerUrl)
                     config.workerKey?.let(::setWorkerKey)
                     config.torrServerUrl?.let(::setTorrServerUrl)
@@ -189,6 +201,10 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                     _torrServerAuthConfigured.value = torrServerAuthStore.read() != null
                     config.fanartKey?.let(::setFanartKey)
                     config.tmdbToken?.let(tmdbKeyStore::write)
+                    config.malClientId?.let(malClientIdStore::write)
+                    _malClientIdConfigured.value = malClientIdStore.read() != null ||
+                        BuildConfig.MAL_CLIENT_ID.isNotBlank()
+                    _malClientIdError.value = ""
                     val tolokaUser = config.tolokaUser
                     val tolokaPassword = config.tolokaPassword
                     if (!tolokaUser.isNullOrBlank() && !tolokaPassword.isNullOrBlank())
@@ -228,6 +244,19 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             _tmdbTokenConfigured.value = tmdbKeyStore.read() != null
         } catch (_: Exception) {
             _encryptedConfigStatus.value = "Не вдалося захищено зберегти токен TMDB"
+        }
+    }
+
+    fun setMalClientId(value: String) {
+        try {
+            malClientIdStore.write(value)
+            _malClientIdConfigured.value = malClientIdStore.read() != null ||
+                BuildConfig.MAL_CLIENT_ID.isNotBlank()
+            _malClientIdError.value = ""
+        } catch (error: IllegalArgumentException) {
+            _malClientIdError.value = error.message.orEmpty()
+        } catch (_: Exception) {
+            _malClientIdError.value = "Не вдалося зберегти MyAnimeList Client ID"
         }
     }
 
@@ -490,6 +519,8 @@ class SettingsActivity : ComponentActivity() {
                 val workerKeyConfigured = viewModel.workerKeyConfigured.collectAsStateWithLifecycle().value
                 val fanartKeyConfigured = viewModel.fanartKeyConfigured.collectAsStateWithLifecycle().value
                 val tmdbTokenConfigured = viewModel.tmdbTokenConfigured.collectAsStateWithLifecycle().value
+                val malClientIdConfigured = viewModel.malClientIdConfigured.collectAsStateWithLifecycle().value
+                val malClientIdError = viewModel.malClientIdError.collectAsStateWithLifecycle().value
                 val fanartKeyError = viewModel.fanartKeyError.collectAsStateWithLifecycle().value
                 val fanartCheck = viewModel.fanartCheck.collectAsStateWithLifecycle().value
                 val encryptedConfigEnabled = viewModel.encryptedConfigEnabled.collectAsStateWithLifecycle().value
@@ -512,6 +543,8 @@ class SettingsActivity : ComponentActivity() {
                     workerKeyConfigured = workerKeyConfigured,
                     fanartKeyConfigured = fanartKeyConfigured,
                     tmdbTokenConfigured = tmdbTokenConfigured,
+                    malClientIdConfigured = malClientIdConfigured,
+                    malClientIdError = malClientIdError,
                     fanartKeyError = fanartKeyError,
                     fanartCheck = fanartCheck,
                     encryptedConfigEnabled = encryptedConfigEnabled,
@@ -530,6 +563,7 @@ class SettingsActivity : ComponentActivity() {
                     onExperimentalAppearanceChanged = viewModel::setExperimentalAppearance,
                     onFanartKeyChanged = viewModel::setFanartKey,
                     onTmdbTokenChanged = viewModel::setTmdbToken,
+                    onMalClientIdChanged = viewModel::setMalClientId,
                     onCheckFanartKey = viewModel::checkFanartKey,
                     onEncryptedConfigChanged = viewModel::setEncryptedConfigEnabled,
                     onApplyEncryptedConfig = viewModel::applyEncryptedConfig,

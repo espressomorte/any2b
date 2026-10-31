@@ -14,9 +14,9 @@ class MalTmdbCatalog(private val context: Context) {
     private val client = MalClient()
 
     suspend fun page(page: Int, perPage: Int = 25): MalTmdbPage {
-        val clientId = BuildConfig.MAL_CLIENT_ID
+        val clientId = (MalClientIdStore(context).read() ?: BuildConfig.MAL_CLIENT_ID)
             .takeIf(String::isNotBlank)
-            ?: throw IllegalStateException("Налаштуйте mal.clientid у local.properties")
+            ?: throw IllegalStateException("Налаштуйте MyAnimeList Client ID у розділі «Інтеграції»")
         val key = page to perPage
         synchronized(cache) {
             cache[key]?.takeIf { SystemClock.elapsedRealtime() - it.first < CACHE_AGE_MS }

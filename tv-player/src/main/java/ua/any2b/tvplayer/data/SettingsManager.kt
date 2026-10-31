@@ -3,6 +3,7 @@ package ua.any2b.tvplayer.data
 import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
+import ua.any2b.tvplayer.BuildConfig
 
 class SettingsManager(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences("settings_prefs", Context.MODE_PRIVATE)
@@ -25,8 +26,15 @@ class SettingsManager(context: Context) {
         prefs.edit().putBoolean("encrypted_config_enabled", enabled).apply()
     }
 
-    fun encryptedConfigUrl(): String = prefs.getString("encrypted_config_url", DEFAULT_CONFIG_URL)
-        ?.takeIf(String::isNotBlank) ?: DEFAULT_CONFIG_URL
+    fun encryptedConfigUrl(): String {
+        val configured = BuildConfig.ENCRYPTED_CONFIG_URL.takeIf(String::isNotBlank)
+        val saved = prefs.getString("encrypted_config_url", null)?.takeIf(String::isNotBlank)
+        return when {
+            saved == OLD_CONFIG_URL -> configured ?: DEFAULT_CONFIG_URL
+            saved != null -> saved
+            else -> configured ?: DEFAULT_CONFIG_URL
+        }
+    }
 
     fun setEncryptedConfigUrl(value: String) {
         prefs.edit().putString("encrypted_config_url", value.trim()).apply()
@@ -140,7 +148,8 @@ class SettingsManager(context: Context) {
 
     private companion object {
         val homeSectionsLock = Any()
-        const val DEFAULT_CONFIG_URL =
+        const val OLD_CONFIG_URL =
             "https://gist.githubusercontent.com/espressomorte/62c423c03f3f2d54a3a8721b37b0183f/raw/9c1527655734c04e2f6f2f72c116d4a657bb3003/config.txt"
+        const val DEFAULT_CONFIG_URL = "https://gist.githubusercontent.com/espressomorte/5d12b0ed49ed9d1726896405b3d87a22/raw/d105432385f05f81cfd62ca6cc437a57c3d8a358/config.txt"
     }
 }

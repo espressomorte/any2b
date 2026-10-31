@@ -54,6 +54,8 @@ fun SettingsScreen(
     experimentalAppearance: Boolean,
     fanartKeyConfigured: Boolean,
     tmdbTokenConfigured: Boolean,
+    malClientIdConfigured: Boolean,
+    malClientIdError: String,
     fanartKeyError: String,
     fanartCheck: String,
     encryptedConfigEnabled: Boolean,
@@ -81,6 +83,7 @@ fun SettingsScreen(
     onExperimentalAppearanceChanged: (Boolean) -> Unit,
     onFanartKeyChanged: (String) -> Unit,
     onTmdbTokenChanged: (String) -> Unit,
+    onMalClientIdChanged: (String) -> Unit,
     onCheckFanartKey: () -> Unit,
     onEncryptedConfigChanged: (Boolean) -> Unit,
     onApplyEncryptedConfig: (String) -> Unit,
@@ -134,6 +137,8 @@ fun SettingsScreen(
         TorrentConnectionsMenu(
             fanartKeyConfigured = fanartKeyConfigured,
             tmdbTokenConfigured = tmdbTokenConfigured,
+            malClientIdConfigured = malClientIdConfigured,
+            malClientIdError = malClientIdError,
             fanartKeyError = fanartKeyError,
             fanartCheck = fanartCheck,
             encryptedConfigEnabled = encryptedConfigEnabled,
@@ -153,6 +158,7 @@ fun SettingsScreen(
             onCheckTorrServer = onCheckTorrServer,
             onFanartKeyChanged = onFanartKeyChanged,
             onTmdbTokenChanged = onTmdbTokenChanged,
+            onMalClientIdChanged = onMalClientIdChanged,
             onCheckFanartKey = onCheckFanartKey,
             onEncryptedConfigChanged = onEncryptedConfigChanged,
             onApplyEncryptedConfig = onApplyEncryptedConfig,
@@ -172,7 +178,7 @@ fun SettingsScreen(
         "Очистіть усю збережену історію перегляду та поточний прогрес серій.",
         "Налаштуйте порядок та видимість списків на новій головній сторінці.",
         "Налаштуйте порядок та видимість рядків у каталозі Анітюб.",
-        "Worker, TorrServer, fanart.tv та зашифрований конфіг розміщені у розділі інтеграцій.",
+        "Worker, TorrServer, fanart.tv, TMDB, MyAnimeList та зашифрований конфіг розміщені у розділі інтеграцій.",
         "Увімкніть пробний вигляд деталей із постером без тексту та англійським логотипом fanart.tv. Без обох зображень залишиться звичайний вигляд.",
         when (updateState) {
             UpdateState.Idle -> "Перевірте наявність нових версій програми Animarium TV на GitHub."
@@ -443,6 +449,8 @@ private fun FanartKeyBiosDialog(onSave: (String) -> Unit, onDismiss: () -> Unit)
 private fun TorrentConnectionsMenu(
     fanartKeyConfigured: Boolean,
     tmdbTokenConfigured: Boolean,
+    malClientIdConfigured: Boolean,
+    malClientIdError: String,
     fanartKeyError: String,
     fanartCheck: String,
     encryptedConfigEnabled: Boolean,
@@ -462,6 +470,7 @@ private fun TorrentConnectionsMenu(
     onCheckTorrServer: () -> Unit,
     onFanartKeyChanged: (String) -> Unit,
     onTmdbTokenChanged: (String) -> Unit,
+    onMalClientIdChanged: (String) -> Unit,
     onCheckFanartKey: () -> Unit,
     onEncryptedConfigChanged: (Boolean) -> Unit,
     onApplyEncryptedConfig: (String) -> Unit,
@@ -486,6 +495,7 @@ private fun TorrentConnectionsMenu(
             "server" -> onTorrServerUrlChanged(draft)
             "basic" -> onTorrServerAuthChanged(draft)
             "tmdb" -> onTmdbTokenChanged(draft)
+            "mal" -> onMalClientIdChanged(draft)
             "configUrl" -> onEncryptedConfigUrlChanged(draft)
         }
         draft = ""
@@ -542,6 +552,8 @@ private fun TorrentConnectionsMenu(
                         onFocus = { focusedIndex = 7 }, onClick = onCheckFanartKey)
                     BiosSettingRow("Токен TMDB", if (tmdbTokenConfigured) "●●●●●●" else "Не задано",
                         onFocus = { focusedIndex = 11 }, onClick = { draft = ""; editing = "tmdb" })
+                    BiosSettingRow("MyAnimeList Client ID", if (malClientIdConfigured) "●●●●●●" else "Не задано",
+                        onFocus = { focusedIndex = 13 }, onClick = { draft = ""; editing = "mal" })
                     Spacer(Modifier.height(8.dp))
                     BiosSettingRow("URL конфіга", "Змінити",
                         onFocus = { focusedIndex = 12 },
@@ -579,6 +591,7 @@ private fun TorrentConnectionsMenu(
                             6 -> "Особистий ключ fanart.tv для експериментального вигляду."
                             7 -> "Перевірка ключа fanart.tv без показу самого ключа."
                             11 -> "Особистий токен TMDB для прямого доступу, якщо Worker не налаштований."
+                            13 -> "MyAnimeList Client ID для списків аніме. Можна ввести тут або завантажити з поля mal.clientid у зашифрованому конфігу."
                             8, 9 -> "Завантажити зашифрований конфіг із Gist. У цьому режимі Toloka й TMDB працюють напряму з пристрою. Пароль не зберігається."
                             12 -> "HTTPS-адреса зашифрованого Base64 файла. Задана адреса працює без ручного введення."
                             else -> "Повернутися до основних налаштувань."
@@ -600,6 +613,8 @@ private fun TorrentConnectionsMenu(
                         fontFamily = IbmPlexMono, style = MaterialTheme.typography.bodySmall)
                     if (fanartKeyError.isNotBlank()) Text(fanartKeyError, color = BiosSettingsTheme.TextNormal,
                         fontFamily = IbmPlexMono, style = MaterialTheme.typography.bodySmall)
+                    if (malClientIdError.isNotBlank()) Text(malClientIdError, color = BiosSettingsTheme.TextNormal,
+                        fontFamily = IbmPlexMono, style = MaterialTheme.typography.bodySmall)
                     if (fanartCheck.isNotBlank()) Text(fanartCheck, color = BiosSettingsTheme.TextNormal,
                         fontFamily = IbmPlexMono, style = MaterialTheme.typography.bodySmall)
                     if (encryptedConfigStatus.isNotBlank()) Text(encryptedConfigStatus,
@@ -614,6 +629,7 @@ private fun TorrentConnectionsMenu(
                                 "basic" -> "BASIC TORRSERVER · КОРИСТУВАЧ:ПАРОЛЬ"
                                 "config" -> "ПАРОЛЬ ЗАШИФРОВАНОГО КОНФІГА"
                                 "tmdb" -> "ТОКЕН TMDB"
+                                "mal" -> "MYANIMELIST CLIENT ID"
                                 "configUrl" -> "URL ЗАШИФРОВАНОГО КОНФІГА"
                                 else -> "АДРЕСА TORRSERVER"
                             }, color = BiosSettingsTheme.TextNormal, fontFamily = IbmPlexMono,
@@ -625,11 +641,11 @@ private fun TorrentConnectionsMenu(
                             keyboardOptions = KeyboardOptions(
                                 imeAction = ImeAction.Done,
                                 keyboardType = if (editing == "key" || editing == "basic" ||
-                                    editing == "tmdb" ||
+                                    editing == "tmdb" || editing == "mal" ||
                                     editing == "config") KeyboardType.Password else KeyboardType.Text),
                             keyboardActions = KeyboardActions(onDone = { save() }),
                             visualTransformation = if (editing == "key" || editing == "basic" ||
-                                editing == "tmdb" || editing == "config") PasswordVisualTransformation()
+                                editing == "tmdb" || editing == "mal" || editing == "config") PasswordVisualTransformation()
                                 else VisualTransformation.None,
                             textStyle = androidx.compose.ui.text.TextStyle(
                                 color = BiosSettingsTheme.TextNormal, fontFamily = IbmPlexMono,
@@ -1072,6 +1088,8 @@ private fun SettingsScreenPreview() {
         experimentalAppearance = true,
         fanartKeyConfigured = true,
         tmdbTokenConfigured = false,
+        malClientIdConfigured = true,
+        malClientIdError = "",
         fanartKeyError = "",
         fanartCheck = "Ключ fanart.tv прийнято",
         encryptedConfigEnabled = false,
@@ -1105,6 +1123,7 @@ private fun SettingsScreenPreview() {
         onExperimentalAppearanceChanged = {},
         onFanartKeyChanged = {},
         onTmdbTokenChanged = {},
+        onMalClientIdChanged = {},
         onCheckFanartKey = {},
         onEncryptedConfigChanged = {},
         onApplyEncryptedConfig = {},

@@ -1,4 +1,5 @@
 import java.util.Properties
+import java.net.URI
 
 plugins {
     alias(libs.plugins.android.application)
@@ -13,6 +14,14 @@ val localProperties = Properties().apply {
 val malClientId = (providers.environmentVariable("MAL_CLIENT_ID").orNull
     ?: localProperties.getProperty("mal.clientid").orEmpty())
     .takeIf { it.matches(Regex("[0-9a-fA-F]{32}")) }.orEmpty()
+val encryptedConfigUrl = (providers.environmentVariable("CURL_GIST_URL").orNull
+    ?: localProperties.getProperty("curl.gist").orEmpty())
+    .takeIf { value ->
+        runCatching { URI(value) }.getOrNull()?.let { uri ->
+            uri.scheme == "https" && uri.host == "gist.githubusercontent.com" &&
+                uri.userInfo == null && uri.fragment == null && uri.query == null
+        } == true
+    }.orEmpty()
 
 android {
     namespace = "ua.any2b.tvplayer"
@@ -33,6 +42,7 @@ android {
             ?: githubTag?.removePrefix("v")
             ?: "0.1.0-alpha.1"
         buildConfigField("String", "MAL_CLIENT_ID", "\"$malClientId\"")
+        buildConfigField("String", "ENCRYPTED_CONFIG_URL", "\"$encryptedConfigUrl\"")
     }
 
         val keystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
