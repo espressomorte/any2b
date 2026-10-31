@@ -74,6 +74,8 @@ fun DetailsScreen(
     onTolokaSearch: (String) -> Unit,
     onAutoTolokaSearch: (String, String?) -> Unit,
     onSelectTolokaHit: (String) -> Unit,
+    onPromoteTolokaHit: (String) -> Unit = {},
+    onRejectTolokaHit: (String) -> Unit = {},
     onRetryTolokaMetadata: () -> Unit,
     onPlayTolokaFile: (Int) -> Unit,
     onToggleFavorite: () -> Unit,
@@ -781,6 +783,8 @@ fun DetailsScreen(
                                         openedFiles = state.tolokaOpenedFiles,
                                         onSearch = { onTolokaSearch(tolokaQuery) },
                                         onSelect = onSelectTolokaHit,
+                                        onPromote = onPromoteTolokaHit,
+                                        onRejectForever = onRejectTolokaHit,
                                         onRetryMetadata = onRetryTolokaMetadata,
                                         onPlayFile = onPlayTolokaFile,
                                         surfaceColors = surfaceColors,
@@ -1085,6 +1089,8 @@ internal fun TolokaSearchPanel(
     openedFiles: Set<Int>,
     onSearch: () -> Unit,
     onSelect: (String) -> Unit,
+    onPromote: (String) -> Unit = {},
+    onRejectForever: (String) -> Unit = {},
     onRetryMetadata: () -> Unit,
     onPlayFile: (Int) -> Unit,
     manualSearch: Boolean = false,
@@ -1104,6 +1110,10 @@ internal fun TolokaSearchPanel(
             }
             is TolokaSearchState.Results -> {
                 var showWeak by rememberSaveable(searchState.query) { mutableStateOf(false) }
+                var showRejected by rememberSaveable(searchState.query) { mutableStateOf(false) }
+                var pendingPermanentReject by rememberSaveable(searchState.query) {
+                    mutableStateOf<String?>(null)
+                }
                 if (searchState.query != query.trim()) {
                     Text("Пошук за новим запитом…",
                         color = AppColors.TextSecondary)
@@ -1122,12 +1132,15 @@ internal fun TolokaSearchPanel(
                     val visibleHits = searchState.hits +
                         if (showWeak || selectedWeak) searchState.weakHits else emptyList()
                     visibleHits.forEach { hit ->
+                        val canPromote = hit in searchState.weakHits
                         TolokaResultRow(
                             hit = hit,
                             selected = hit.id == searchState.selectedId,
                             opened = hit.id in openedTopics,
                             enabled = transferState !is TolokaTransferState.Loading,
                             onClick = { onSelect(hit.id) },
+                            onPromote = if (canPromote) {{ onPromote(hit.id) }} else null,
+                            onRejectForever = { pendingPermanentReject = hit.id },
                             surfaceColors = surfaceColors,
                         )
                         if (hit.id == searchState.selectedId) {
@@ -1141,6 +1154,53 @@ internal fun TolokaSearchPanel(
                             Text(if (showWeak || selectedWeak)
                                 "Згорнути сумнівні збіги"
                             else "…  Показати ще ${searchState.weakHits.size} сумнівних збігів")
+                        }
+                    }
+                    if (searchState.rejectedHits.isNotEmpty()) {
+                        Button(onClick = { showRejected = !showRejected },
+                            modifier = Modifier.fillMaxWidth()) {
+                            Text(if (showRejected) "Згорнути відсіяні роздачі"
+                                else "Поритися у відсіяному · ${searchState.rejectedHits.size}")
+                        }
+                        if (showRejected) searchState.rejectedHits.forEach { hit ->
+                            TolokaResultRow(
+                                hit = hit, selected = hit.id == searchState.selectedId,
+                                opened = hit.id in openedTopics,
+                                enabled = transferState !is TolokaTransferState.Loading,
+                                onClick = { onSelect(hit.id) },
+                                onPromote = { onPromote(hit.id) },
+                                onRejectForever = { pendingPermanentReject = hit.id },
+                                surfaceColors = surfaceColors,
+                            )
+                        }
+                    }
+                    val pendingHit = pendingPermanentReject?.let { pendingId ->
+                        (searchState.hits + searchState.weakHits + searchState.rejectedHits)
+                            .firstOrNull { it.id == pendingId }
+                    }
+                    if (pendingHit != null) {
+                        Dialog(onDismissRequest = { pendingPermanentReject = null }) {
+                            Column(
+                                Modifier.fillMaxWidth().background(surfaceColors.panel,
+                                    RoundedCornerShape(16.dp)).padding(24.dp),
+                                verticalArrangement = Arrangement.spacedBy(16.dp),
+                            ) {
+                                Text("Відхилити роздачу назавжди?",
+                                    color = surfaceColors.text,
+                                    style = MaterialTheme.typography.titleLarge)
+                                Text(pendingHit.title, color = surfaceColors.text)
+                                Text("Вона більше не показуватиметься для цього тайтлу. Це можна буде скасувати в налаштуваннях пошуку.",
+                                    color = surfaceColors.mutedText)
+                                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    Button(onClick = { pendingPermanentReject = null }) {
+                                        Text("Скасувати")
+                                    }
+                                    Button(onClick = {
+                                        onRejectForever(pendingHit.id)
+                                        pendingPermanentReject = null
+                                    }) { Text("Відхилити") }
+                                }
+                            }
                         }
                     }
                 }
@@ -1378,7 +1438,8 @@ private fun formatFileSize(bytes: Long): String = when {
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun TolokaResultRow(hit: TolokaHit, selected: Boolean, opened: Boolean, enabled: Boolean,
-    onClick: () -> Unit, surfaceColors: DetailsSurfaceColors) {
+    onClick: () -> Unit, onPromote: (() -> Unit)?, onRejectForever: () -> Unit,
+    surfaceColors: DetailsSurfaceColors) {
     var focused by remember { mutableStateOf(false) }
     val background = when {
         focused -> AppColors.NeonCyanLight
@@ -1386,12 +1447,15 @@ private fun TolokaResultRow(hit: TolokaHit, selected: Boolean, opened: Boolean, 
         else -> surfaceColors.card
     }
     val foreground = if (focused || selected) AppColors.ButtonDarkText else surfaceColors.text
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically) {
     Card(
         onClick = { if (enabled) onClick() },
+        onLongClick = { if (enabled) onRejectForever() },
         scale = CardDefaults.scale(scale = 1f, focusedScale = 1f),
         shape = CardDefaults.shape(RoundedCornerShape(10.dp)),
         colors = CardDefaults.colors(containerColor = background, focusedContainerColor = background),
-        modifier = Modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused }
+        modifier = Modifier.weight(1f).onFocusChanged { focused = it.isFocused }
             .neonGlow(focused = focused, borderRadius = 10.dp),
     ) {
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -1419,6 +1483,12 @@ private fun TolokaResultRow(hit: TolokaHit, selected: Boolean, opened: Boolean, 
                 }
             }
         }
+    }
+    if (onPromote != null) {
+        OutlinedButton(onClick = { if (enabled) onPromote() },
+            modifier = Modifier.size(42.dp), contentPadding = PaddingValues(0.dp),
+            enabled = enabled) { Text("+", fontSize = 22.sp, fontWeight = FontWeight.Bold) }
+    }
     }
 }
 

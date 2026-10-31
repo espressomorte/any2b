@@ -47,6 +47,7 @@ import ua.any2b.tvplayer.data.ReleaseMappingStore
 import ua.any2b.tvplayer.data.ReleaseSelection
 import ua.any2b.tvplayer.data.SettingsManager
 import ua.any2b.tvplayer.data.TolokaConnections
+import ua.any2b.tvplayer.data.TolokaRelevanceStore
 import ua.any2b.tvplayer.data.TorrServerAuthStore
 import ua.any2b.tvplayer.data.TolokaPlaybackStore
 import ua.any2b.tvplayer.data.TmdbMapping
@@ -64,7 +65,7 @@ sealed interface VideoSourceState {
 sealed interface TmdbLinkState {
     data object Loading : TmdbLinkState
     data class Candidates(val matches: List<TmdbMatch>, val suggested: TmdbTitle?) : TmdbLinkState
-    data class Confirmed(val title: TmdbTitle) : TmdbLinkState
+    data class Confirmed(val title: TmdbTitle, val tvdbId: Int? = null) : TmdbLinkState
     data class Error(val message: String) : TmdbLinkState
 }
 
@@ -91,6 +92,7 @@ sealed interface TolokaSearchState {
         val totalFound: Int,
         val selectedId: String? = null,
         val weakHits: List<TolokaHit> = emptyList(),
+        val rejectedHits: List<TolokaHit> = emptyList(),
     ) : TolokaSearchState
     data class Error(val message: String) : TolokaSearchState
 }
@@ -148,6 +150,7 @@ class DetailsViewModel(
     private val settingsManager = SettingsManager(context)
     private val torrServerAuthStore = TorrServerAuthStore(context)
     private val tolokaPlaybackStore = TolokaPlaybackStore(context)
+    private val tolokaRelevanceStore = TolokaRelevanceStore(context)
     private val torrServerClient = TorrServerClient()
     private var manualSearchJob: Job? = null
     private var tolokaSearchJob: Job? = null
@@ -244,7 +247,7 @@ class DetailsViewModel(
                 }
                 val enriched = tmdbDetails?.let { TmdbSeasonMatcher.enrich(ready.details, candidate, it.seasonEntries) }
                     ?: candidate
-                updateReady { it.copy(tmdbLink = TmdbLinkState.Confirmed(enriched),
+                updateReady { it.copy(tmdbLink = TmdbLinkState.Confirmed(enriched, tmdbDetails?.tvdbId),
                     tmdbSeasonEntries = tmdbDetails?.seasonEntries?.filter { season -> season.number > 0 }.orEmpty()) }
                 tmdbDetails?.let { discoverSeriesSeasons(ready.details, it.seasonEntries) }
                 maybeRetryAniTubeWithTmdb()
@@ -265,7 +268,7 @@ class DetailsViewModel(
                 val tmdbDetails = connection.client.details(saved.type, saved.id, connection.accessKey)
                 val title = TmdbSeasonMatcher.enrich(details, tmdbDetails.title,
                     tmdbDetails.seasonEntries)
-                updateReady { it.copy(tmdbLink = TmdbLinkState.Confirmed(title),
+                updateReady { it.copy(tmdbLink = TmdbLinkState.Confirmed(title, tmdbDetails.tvdbId),
                     tmdbSeasonEntries = tmdbDetails.seasonEntries.filter { season -> season.number > 0 }) }
                 discoverSeriesSeasons(details, tmdbDetails.seasonEntries)
                 maybeRetryAniTubeWithTmdb()
@@ -417,7 +420,7 @@ class DetailsViewModel(
                 val link = (state.tmdbLink as? TmdbLinkState.Confirmed)?.let {
                     TmdbLinkState.Confirmed(TmdbSeasonMatcher.enrich(details,
                         it.title.copy(matchedSeasonTitle = null, matchedSeasonYear = null),
-                        state.tmdbSeasonEntries))
+                        state.tmdbSeasonEntries), it.tvdbId)
                 } ?: state.tmdbLink
                 state.copy(details = details, tmdbLink = link,
                     videoSource = VideoSourceState.Loading,
@@ -597,9 +600,16 @@ class DetailsViewModel(
                 fun filterHits(ready: DetailsState.Ready, results: List<ua.any2b.core.toloka.TolokaHit>):
                     List<ua.any2b.core.toloka.TolokaHit> {
                     val ukrainian = (ready.videoSource as? VideoSourceState.Success)?.release?.title
+                    val confirmed = ready.tmdbLink as? TmdbLinkState.Confirmed
+                    val learned = confirmed?.let {
+                        tolokaRelevanceStore.approvedTitles(it.title.type, it.title.id)
+                    }.orEmpty()
+                    val ignored = confirmed?.let {
+                        tolokaRelevanceStore.rejectedTitles(it.title.type, it.title.id)
+                    }.orEmpty()
                     return TolokaHitFilter.filter(ready.details, ukrainian,
-                        results.filter(ua.any2b.core.toloka.TolokaTmdbRanker::isVideoCandidate),
-                        listOfNotNull(ready.tmdbLink.ukrainianTitle))
+                        results,
+                        listOfNotNull(ready.tmdbLink.ukrainianTitle), learned, ignored)
                 }
                 val firstReady = _state.value as? DetailsState.Ready ?: return@launch
                 val (searchedQuery, results) = ua.any2b.core.toloka.searchWithEnglishFallback(
@@ -610,12 +620,20 @@ class DetailsViewModel(
                 )
                 updateReady { ready ->
                     val hits = filterHits(ready, results.results)
-                    ready.copy(tolokaSearch = TolokaSearchState.Results(searchedQuery,
-                        hits, results.results.size),
+                    val hitIds = hits.mapTo(HashSet()) { it.id }
+                    val firstHitId = hits.firstOrNull()?.id
+                    val updatedReady = ready.copy(tolokaSearch = TolokaSearchState.Results(searchedQuery,
+                        hits, results.results.size, selectedId = firstHitId,
+                        rejectedHits = results.results.filterNot { it.id in hitIds }),
                         tolokaOpenedTopics = hits.mapNotNull { hit ->
                             hit.id.takeIf { tolokaPlaybackStore.hasOpenedFile(activeAnimeId, it) }
                         }.toSet(),
                         tolokaOpenedFiles = emptySet())
+                    if (firstHitId != null) {
+                        // Queue selection / loading of the first hit
+                        viewModelScope.launch { selectTolokaHit(firstHitId) }
+                    }
+                    updatedReady
                 }
             } catch (error: CancellationException) {
                 throw error
@@ -631,6 +649,43 @@ class DetailsViewModel(
                 )) }
             }
         }
+    }
+
+    fun promoteTolokaHit(topicId: String) {
+        val ready = _state.value as? DetailsState.Ready ?: return
+        val results = ready.tolokaSearch as? TolokaSearchState.Results ?: return
+        val hit = results.rejectedHits.firstOrNull { it.id == topicId }
+            ?: results.weakHits.firstOrNull { it.id == topicId } ?: return
+        (ready.tmdbLink as? TmdbLinkState.Confirmed)?.let { confirmed ->
+            tolokaRelevanceStore.approve(confirmed.title.type, confirmed.title.id, hit.title)
+        }
+        updateReady { it.copy(tolokaSearch = results.copy(
+            hits = (results.hits + hit).distinctBy { it.id },
+            weakHits = results.weakHits.filterNot { it.id == topicId },
+            rejectedHits = results.rejectedHits.filterNot { it.id == topicId },
+        )) }
+    }
+
+    fun rejectTolokaHit(topicId: String) {
+        val ready = _state.value as? DetailsState.Ready ?: return
+        val results = ready.tolokaSearch as? TolokaSearchState.Results ?: return
+        val hit = (results.hits + results.weakHits + results.rejectedHits)
+            .firstOrNull { it.id == topicId } ?: return
+        (ready.tmdbLink as? TmdbLinkState.Confirmed)?.let { confirmed ->
+            tolokaRelevanceStore.reject(confirmed.title.type, confirmed.title.id, hit.title)
+        }
+        tolokaTransferJob?.cancel()
+        if (uploadedTopicId == topicId) {
+            uploadedTopicId = null
+            uploadedTorrent = null
+        }
+        updateReady { it.copy(tolokaSearch = results.copy(
+            hits = results.hits.filterNot { it.id == topicId },
+            weakHits = results.weakHits.filterNot { it.id == topicId },
+            rejectedHits = results.rejectedHits.filterNot { it.id == topicId },
+            selectedId = results.selectedId.takeUnless { it == topicId },
+        ), tolokaTransfer = TolokaTransferState.Idle, tolokaPlaybackStatus = null,
+            tolokaOpenedFiles = emptySet()) }
     }
 
     fun selectTolokaHit(topicId: String) {

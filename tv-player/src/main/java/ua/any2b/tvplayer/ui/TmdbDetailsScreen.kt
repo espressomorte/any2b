@@ -79,6 +79,8 @@ fun TmdbDetailsScreen(
     onRetryDetails: () -> Unit,
     onSearchTorrent: (String) -> Unit,
     onSelectTorrent: (String) -> Unit,
+    onPromoteTorrent: (String) -> Unit,
+    onRejectTorrent: (String) -> Unit,
     onRetryMetadata: () -> Unit,
     onPlayFile: (Int) -> Unit,
     onToggleFavorite: () -> Unit,
@@ -117,6 +119,8 @@ fun TmdbDetailsScreen(
                 onOpenRelated = onOpenRelated,
                 onSearchTorrent = onSearchTorrent,
                 onSelectTorrent = onSelectTorrent,
+                onPromoteTorrent = onPromoteTorrent,
+                onRejectTorrent = onRejectTorrent,
                 onRetryMetadata = onRetryMetadata,
                 onPlayFile = onPlayFile,
                 onBack = onBack,
@@ -143,6 +147,8 @@ private fun TmdbDetailsContent(
     onOpenRelated: (TmdbTitle) -> Unit,
     onSearchTorrent: (String) -> Unit,
     onSelectTorrent: (String) -> Unit,
+    onPromoteTorrent: (String) -> Unit,
+    onRejectTorrent: (String) -> Unit,
     onRetryMetadata: () -> Unit,
     onPlayFile: (Int) -> Unit,
     onBack: () -> Unit,
@@ -233,26 +239,24 @@ private fun TmdbDetailsContent(
 
         Column(Modifier.weight(1f).fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    if (experimentalArtwork != null) {
-                        FanartLogo(experimentalArtwork, title.title,
-                            Modifier.widthIn(max = 460.dp).height(82.dp))
-                    } else Text(title.title, modifier = Modifier.weight(1f, fill = false),
+                horizontalArrangement = Arrangement.SpaceBetween) {
+                if (experimentalArtwork != null) {
+                    FanartLogo(experimentalArtwork, title.title,
+                        Modifier.widthIn(max = 460.dp).height(82.dp))
+                } else {
+                    Text(title.title, modifier = Modifier.weight(1f, fill = false),
                         style = MaterialTheme.typography.headlineLarge,
-                    color = surfaceColors.text,
+                        color = surfaceColors.text,
                         fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    if (experimentalArtwork == null) title.year?.let {
-                        Text("$it", color = AppColors.TextSecondary, fontSize = 16.sp)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (!title.overview.isNullOrBlank()) {
+                        TmdbInfoChip("Synopsis", surfaceColors) { infoDialog = "synopsis" }
                     }
-                    if (experimentalArtwork == null && countries.isNotEmpty()) {
-                        Text(countries.joinToString(", "), modifier = Modifier.widthIn(max = 360.dp),
-                            color = AppColors.TextSecondary, fontSize = 16.sp,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (details.directors.isNotEmpty() || details.cast.isNotEmpty()) {
+                        TmdbInfoChip("Crew", surfaceColors) { infoDialog = "crew" }
                     }
                 }
-                OutlinedButton(onClick = onBack) { Text("Назад") }
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -262,12 +266,6 @@ private fun TmdbDetailsContent(
                     Text(it, modifier = Modifier.weight(1f, fill = false),
                         style = MaterialTheme.typography.titleMedium, color = AppColors.TextLight,
                         maxLines = 2, overflow = TextOverflow.Ellipsis)
-                }
-                if (!title.overview.isNullOrBlank()) {
-                    TmdbInfoChip("Synopsis", surfaceColors) { infoDialog = "synopsis" }
-                }
-                if (details.directors.isNotEmpty() || details.cast.isNotEmpty()) {
-                    TmdbInfoChip("Crew", surfaceColors) { infoDialog = "crew" }
                 }
             }
             if (fanartNotice != null) {
@@ -280,15 +278,24 @@ private fun TmdbDetailsContent(
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Button(
+                OutlinedButton(
                     onClick = { torrentOpened = true },
-                    colors = ButtonDefaults.colors(
+                    scale = OutlinedButtonDefaults.scale(scale = 1f, focusedScale = 1f),
+                    shape = OutlinedButtonDefaults.shape(RoundedCornerShape(10.dp)),
+                    border = OutlinedButtonDefaults.border(
+                        border = Border(BorderStroke(1.dp, AppColors.TextMuted)),
+                        focusedBorder = Border(BorderStroke(2.dp, AppColors.NeonCyan))
+                    ),
+                    colors = OutlinedButtonDefaults.colors(
                         containerColor = if (torrentOpened) AppColors.NeonCyan else surfaceColors.card,
                         contentColor = if (torrentOpened) AppColors.ButtonDarkText else surfaceColors.text,
+                        focusedContainerColor = AppColors.NeonCyanLight,
+                        focusedContentColor = AppColors.ButtonDarkText
                     ),
                     modifier = Modifier.focusRequester(torrentFocus)
                         .semantics { contentDescription = "Торент" },
-                ) { FontAwesomeIcon(FaIcons.ASTERISK, size = 20.sp) }
+                ) { FontAwesomeIcon(FaIcons.ASTERISK, size = 18.sp) }
+
                 if (torrentOpened) {
                     Spacer(Modifier.width(16.dp))
                     Box(Modifier.weight(1f).background(surfaceColors.card, RoundedCornerShape(8.dp))
@@ -302,8 +309,25 @@ private fun TmdbDetailsContent(
                                 .semantics { contentDescription = "Вибрати пошуковий запит Toloka: $torrentQuery" })
                     }
                     Spacer(Modifier.width(12.dp))
-                    Button(onClick = { onSearchTorrent(torrentQuery) },
-                        enabled = torrentQuery.isNotBlank()) { Text("Шукати") }
+                    OutlinedButton(
+                        onClick = { onSearchTorrent(torrentQuery) },
+                        enabled = torrentQuery.isNotBlank(),
+                        scale = OutlinedButtonDefaults.scale(scale = 1f, focusedScale = 1f),
+                        shape = OutlinedButtonDefaults.shape(RoundedCornerShape(10.dp)),
+                        border = OutlinedButtonDefaults.border(
+                            border = Border(BorderStroke(1.dp, AppColors.TextMuted)),
+                            focusedBorder = Border(BorderStroke(2.dp, AppColors.NeonCyan))
+                        ),
+                        colors = OutlinedButtonDefaults.colors(
+                            containerColor = surfaceColors.card,
+                            contentColor = surfaceColors.text,
+                            focusedContainerColor = AppColors.NeonCyanLight,
+                            focusedContentColor = AppColors.ButtonDarkText
+                        ),
+                        modifier = Modifier.semantics { contentDescription = "Шукати" }
+                    ) {
+                        FontAwesomeIcon(FaIcons.SEARCH, size = 18.sp)
+                    }
                 }
             }
             if (torrentOpened) {
@@ -318,6 +342,8 @@ private fun TmdbDetailsContent(
                         openedFiles = openedFiles,
                         onSearch = { onSearchTorrent(torrentQuery) },
                         onSelect = onSelectTorrent,
+                        onPromote = onPromoteTorrent,
+                        onRejectForever = onRejectTorrent,
                         onRetryMetadata = onRetryMetadata,
                         onPlayFile = onPlayFile,
                         manualSearch = false,

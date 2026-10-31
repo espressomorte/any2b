@@ -70,10 +70,15 @@ class DetailsActivity : ComponentActivity() {
                         else -> null
                     }
                 }
-                val artworkKey = fanartTitle?.let { FanartArtworkKey(it.type, it.id) }
+                val confirmedLink = (state as? DetailsState.Ready)
+                    ?.tmdbLink as? TmdbLinkState.Confirmed
+                val artworkKey = fanartTitle?.let {
+                    FanartArtworkKey(it.type, it.id, confirmedLink?.tvdbId)
+                }
                 LaunchedEffect(experimental, artworkKey) {
                     if (experimental && artworkKey != null) {
-                        fanartViewModel.load(artworkKey.type, artworkKey.id)
+                        fanartViewModel.load(artworkKey.type, artworkKey.id, artworkKey.tvdbId,
+                            fanartTitle?.posterUrl)
                     }
                 }
                 val artworkState = fanartViewModel.state.collectAsStateWithLifecycle().value
@@ -110,6 +115,8 @@ class DetailsActivity : ComponentActivity() {
                     onTolokaSearch = viewModel::searchToloka,
                     onAutoTolokaSearch = viewModel::searchTolokaAutomatically,
                     onSelectTolokaHit = viewModel::selectTolokaHit,
+                    onPromoteTolokaHit = viewModel::promoteTolokaHit,
+                    onRejectTolokaHit = viewModel::rejectTolokaHit,
                     onRetryTolokaMetadata = viewModel::retryTolokaMetadata,
                     onPlayTolokaFile = { fileId -> openTolokaFile(fileId) },
                     onToggleFavorite = viewModel::toggleFavorite,

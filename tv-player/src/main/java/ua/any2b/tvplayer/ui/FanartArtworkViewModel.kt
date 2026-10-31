@@ -31,7 +31,7 @@ import ua.any2b.core.fanart.FanartClient
 import ua.any2b.core.tmdb.TmdbMediaType
 import ua.any2b.tvplayer.data.FanartKeyStore
 
-data class FanartArtworkKey(val type: TmdbMediaType, val id: Int)
+data class FanartArtworkKey(val type: TmdbMediaType, val id: Int, val tvdbId: Int? = null)
 data class FanartPalette(val background: Color, val light: Boolean)
 
 sealed interface FanartArtworkState {
@@ -52,8 +52,8 @@ class FanartArtworkViewModel(application: Application) : AndroidViewModel(applic
     val state: StateFlow<FanartArtworkState> = _state
     private var job: Job? = null
 
-    fun load(type: TmdbMediaType, id: Int) {
-        val lookup = FanartArtworkKey(type, id)
+    fun load(type: TmdbMediaType, id: Int, tvdbId: Int? = null, tmdbPosterUrl: String? = null) {
+        val lookup = FanartArtworkKey(type, id, tvdbId)
         if (id <= 0 || (_state.value as? FanartArtworkState.Ready)?.key == lookup ||
             (_state.value as? FanartArtworkState.Loading)?.key == lookup) return
         job?.cancel()
@@ -67,16 +67,21 @@ class FanartArtworkViewModel(application: Application) : AndroidViewModel(applic
         job = viewModelScope.launch {
             val result = try {
                 withTimeoutOrNull(20_000) {
-                    val found = client.inspect(type, id, key)
+                    val resolvedTvdbId = tvdbId ?: if (type == TmdbMediaType.TV)
+                        fanartTvdbAliases[id] else null
+                    val found = client.inspect(type, id, key, resolvedTvdbId)
+                    val posterUrl = found.posterUrl ?: tmdbPosterUrl
+                    val logoUrl = found.logoUrl
                     val reason = when {
                         !found.entryFound -> "Для цього TMDB ID немає запису на fanart.tv"
-                        !found.posterFound && !found.englishLogoFound ->
-                            "Немає постера без написів або англійською та англійського логотипа"
-                        !found.posterFound -> "Немає постера без написів або англійською"
-                        !found.englishLogoFound -> "Немає англійського логотипа"
+                        posterUrl == null && logoUrl == null ->
+                            "Немає постера або логотипа"
+                        posterUrl == null -> "Немає постера для оформлення"
+                        logoUrl == null -> "Немає логотипа"
                         else -> null
                     }
-                    found.artwork?.let { candidate ->
+                    if (posterUrl != null && logoUrl != null) {
+                        val candidate = FanartArtwork(posterUrl, logoUrl)
                         val app = getApplication<Application>()
                         val loaded = coroutineScope {
                             val poster = async {
@@ -100,7 +105,7 @@ class FanartArtworkViewModel(application: Application) : AndroidViewModel(applic
                                 })
                         else FanartArtworkState.Ready(lookup, null,
                             reason = "Не вдалося завантажити зображення")
-                    } ?: FanartArtworkState.Ready(lookup, null, reason = reason)
+                    } else FanartArtworkState.Ready(lookup, null, reason = reason)
                 } ?: FanartArtworkState.Ready(lookup, null,
                     reason = "Час очікування fanart.tv вичерпано")
             } catch (error: CancellationException) {
@@ -125,6 +130,23 @@ class FanartArtworkViewModel(application: Application) : AndroidViewModel(applic
     }
 }
 
+/** TMDB keeps SAC_2045 separate; TheTVDB/Fanart file it under the Stand Alone Complex series. */
+private val fanartTvdbAliases = mapOf(90293 to 73749)
+
+private fun capSaturation(color: Color, maxSaturation: Float = 0.30f): Color {
+    val hsv = FloatArray(3)
+    android.graphics.Color.RGBToHSV(
+        (color.red * 255).toInt(),
+        (color.green * 255).toInt(),
+        (color.blue * 255).toInt(),
+        hsv
+    )
+    if (hsv[1] > maxSaturation) {
+        hsv[1] = maxSaturation
+    }
+    return Color(android.graphics.Color.HSVToColor(hsv))
+}
+
 private fun paletteFromPoster(result: SuccessResult?): FanartPalette {
     val bitmap = (result?.drawable as? BitmapDrawable)?.bitmap
         ?: return FanartPalette(AppColors.BackgroundDark, false)
@@ -147,9 +169,10 @@ private fun paletteFromPoster(result: SuccessResult?): FanartPalette {
     val b = (blue / samples).toInt()
     val luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0
     if (luminance < 0.58) return FanartPalette(AppColors.BackgroundDark, false)
-    val background = Color(
+    val rawBackground = Color(
         android.graphics.Color.rgb((r * 0.55 + 255 * 0.45).toInt(),
             (g * 0.55 + 255 * 0.45).toInt(), (b * 0.55 + 255 * 0.45).toInt()))
+    val background = capSaturation(rawBackground, 0.30f)
     return FanartPalette(background, true)
 }
 
@@ -172,12 +195,13 @@ private fun paletteFromArtwork(poster: SuccessResult, logo: SuccessResult): Fana
     val dominantPosterColor = posterColors.maxByOrNull { it.count }?.color ?: palette.background
     val fallback = if (contrastRatio(logoColor, Color.White) >=
         contrastRatio(logoColor, Color.Black)) Color.White else Color.Black
-    val background = posterColor ?: (0..20).asSequence()
+    val rawBackground = posterColor ?: (0..20).asSequence()
         .map { step -> lerp(dominantPosterColor, fallback, step / 20f) }
         .firstOrNull {
             !isDarkNeutral(it) && contrastRatio(it, logoColor) >= 4.5 &&
                 max(contrastRatio(it, Color.White), contrastRatio(it, darkText)) >= 4.5
         } ?: fallback
+    val background = capSaturation(rawBackground, 0.30f)
     val light = contrastRatio(background, darkText) >= contrastRatio(background, Color.White)
     return palette.copy(background = background, light = light)
 }

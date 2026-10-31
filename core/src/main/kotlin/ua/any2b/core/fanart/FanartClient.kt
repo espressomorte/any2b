@@ -24,6 +24,8 @@ data class FanartLookup(
     val posterFound: Boolean,
     val textlessPosterFound: Boolean,
     val englishLogoFound: Boolean,
+    val posterUrl: String? = null,
+    val logoUrl: String? = null,
 )
 
 /** A personal key is supplied by the caller and sent only in the client-key header. */
@@ -50,13 +52,34 @@ class FanartClient(
         return inspect(type, tmdbId, personalKey).artwork
     }
 
-    suspend fun inspect(type: TmdbMediaType, tmdbId: Int, personalKey: String): FanartLookup {
+    suspend fun inspect(type: TmdbMediaType, tmdbId: Int, personalKey: String,
+        tvdbId: Int? = null): FanartLookup {
         require(tmdbId > 0)
         require(personalKey.isNotBlank())
+        val primary = lookup(type, tmdbId, personalKey,
+            source = if (type == TmdbMediaType.TV) "tmdb" else null)
+        if (type != TmdbMediaType.TV || tvdbId == null || primary.lookup.artwork != null)
+            return primary.lookup
+        val fallback = lookup(type, tvdbId, personalKey, source = "tvdb")
+        val posterUrl = primary.posterUrl ?: fallback.posterUrl
+        val logoUrl = primary.logoUrl ?: fallback.logoUrl
+        return FanartLookup(
+            if (posterUrl != null && logoUrl != null) FanartArtwork(posterUrl, logoUrl) else null,
+            primary.lookup.entryFound || fallback.lookup.entryFound,
+            posterUrl != null,
+            primary.lookup.textlessPosterFound || fallback.lookup.textlessPosterFound,
+            primary.lookup.englishLogoFound || fallback.lookup.englishLogoFound,
+            posterUrl,
+            logoUrl,
+        )
+    }
+
+    private suspend fun lookup(type: TmdbMediaType, id: Int, personalKey: String,
+        source: String?): ResolvedFanart {
         val url = baseUrl.newBuilder()
             .addPathSegment(if (type == TmdbMediaType.MOVIE) "movies" else "tv")
-            .addPathSegment(tmdbId.toString())
-            .apply { if (type == TmdbMediaType.TV) addQueryParameter("source", "tmdb") }
+            .addPathSegment(id.toString())
+            .apply { source?.let { addQueryParameter("source", it) } }
             .build()
         val request = Request.Builder().url(url)
             .header("client-key", personalKey)
@@ -64,7 +87,8 @@ class FanartClient(
             .build()
         val response = execute(request)
         return response.use {
-            if (it.code == 404) return@use FanartLookup(null, false, false, false, false)
+            if (it.code == 404) return@use ResolvedFanart(
+                FanartLookup(null, false, false, false, false), null, null)
             if (!it.isSuccessful) throw IOException("Fanart HTTP ${it.code}")
             val json = try { JSONObject(it.body?.string().orEmpty()) }
                 catch (_: Exception) { throw IOException("Invalid Fanart response") }
@@ -78,13 +102,15 @@ class FanartClient(
             }.maxByOrNull { image -> image.likes }
             val poster = (textlessPoster ?: posters.filter { it.language == "en" }
                 .maxByOrNull { it.likes })?.url
-            val logo = logoKeys.asSequence().flatMap { json.images(it).asSequence() }
-                .filter { image -> image.language == "en" }
-                .maxByOrNull { image -> image.likes }?.url
-            FanartLookup(
+            val logos = logoKeys.flatMap { json.images(it) }
+            val englishLogo = logos.filter { it.language == "en" }.maxByOrNull { it.likes }
+            val logo = (englishLogo ?: logos.maxByOrNull { it.likes })?.url
+            val lookup = FanartLookup(
                 if (poster != null && logo != null) FanartArtwork(poster, logo) else null,
-                true, poster != null, textlessPoster != null, logo != null,
+                true, poster != null, textlessPoster != null, englishLogo != null,
+                poster, logo,
             )
+            ResolvedFanart(lookup, poster, logo)
         }
     }
 
@@ -105,6 +131,8 @@ class FanartClient(
         return response
     }
 }
+
+private data class ResolvedFanart(val lookup: FanartLookup, val posterUrl: String?, val logoUrl: String?)
 
 private data class FanartImage(val url: String, val language: String, val likes: Int)
 

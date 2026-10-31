@@ -70,6 +70,7 @@ data class TmdbDetails(
     val cast: List<String> = emptyList(),
     val countryCodes: List<String> = emptyList(),
     val alternativeTitles: List<String> = emptyList(),
+    val tvdbId: Int? = null,
 )
 
 fun TmdbDetails.trailerSearchUrl(): String {
@@ -195,7 +196,9 @@ class TmdbClient(
 
     suspend fun details(type: TmdbMediaType, id: Int, token: String, language: String = "uk-UA"): TmdbDetails {
         require(id > 0) { "Некоректний TMDB ID" }
-        val json = request(listOf(type.path, id.toString()), token, language)
+        val json = request(listOf(type.path, id.toString()), token, language,
+            *if (type == TmdbMediaType.TV) arrayOf("append_to_response" to "external_ids")
+            else emptyArray())
         val title = json.toTitle(type, language) ?: throw TmdbFailure.InvalidResponse()
         if (title.id != id) throw TmdbFailure.InvalidResponse()
         val genres = json.optJSONArray("genres")?.let { array ->
@@ -259,6 +262,9 @@ class TmdbClient(
             cast = cast,
             countryCodes = countryCodes,
             alternativeTitles = alternativeTitles,
+            tvdbId = if (type == TmdbMediaType.TV)
+                json.optJSONObject("external_ids")?.optInt("tvdb_id")?.takeIf { it > 0 }
+            else null,
         )
     }
 

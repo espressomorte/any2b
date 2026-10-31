@@ -2,6 +2,7 @@ package ua.any2b.tvplayer.data
 
 import android.content.Context
 import android.util.AtomicFile
+import android.util.Log
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
@@ -28,7 +29,10 @@ object FribbMappingRepository {
     suspend fun get(context: Context): FribbMappingIndex = mutex.withLock {
         val file = File(context.applicationContext.filesDir, "fribb-tmdb-index-v2.json")
         val now = System.currentTimeMillis()
-        memory?.takeIf { now - loadedAt < MAX_AGE_MS }?.let { return@withLock it }
+        memory?.takeIf { now - loadedAt < MAX_AGE_MS }?.let {
+            Log.d(TAG, "Using in-memory Fribb index MAL=${it.byMal.size} AniList=${it.byAniList.size}")
+            return@withLock it
+        }
         val disk = AtomicFile(file)
         val cached = if (file.exists()) try {
             FribbMappings.parseCompactIndex(withContext(Dispatchers.IO) {
@@ -40,8 +44,11 @@ object FribbMappingRepository {
         if (cached != null && now - file.lastModified() < MAX_AGE_MS) {
             memory = cached
             loadedAt = file.lastModified()
+            Log.d(TAG, "Using disk Fribb index ageMs=${now - file.lastModified()} " +
+                "MAL=${cached.byMal.size} AniList=${cached.byAniList.size}")
             return@withLock cached
         }
+        Log.d(TAG, "Fribb disk cache ${if (cached == null) "missing/invalid" else "stale"}; downloading $SOURCE")
         try {
             val json = withContext(Dispatchers.IO) {
                 http.newCall(Request.Builder().url(SOURCE).build()).execute().use { response ->
@@ -65,6 +72,7 @@ object FribbMappingRepository {
             }
             memory = fresh
             loadedAt = System.currentTimeMillis()
+            Log.i(TAG, "Downloaded Fribb index MAL=${fresh.byMal.size} AniList=${fresh.byAniList.size}")
             fresh
         } catch (error: CancellationException) {
             throw error
@@ -72,8 +80,15 @@ object FribbMappingRepository {
             if (cached != null) {
                 memory = cached
                 loadedAt = now
+                Log.w(TAG, "Fribb download failed; falling back to cached index " +
+                    "ageMs=${now - file.lastModified()} MAL=${cached.byMal.size}", error)
                 cached
-            } else throw error
+            } else {
+                Log.e(TAG, "Fribb download failed and no usable cache exists", error)
+                throw error
+            }
         }
     }
+
+    private const val TAG = "FribbMapping"
 }

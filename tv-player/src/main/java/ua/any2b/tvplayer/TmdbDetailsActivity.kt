@@ -79,14 +79,18 @@ class TmdbDetailsActivity : ComponentActivity() {
         detailsViewModel.load(type, id, query, preferredTitle, originalLanguage, originalTitle)
         setContent {
             AppTheme {
-                val artworkKey = FanartArtworkKey(type, id)
-                LaunchedEffect(experimental, artworkKey) {
-                    if (experimental) fanartViewModel.load(type, id)
-                }
                 val artworkState = fanartViewModel.state.collectAsStateWithLifecycle().value
                 val detailsState = detailsViewModel.state.collectAsStateWithLifecycle().value
                 val tolokaState = tolokaViewModel.state.collectAsStateWithLifecycle().value
                 val readyDetails = (detailsState as? TmdbDetailsState.Ready)?.details
+                val artworkKey = readyDetails?.let {
+                    FanartArtworkKey(type, id, it.tvdbId)
+                }
+                LaunchedEffect(experimental, artworkKey) {
+                    if (experimental && artworkKey != null)
+                        fanartViewModel.load(type, id, artworkKey.tvdbId,
+                            readyDetails?.title?.posterUrl)
+                }
                 LaunchedEffect(tolokaState.search) { refreshPlaybackMarks() }
                 LaunchedEffect(readyDetails?.title?.type, readyDetails?.title?.id,
                     readyDetails?.title?.englishTitle) {
@@ -139,6 +143,8 @@ class TmdbDetailsActivity : ComponentActivity() {
                         refreshPlaybackMarks()
                         tolokaViewModel.selectHit(topicId)
                     },
+                    onPromoteTorrent = tolokaViewModel::promoteHit,
+                    onRejectTorrent = tolokaViewModel::rejectHit,
                     onRetryMetadata = tolokaViewModel::retryMetadata,
                     onPlayFile = ::openFile,
                     onToggleFavorite = detailsViewModel::toggleFavorite,

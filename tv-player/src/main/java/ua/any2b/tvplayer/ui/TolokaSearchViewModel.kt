@@ -21,6 +21,7 @@ import ua.any2b.core.tmdb.TmdbDetails
 import ua.any2b.tvplayer.data.SettingsManager
 import ua.any2b.tvplayer.data.TorrServerAuthStore
 import ua.any2b.tvplayer.data.TolokaConnections
+import ua.any2b.tvplayer.data.TolokaRelevanceStore
 
 data class FreeTolokaState(
     val search: TolokaSearchState = TolokaSearchState.Idle,
@@ -32,6 +33,7 @@ data class FreeTolokaState(
 class TolokaSearchViewModel(application: Application) : AndroidViewModel(application) {
     private val settings = SettingsManager(application)
     private val serverAuth = TorrServerAuthStore(application)
+    private val relevance = TolokaRelevanceStore(application)
     private val server = TorrServerClient()
     private val _state = MutableStateFlow(FreeTolokaState())
     val state: StateFlow<FreeTolokaState> = _state
@@ -41,21 +43,25 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
     private var automaticQuery: String? = null
     private var automaticEnglishTitle: String? = null
     private var automaticDetails: TmdbDetails? = null
+    private var currentDetails: TmdbDetails? = null
     private var transferJob: Job? = null
     private var uploadedTopicId: String? = null
     private var uploadedTorrent: TorrServerTorrent? = null
 
     fun search(query: String) {
         clearAutomaticSearch()
+        currentDetails = null
         searchInternal(query, null, null)
     }
 
     fun searchForTmdb(details: TmdbDetails, query: String) {
         clearAutomaticSearch()
+        currentDetails = details
         searchInternal(query, null, details)
     }
 
     fun searchAutomatically(details: TmdbDetails, query: String, englishTitle: String?) {
+        currentDetails = details
         automaticQuery = query.trim()
         automaticEnglishTitle = englishTitle
         automaticDetails = details
@@ -84,6 +90,38 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
         automaticDetails = null
     }
 
+    fun promoteHit(topicId: String) {
+        val results = _state.value.search as? TolokaSearchState.Results ?: return
+        val hit = results.rejectedHits.firstOrNull { it.id == topicId }
+            ?: results.weakHits.firstOrNull { it.id == topicId } ?: return
+        val details = currentDetails ?: automaticDetails ?: return
+        relevance.approve(details.title.type, details.title.id, hit.title)
+        _state.value = _state.value.copy(search = results.copy(
+            hits = (results.hits + hit).distinctBy { it.id },
+            weakHits = results.weakHits.filterNot { it.id == topicId },
+            rejectedHits = results.rejectedHits.filterNot { it.id == topicId },
+        ))
+    }
+
+    fun rejectHit(topicId: String) {
+        val results = _state.value.search as? TolokaSearchState.Results ?: return
+        val hit = (results.hits + results.weakHits + results.rejectedHits)
+            .firstOrNull { it.id == topicId } ?: return
+        val details = currentDetails ?: automaticDetails ?: return
+        relevance.reject(details.title.type, details.title.id, hit.title)
+        transferJob?.cancel()
+        if (uploadedTopicId == topicId) {
+            uploadedTopicId = null
+            uploadedTorrent = null
+        }
+        _state.value = _state.value.copy(search = results.copy(
+            hits = results.hits.filterNot { it.id == topicId },
+            weakHits = results.weakHits.filterNot { it.id == topicId },
+            rejectedHits = results.rejectedHits.filterNot { it.id == topicId },
+            selectedId = results.selectedId.takeUnless { it == topicId },
+        ), transfer = TolokaTransferState.Idle, playbackStatus = null)
+    }
+
     private fun searchInternal(query: String, englishTitle: String?, details: TmdbDetails?,
         retainedWeak: List<TolokaHit> = emptyList()) {
         val trimmed = query.trim()
@@ -108,7 +146,13 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
                 val first = TolokaConnections.search(getApplication(), trimmed)
                 val attempts = mutableListOf(first)
                 val firstDetails = if (automaticQuery == trimmed) automaticDetails ?: details else details
-                var ranked = firstDetails?.let { TolokaTmdbRanker.rank(it, first.results) }
+                val learned = firstDetails?.let {
+                    relevance.approvedTitles(it.title.type, it.title.id)
+                }.orEmpty()
+                val ignored = firstDetails?.let {
+                    relevance.rejectedTitles(it.title.type, it.title.id)
+                }.orEmpty()
+                var ranked = firstDetails?.let { TolokaTmdbRanker.rank(it, first.results, learned, ignored) }
                 val availableEnglish = if (automaticQuery == trimmed)
                     automaticEnglishTitle ?: englishTitle else englishTitle
                 var searchedQuery = trimmed
@@ -123,18 +167,26 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
                     searchedQuery = fallback
                     val currentDetails = if (automaticQuery == trimmed)
                         automaticDetails ?: details else details
-                    ranked = currentDetails?.let { TolokaTmdbRanker.rank(it, response.results) }
+                    ranked = currentDetails?.let { TolokaTmdbRanker.rank(it, response.results, learned, ignored) }
                 }
                 val latestDetails = if (automaticQuery == trimmed) automaticDetails ?: details else details
-                val selected = attempts.last()
-                val hits = ranked?.visible ?: selected.results.filter(TolokaTmdbRanker::isVideoCandidate)
-                val weak = (retainedWeak + attempts.flatMap { attempt ->
-                    latestDetails?.let { TolokaTmdbRanker.rank(it, attempt.results).weak }.orEmpty()
-                }).distinctBy { it.id }.filterNot { hit -> hits.any { it.id == hit.id } }
-                val totalFound = attempts.flatMap { it.results }.distinctBy { it.id }.size
+                val allHits = attempts.flatMap { it.results }.distinctBy { it.id }
+                val aggregate = latestDetails?.let { TolokaTmdbRanker.rank(it, allHits, learned, ignored) }
+                val hits = aggregate?.visible ?: allHits.filter(TolokaTmdbRanker::isVideoCandidate)
+                val weak = (retainedWeak + aggregate?.weak.orEmpty()).distinctBy { it.id }
+                    .filterNot { hit -> hits.any { it.id == hit.id } }
+                val rejected = aggregate?.rejected ?: allHits.filterNot(TolokaTmdbRanker::isVideoCandidate)
+                val totalFound = allHits.size
+                val firstHitId = hits.firstOrNull()?.id ?: weak.firstOrNull()?.id
                 _state.value = _state.value.copy(
                     search = TolokaSearchState.Results(searchedQuery, hits,
-                        maxOf(totalFound, hits.size + weak.size), weakHits = weak))
+                        maxOf(totalFound, hits.size + weak.size + rejected.size), selectedId = firstHitId,
+                        weakHits = weak, rejectedHits = rejected.filterNot { hit ->
+                            hits.any { it.id == hit.id } || weak.any { it.id == hit.id }
+                        }))
+                if (firstHitId != null) {
+                    selectHit(firstHitId)
+                }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: WorkerFailure.RateLimited) {
@@ -152,7 +204,7 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
     fun selectHit(topicId: String) {
         if (_state.value.transfer is TolokaTransferState.Loading) return
         val results = _state.value.search as? TolokaSearchState.Results ?: return
-        if ((results.hits + results.weakHits).none { it.id == topicId }) return
+        if ((results.hits + results.weakHits + results.rejectedHits).none { it.id == topicId }) return
         val serverUrl = settings.torrServerUrl()
         val cached = uploadedTorrent?.takeIf { uploadedTopicId == topicId }
         _state.value = _state.value.copy(

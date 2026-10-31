@@ -8,6 +8,7 @@ import ua.any2b.core.tmdb.TmdbMediaType
 data class RankedTolokaHits(
     val visible: List<TolokaHit>,
     val weak: List<TolokaHit>,
+    val rejected: List<TolokaHit> = emptyList(),
 )
 
 /** Keeps video releases, ranks title variants, and leaves uncertain matches for manual review. */
@@ -19,7 +20,8 @@ object TolokaTmdbRanker {
     private val bookRe = Regex("""(?i)(?<![\p{L}\p{N}])(?:книга|книжка|книги|books?)(?![\p{L}\p{N}])""")
     private val videoRe = Regex("""(?i)\b(?:web[ -]?dl|webrip|bdrip|bdrmux|bluray|hdtv|dvdrip|1080p|2160p|720p|mkv|mp4|avi|h\.?264|h\.?265)\b""")
     private val stopWords = setOf("the", "and", "for", "with", "from", "year", "movie", "film",
-        "серія", "фільм", "сезон", "частина")
+        "серія", "фільм", "сезон", "частина", "1080p", "720p", "2160p", "480p", "web",
+        "webrip", "webdl", "bdrip", "bluray", "hdtv", "x264", "x265", "h264", "h265", "mkv")
 
     fun isVideoCandidate(hit: TolokaHit): Boolean {
         val title = hit.title
@@ -28,7 +30,8 @@ object TolokaTmdbRanker {
         return true
     }
 
-    fun rank(details: TmdbDetails, hits: List<TolokaHit>): RankedTolokaHits {
+    fun rank(details: TmdbDetails, hits: List<TolokaHit>, learnedTitles: Set<String> = emptySet(),
+        ignoredTitles: Set<String> = emptySet()): RankedTolokaHits {
         val title = details.title
         val ukrainian = listOfNotNull(title.ukrainianTitle, title.title.takeIf(::hasCyrillic))
             .distinctBy(::normalize)
@@ -40,7 +43,26 @@ object TolokaTmdbRanker {
             .filterNot { name -> name in ukrainian || name in english }
             .distinctBy(::normalize)
         val expectedYear = title.year
-        val ranked = hits.asSequence().filter(::isVideoCandidate).map { hit ->
+        val normalizedLearned = learnedTitles.map(::normalize).filter(String::isNotBlank)
+        val normalizedIgnored = ignoredTitles.map(::normalize).filter(String::isNotBlank).toSet()
+        fun wasManuallyApproved(candidate: String): Boolean {
+            val candidateNormalized = normalize(candidate)
+            val candidateTokens = tokens(candidateNormalized)
+            return normalizedLearned.any { approved ->
+                val approvedTokens = tokens(approved)
+                if (candidateNormalized == approved) true
+                else if (approvedTokens.size < 2 || candidateTokens.isEmpty()) false
+                else approvedTokens.intersect(candidateTokens).size.toDouble() /
+                    minOf(approvedTokens.size, candidateTokens.size) >= 0.75
+            }
+        }
+        val rejected = hits.filter { hit -> normalize(hit.title) !in normalizedIgnored &&
+            !isVideoCandidate(hit) && !wasManuallyApproved(hit.title)
+        }
+        val ranked = hits.asSequence().filter { hit -> normalize(hit.title) !in normalizedIgnored &&
+            (isVideoCandidate(hit) || wasManuallyApproved(hit.title))
+        }.map { hit ->
+            val learned = wasManuallyApproved(hit.title)
             val normalized = normalize(hit.title)
             val ua = bestNameScore(normalized, ukrainian)
             val en = bestNameScore(normalized, english)
@@ -50,10 +72,11 @@ object TolokaTmdbRanker {
             val matchingYear = expectedYear != null && years.any { abs(it - expectedYear) <= 1 }
             val wrongYear = expectedYear != null && years.isNotEmpty() && !matchingYear
             val collection = details.title.type == TmdbMediaType.MOVIE && years.size > 1
-            val score = ua + en + alt + (if (matchingYear) 4 else 0) -
+            val score = ua + en + alt + (if (matchingYear) 4 else 0) + (if (learned) 12 else 0) -
                 (if (wrongYear) 8 else 0) - (if (collection) 4 else 0)
-            val weak = wrongYear || collection || maxOf(ua, en, alt) < 5 ||
+            val weak = !learned && (wrongYear || collection || maxOf(ua, en, alt) < 5 ||
                 (ua > 0 && english.isNotEmpty() && en == 0 && alt == 0)
+            )
             Triple(hit, score, weak)
         }.toList()
         val order = compareByDescending<Triple<TolokaHit, Int, Boolean>> { it.second }
@@ -61,6 +84,7 @@ object TolokaTmdbRanker {
         return RankedTolokaHits(
             visible = ranked.filterNot { it.third }.sortedWith(order).map { it.first },
             weak = ranked.filter { it.third }.sortedWith(order).map { it.first },
+            rejected = rejected,
         )
     }
 

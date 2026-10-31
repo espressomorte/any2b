@@ -16,14 +16,18 @@ object TolokaHitFilter {
     )
 
     fun filter(details: AnimeDetails, ukrainianTitle: String?, hits: List<TolokaHit>,
-        additionalNames: List<String> = emptyList()): List<TolokaHit> {
+        additionalNames: List<String> = emptyList(), learnedTitles: Set<String> = emptySet(),
+        ignoredTitles: Set<String> = emptySet()): List<TolokaHit> {
         val names = (listOfNotNull(ukrainianTitle, details.title.english, details.title.romaji,
             details.title.native) + details.synonyms + additionalNames)
             .map(::normalize).filter { it.length >= 4 }.distinct()
         val expectedSeason = (listOfNotNull(ukrainianTitle, details.title.english, details.title.romaji,
             details.title.native) + details.synonyms).firstNotNullOfOrNull(::seasonNumber)
+        val learned = learnedTitles.map(::normalize).filter(String::isNotBlank)
+        val ignored = ignoredTitles.map(::normalize).filter(String::isNotBlank).toSet()
         return hits.filter { hit ->
             val normalized = normalize(hit.title)
+            if (normalized in ignored) return@filter false
             val titleMatches = names.any { name ->
                 normalized.contains(name) ||
                     nameTokens(name).let { tokens ->
@@ -37,8 +41,17 @@ object TolokaHitFilter {
             val yearMatches = details.seasonYear == null || years.isEmpty() ||
                 years.any { abs(it - details.seasonYear) <= 1 }
             val foundSeason = seasonNumber(hit.title)
-            titleMatches && yearMatches &&
-                (expectedSeason == null || foundSeason == null || foundSeason == expectedSeason)
+            val learnedMatch = learned.any { approved ->
+                if (approved == normalized) true else {
+                    val approvedTokens = nameTokens(approved)
+                    val candidateTokens = nameTokens(normalized)
+                    approvedTokens.size >= 2 && candidateTokens.isNotEmpty() &&
+                        approvedTokens.intersect(candidateTokens).size.toDouble() /
+                        minOf(approvedTokens.size, candidateTokens.size) >= 0.75
+                }
+            }
+            (learnedMatch || (TolokaTmdbRanker.isVideoCandidate(hit) && titleMatches && yearMatches &&
+                (expectedSeason == null || foundSeason == null || foundSeason == expectedSeason)))
         }
     }
 
