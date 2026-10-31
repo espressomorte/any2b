@@ -18,6 +18,7 @@ import androidx.compose.ui.zIndex
 import androidx.tv.material3.*
 import kotlinx.coroutines.flow.collect
 import ua.any2b.core.anilist.AnimeCard
+import ua.any2b.core.tmdb.TmdbListSort
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -26,11 +27,16 @@ fun CategoryScreen(
     state: CategoryState,
     onOpen: (AnimeCard) -> Unit,
     onLoadMore: () -> Unit,
+    onSort: (TmdbListSort) -> Unit,
+    onYearRange: (IntRange?) -> Unit,
     onBack: () -> Unit,
     showRelatedBadge: Boolean = false,
     onFavoriteChanged: () -> Unit = {},
 ) {
     val gridState = rememberLazyGridState()
+    LaunchedEffect(state.sort, state.yearAscending, state.yearRange) {
+        gridState.scrollToItem(0)
+    }
     LaunchedEffect(gridState, state.items.size, state.hasMore, state.loadingMore, state.error) {
         if (state.hasMore && !state.loadingMore && state.error == null && state.items.isNotEmpty()) {
             snapshotFlow { gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1 }
@@ -63,6 +69,20 @@ fun CategoryScreen(
                     .neonGlow(focused = isBackFocused, borderRadius = 12.dp)
             ) { Text("← Назад") }
             Text(title, style = MaterialTheme.typography.headlineLarge)
+        }
+        if (state.sortable) {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                listOf(TmdbListSort.POPULARITY to "Популярність",
+                    TmdbListSort.RATING to "Рейтинг").forEach { (sort, label) ->
+                    Button(onClick = { onSort(sort) }, enabled = state.sort != sort) {
+                        Text(label)
+                    }
+                }
+                YearSortButton(ascending = state.yearAscending,
+                    selected = state.sort == TmdbListSort.YEAR,
+                    yearRange = state.yearRange,
+                    onSort = { onSort(TmdbListSort.YEAR) }, onYearRange = onYearRange)
+            }
         }
         if (state.error != null) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {

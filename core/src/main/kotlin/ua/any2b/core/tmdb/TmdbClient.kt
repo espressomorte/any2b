@@ -101,15 +101,23 @@ class TmdbClient(
         listPage(type, token, TmdbListSort.POPULARITY, 1, genreId).titles
 
     suspend fun listPage(type: TmdbMediaType, token: String, sort: TmdbListSort, page: Int,
-        genreId: Int? = null): TmdbPage {
+        genreId: Int? = null, yearRange: IntRange? = null,
+        yearAscending: Boolean = false): TmdbPage {
         require(page in 1..500)
         require(genreId == null || genreId > 0)
-        val json = if (sort == TmdbListSort.POPULARITY && genreId == null) {
+        val currentDate = java.util.Calendar.getInstance()
+        val currentYear = currentDate.get(java.util.Calendar.YEAR)
+        require(yearRange == null || yearRange.first in 1920..currentYear &&
+            yearRange.last in yearRange.first..currentYear)
+        val years = yearRange ?: if (sort == TmdbListSort.YEAR) 1920..currentYear else null
+        val json = if (sort == TmdbListSort.POPULARITY && genreId == null && years == null) {
             request(listOf(type.path, "popular"), token, "uk-UA", "page" to page.toString())
         } else {
             val sortBy = when (sort) {
                 TmdbListSort.RATING -> "vote_average.desc"
-                TmdbListSort.YEAR -> if (type == TmdbMediaType.MOVIE) "primary_release_date.desc" else "first_air_date.desc"
+                TmdbListSort.YEAR -> (if (type == TmdbMediaType.MOVIE)
+                    "primary_release_date" else "first_air_date") +
+                    if (yearAscending) ".asc" else ".desc"
                 TmdbListSort.POPULARITY -> "popularity.desc"
             }
             val parameters = buildList {
@@ -119,6 +127,17 @@ class TmdbClient(
                 genreId?.let { add("with_genres" to it.toString()) }
                 if (genreId != null && type == TmdbMediaType.MOVIE)
                     add("with_runtime.gte" to "60")
+                years?.let { range ->
+                    val dateField = if (type == TmdbMediaType.MOVIE)
+                        "primary_release_date" else "first_air_date"
+                    add("$dateField.gte" to "${range.first}-01-01")
+                    val upperDate = if (range.last == currentYear)
+                        "%04d-%02d-%02d".format(java.util.Locale.ROOT, currentYear,
+                            currentDate.get(java.util.Calendar.MONTH) + 1,
+                            currentDate.get(java.util.Calendar.DAY_OF_MONTH))
+                    else "${range.last}-12-31"
+                    add("$dateField.lte" to upperDate)
+                }
             }
             request(listOf("discover", type.path), token, "uk-UA", *parameters.toTypedArray())
         }

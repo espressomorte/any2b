@@ -109,6 +109,30 @@ class TmdbClientTest {
     }
 
     @Test
+    fun yearSortingUsesRequestedDirectionAndNeverIncludesFutureReleases() = runBlocking {
+        val requests = mutableListOf<Request>()
+        val client = client { request ->
+            requests += request
+            fixture(request, 200, """{"page":1,"total_pages":1,"results":[]}""")
+        }
+        val today = java.util.Calendar.getInstance()
+        val currentYear = today.get(java.util.Calendar.YEAR)
+        client.listPage(TmdbMediaType.TV, "key", TmdbListSort.YEAR, 1,
+            yearAscending = true)
+        client.listPage(TmdbMediaType.MOVIE, "key", TmdbListSort.YEAR, 1,
+            yearRange = 2010..2019)
+        assertEquals("first_air_date.asc", requests[0].url.queryParameter("sort_by"))
+        assertEquals("1920-01-01", requests[0].url.queryParameter("first_air_date.gte"))
+        assertEquals("%04d-%02d-%02d".format(java.util.Locale.ROOT, currentYear,
+            today.get(java.util.Calendar.MONTH) + 1,
+            today.get(java.util.Calendar.DAY_OF_MONTH)),
+            requests[0].url.queryParameter("first_air_date.lte"))
+        assertEquals("primary_release_date.desc", requests[1].url.queryParameter("sort_by"))
+        assertEquals("2010-01-01", requests[1].url.queryParameter("primary_release_date.gte"))
+        assertEquals("2019-12-31", requests[1].url.queryParameter("primary_release_date.lte"))
+    }
+
+    @Test
     fun animationListsUseDiscoverWithGenre16ForBothMediaTypes() = runBlocking {
         val requests = mutableListOf<Request>()
         val client = client { request ->

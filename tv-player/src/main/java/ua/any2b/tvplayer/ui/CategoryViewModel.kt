@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -11,11 +12,16 @@ import ua.any2b.core.anilist.AniListClient
 import ua.any2b.core.anilist.AnimeCard
 import ua.any2b.core.anilist.Title
 import ua.any2b.core.anilist.groupNumberedTvSeasons
+import ua.any2b.core.tmdb.TmdbListSort
 import ua.any2b.tvplayer.data.FavoritesManager
 import ua.any2b.tvplayer.data.WatchHistoryManager
 
 data class CategoryState(
     val items: List<AnimeCard> = emptyList(),
+    val sort: TmdbListSort = TmdbListSort.POPULARITY,
+    val yearAscending: Boolean = false,
+    val yearRange: IntRange? = null,
+    val sortable: Boolean = false,
     val loadingMore: Boolean = false,
     val hasMore: Boolean = true,
     val error: String? = null,
@@ -31,8 +37,13 @@ class CategoryViewModel(
     private var page = 0
     private var localItems: List<AnimeCard> = emptyList()
     private var loadedRawItems: List<AnimeCard> = emptyList()
+    private var loadJob: Job? = null
 
-    private val _state = MutableStateFlow(CategoryState())
+    private val _state = MutableStateFlow(CategoryState(
+        sort = if (categoryId == "top_score") TmdbListSort.RATING else TmdbListSort.POPULARITY,
+        sortable = categoryId !in setOf("favorites", "history", "upcoming") &&
+            !categoryId.startsWith("related:") &&
+            !categoryId.startsWith("recommendations:")))
     val state: StateFlow<CategoryState> = _state
 
     init {
@@ -46,11 +57,36 @@ class CategoryViewModel(
     private val recommendationsAnimeId: Int? get() = categoryId.removePrefix("recommendations:")
         .takeIf { categoryId.startsWith("recommendations:") }?.toIntOrNull()
 
+    fun changeSort(sort: TmdbListSort) {
+        val current = _state.value
+        if (!current.sortable || current.sort == sort && sort != TmdbListSort.YEAR) return
+        reload(current.copy(sort = sort, yearAscending = sort == TmdbListSort.YEAR &&
+            current.sort == sort && !current.yearAscending))
+    }
+
+    fun changeYearRange(range: IntRange?) {
+        if (!_state.value.sortable) return
+        val currentYear = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)
+        if (range != null && (range.first !in 1920..currentYear ||
+                range.last !in range.first..currentYear)) return
+        reload(_state.value.copy(sort = TmdbListSort.YEAR, yearAscending = false,
+            yearRange = range))
+    }
+
+    private fun reload(state: CategoryState) {
+        loadJob?.cancel()
+        page = 0
+        loadedRawItems = emptyList()
+        _state.value = state.copy(items = emptyList(), loadingMore = false,
+            hasMore = true, error = null)
+        loadMore()
+    }
+
     fun loadMore() {
         val current = _state.value
         if (current.loadingMore || !current.hasMore) return
         _state.value = current.copy(loadingMore = true, error = null)
-        viewModelScope.launch {
+        loadJob = viewModelScope.launch {
             try {
                 val nextItems: List<AnimeCard>
                 val hasMore: Boolean
@@ -72,21 +108,21 @@ class CategoryViewModel(
                         hasMore = result.hasNextPage
                     }
                     else -> {
-                        nextItems = client.categoryPage(categoryId, page + 1, PAGE_SIZE)
+                        nextItems = client.categoryPage(categoryId, page + 1, PAGE_SIZE,
+                            current.sort, current.yearRange, current.yearAscending)
                         page++
                         hasMore = nextItems.size == PAGE_SIZE
                     }
                 }
                 loadedRawItems = (loadedRawItems + nextItems).distinctBy { it.id }
                 val allItems = groupNumberedTvSeasons(loadedRawItems)
-                _state.value = CategoryState(
-                    items = allItems,
-                    hasMore = hasMore,
-                )
+                _state.value = _state.value.copy(items = allItems,
+                    loadingMore = false, hasMore = hasMore)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _state.value = current.copy(error = e.message ?: "Не вдалося завантажити тайтли")
+                _state.value = _state.value.copy(loadingMore = false,
+                    error = e.message ?: "Не вдалося завантажити тайтли")
             }
         }
     }
@@ -97,7 +133,7 @@ class CategoryViewModel(
         val visibleCount = maxOf(PAGE_SIZE, loadedRawItems.size)
         val visible = localItems.take(visibleCount)
         loadedRawItems = visible
-        _state.value = CategoryState(items = groupNumberedTvSeasons(visible),
+        _state.value = _state.value.copy(items = groupNumberedTvSeasons(visible),
             hasMore = visible.size < localItems.size)
     }
 

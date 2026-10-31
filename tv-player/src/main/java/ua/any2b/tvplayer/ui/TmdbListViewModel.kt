@@ -21,6 +21,8 @@ import ua.any2b.tvplayer.data.workerTmdbConnection
 data class TmdbListState(
     val category: String = "favorites",
     val sort: TmdbListSort = TmdbListSort.POPULARITY,
+    val yearAscending: Boolean = false,
+    val yearRange: IntRange? = null,
     val titles: List<TmdbTitle> = emptyList(),
     val loading: Boolean = false,
     val hasMore: Boolean = false,
@@ -44,7 +46,8 @@ class TmdbListViewModel(application: Application) : AndroidViewModel(application
         } ?: "favorites"
         if (_state.value.category == normalized && (_state.value.page > 0 || _state.value.loading)) return
         loadJob?.cancel()
-        _state.value = TmdbListState(category = normalized)
+        _state.value = TmdbListState(category = normalized,
+            sort = if (normalized == "mal_top") TmdbListSort.RATING else TmdbListSort.POPULARITY)
         if (normalized == "favorites" || normalized == "history") refreshPersonalList() else loadMore()
     }
 
@@ -58,12 +61,26 @@ class TmdbListViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun changeSort(sort: TmdbListSort) {
-        if (_state.value.category == "favorites" || _state.value.category == "history" ||
-            _state.value.category == "mal_top" ||
-            _state.value.category == "recommendations" ||
-            _state.value.sort == sort) return
+        if (_state.value.category in SPECIAL_LISTS) return
+        val current = _state.value
+        if (current.sort == sort && sort != TmdbListSort.YEAR) return
         loadJob?.cancel()
-        _state.value = _state.value.copy(sort = sort, titles = emptyList(), page = 0,
+        _state.value = current.copy(sort = sort,
+            yearAscending = sort == TmdbListSort.YEAR && current.sort == sort &&
+                !current.yearAscending,
+            titles = emptyList(), page = 0,
+            hasMore = false, loading = false, error = null)
+        loadMore()
+    }
+
+    fun changeYearRange(range: IntRange?) {
+        if (_state.value.category in SPECIAL_LISTS) return
+        val currentYear = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)
+        if (range != null && (range.first !in 1920..currentYear ||
+                range.last !in range.first..currentYear)) return
+        loadJob?.cancel()
+        _state.value = _state.value.copy(sort = TmdbListSort.YEAR,
+            yearAscending = false, yearRange = range, titles = emptyList(), page = 0,
             hasMore = false, loading = false, error = null)
         loadMore()
     }
@@ -79,7 +96,12 @@ class TmdbListViewModel(application: Application) : AndroidViewModel(application
         loadJob = viewModelScope.launch {
             try {
                 if (current.category == "mal_top") {
-                    val result = malTmdbCatalog.page(nextPage)
+                    val rankingType = if (current.sort == TmdbListSort.POPULARITY)
+                        "bypopularity" else "all"
+                    val result = if (current.sort == TmdbListSort.YEAR || current.yearRange != null)
+                        malTmdbCatalog.filteredPage(nextPage, current.yearRange,
+                            current.yearAscending, current.sort == TmdbListSort.YEAR, rankingType)
+                    else malTmdbCatalog.page(nextPage, rankingType = rankingType)
                     val latest = _state.value
                     val titles = (latest.titles + result.titles).distinctBy { it.type to it.id }
                     _state.value = latest.copy(titles = titles, page = nextPage,
@@ -96,7 +118,8 @@ class TmdbListViewModel(application: Application) : AndroidViewModel(application
                 val connection = workerTmdbConnection(getApplication())
                     ?: throw IllegalStateException("Налаштуйте URL і ключ Worker")
                 val result = connection.client.listPage(type, connection.accessKey, current.sort,
-                    nextPage, genreId = if (current.category.startsWith("animation_")) 16 else null)
+                    nextPage, genreId = if (current.category.startsWith("animation_")) 16 else null,
+                    yearRange = current.yearRange, yearAscending = current.yearAscending)
                 val latest = _state.value
                 _state.value = latest.copy(titles = (latest.titles + result.titles)
                     .distinctBy { it.type to it.id }, page = result.page,
@@ -110,5 +133,9 @@ class TmdbListViewModel(application: Application) : AndroidViewModel(application
                 _state.value = _state.value.copy(loading = false, error = message)
             }
         }
+    }
+
+    private companion object {
+        val SPECIAL_LISTS = setOf("favorites", "history", "recommendations", "upcoming")
     }
 }

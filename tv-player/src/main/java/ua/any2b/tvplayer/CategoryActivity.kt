@@ -41,6 +41,8 @@ class CategoryActivity : ComponentActivity() {
                         startActivity(Intent(this, DetailsActivity::class.java).apply { putExtra("ANIME_ID", card.id) })
                     },
                     onLoadMore = viewModel::loadMore,
+                    onSort = viewModel::changeSort,
+                    onYearRange = viewModel::changeYearRange,
                     onBack = { finish() },
                     showRelatedBadge = categoryId.startsWith("related:"),
                     onFavoriteChanged = viewModel::refreshLocal,

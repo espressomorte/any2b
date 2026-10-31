@@ -8,6 +8,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import ua.any2b.core.tmdb.TmdbListSort
 import java.util.concurrent.TimeUnit
 
 /**
@@ -44,7 +45,7 @@ class AniListClient(
         return listOf(
             row("popularSeason", "popular_season", "Популярне цього сезону"),
             row("trending", "trending", "У тренді"),
-            row("upcoming", "upcoming", "Скоро: наступний сезон"),
+            row("upcoming", "upcoming", "Скоро нові сезони"),
             row("popularAll", "popular_all", "Популярне за весь час"),
             row("topScore", "top_score", "Найвищі оцінки"),
         ).filter { it.items.isNotEmpty() }
@@ -128,27 +129,49 @@ class AniListClient(
     }
 
     /** One page of a home category, used by the full category screen. */
-    suspend fun categoryPage(categoryId: String, page: Int, perPage: Int = 20): List<AnimeCard> {
+    suspend fun categoryPage(categoryId: String, page: Int, perPage: Int = 20,
+        sort: TmdbListSort = TmdbListSort.POPULARITY,
+        yearRange: IntRange? = null, yearAscending: Boolean = false): List<AnimeCard> {
         require(page > 0 && perPage > 0)
         val (season, year) = Season.current()
         val (nextSeason, nextYear) = season.next(year)
+        val currentDate = java.util.Calendar.getInstance()
+        val currentYear = currentDate.get(java.util.Calendar.YEAR)
+        require(yearRange == null || yearRange.first in 1920..currentYear &&
+            yearRange.last in yearRange.first..currentYear)
+        val years = yearRange ?: if (sort == TmdbListSort.YEAR)
+            1920..currentYear else null
+        val sortArg = when (sort) {
+            TmdbListSort.POPULARITY -> "POPULARITY_DESC"
+            TmdbListSort.RATING -> "SCORE_DESC"
+            TmdbListSort.YEAR ->
+                if (yearAscending) "START_DATE" else "START_DATE_DESC"
+        }
         val genre = categoryId.takeIf { it.startsWith("genre:") }
             ?.removePrefix("genre:")?.takeIf { it.isNotBlank() }
+        val yearArgs = if (years != null)
+            "startDate_greater: ${'$'}lowerDate, startDate_lesser: ${'$'}upperDate, " else ""
         val mediaArgs = when {
-            categoryId == "popular_season" -> "season: ${'$'}season, seasonYear: ${'$'}year, sort: POPULARITY_DESC"
-            categoryId == "trending" -> "sort: TRENDING_DESC"
+            categoryId == "popular_season" && years == null &&
+                sort == TmdbListSort.POPULARITY ->
+                "season: ${'$'}season, seasonYear: ${'$'}year, sort: POPULARITY_DESC"
+            categoryId == "popular_season" -> "${yearArgs}sort: $sortArg"
+            categoryId == "trending" && years == null &&
+                sort == TmdbListSort.POPULARITY -> "sort: TRENDING_DESC"
+            categoryId == "trending" -> "${yearArgs}sort: $sortArg"
             categoryId == "upcoming" -> "season: ${'$'}nextSeason, seasonYear: ${'$'}nextYear, sort: POPULARITY_DESC"
-            categoryId == "popular_all" -> "sort: POPULARITY_DESC"
-            categoryId == "top_score" -> "sort: SCORE_DESC"
-            genre != null -> "genre_in: ${'$'}genres, sort: POPULARITY_DESC"
+            categoryId == "popular_all" || categoryId == "top_score" -> "${yearArgs}sort: $sortArg"
+            genre != null -> "genre_in: ${'$'}genres, ${yearArgs}sort: $sortArg"
             else -> throw IllegalArgumentException("Невідома категорія: $categoryId")
         }
         val categoryVariables = when {
-            categoryId == "popular_season" -> ", ${'$'}season: MediaSeason, ${'$'}year: Int"
+            categoryId == "popular_season" && years == null &&
+                sort == TmdbListSort.POPULARITY ->
+                ", ${'$'}season: MediaSeason, ${'$'}year: Int"
             categoryId == "upcoming" -> ", ${'$'}nextSeason: MediaSeason, ${'$'}nextYear: Int"
             genre != null -> ", ${'$'}genres: [String]"
             else -> ""
-        }
+        } + if (years != null) ", ${'$'}lowerDate: FuzzyDateInt, ${'$'}upperDate: FuzzyDateInt" else ""
         val variables = JSONObject()
             .put("page", page)
             .put("perPage", perPage)
@@ -157,6 +180,16 @@ class AniListClient(
             .put("nextSeason", nextSeason.name)
             .put("nextYear", nextYear)
         if (genre != null) variables.put("genres", JSONArray().put(genre))
+        years?.let { range ->
+            variables.put("lowerDate", (range.first - 1) * 10000 + 1231)
+            val upper = if (range.last == currentYear) {
+                currentDate.add(java.util.Calendar.DAY_OF_MONTH, 1)
+                currentDate.get(java.util.Calendar.YEAR) * 10000 +
+                    (currentDate.get(java.util.Calendar.MONTH) + 1) * 100 +
+                    currentDate.get(java.util.Calendar.DAY_OF_MONTH)
+            } else (range.last + 1) * 10000 + 101
+            variables.put("upperDate", upper)
+        }
         val query = """
 query Category(${'$'}page: Int, ${'$'}perPage: Int$categoryVariables) {
   Page(page: ${'$'}page, perPage: ${'$'}perPage) {
