@@ -41,12 +41,16 @@ data class AnimeDetails(
     val genres: List<String>,
     val studios: List<String>,
     val related: List<AnimeCard> = emptyList(),
+    val seasonRelations: List<AnimeRelation> = emptyList(),
     val recommendations: List<AnimeCard> = emptyList(),
     val recommendationsHasMore: Boolean = false,
     val trailer: MediaTrailer? = null,
     val synonyms: List<String> = emptyList(),
     val nextEpisode: Int? = null,
 )
+
+/** Explicit AniList sequel/prequel edge. Other relations stay in Related. */
+data class AnimeRelation(val type: String, val card: AnimeCard)
 
 /** AniList currently provides YouTube and Dailymotion trailer IDs. */
 data class MediaTrailer(val id: String, val site: String) {

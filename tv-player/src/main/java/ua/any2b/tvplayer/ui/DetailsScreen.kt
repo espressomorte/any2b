@@ -17,6 +17,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,17 +47,23 @@ import coil.compose.AsyncImage
 import ua.any2b.core.anilist.AnimeDetails
 import ua.any2b.core.anilist.AnimeCard
 import ua.any2b.core.anilist.Title
+import ua.any2b.core.anilist.NumberedSeason
+import ua.any2b.core.anilist.groupNumberedTvSeasons
 import ua.any2b.core.anitube.AnitubeEpisode
 import ua.any2b.core.anitube.AnitubeSearchResult
 import ua.any2b.core.anitube.AnitubeVoice
 import ua.any2b.core.toloka.TolokaHit
 import ua.any2b.core.toloka.shortenedSearchNames
 import ua.any2b.core.tmdb.TmdbTitle
+import ua.any2b.core.fanart.FanartArtwork
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class, ExperimentalTvMaterial3Api::class)
 @Composable
 fun DetailsScreen(
     state: DetailsState,
+    experimentalArtwork: FanartArtwork? = null,
+    experimentalPalette: FanartPalette? = null,
+    fanartNotice: String? = null,
     onRetry: () -> Unit,
     onRetryVideoSource: () -> Unit,
     onSelectRelease: (AnitubeSearchResult) -> Unit,
@@ -65,12 +72,14 @@ fun DetailsScreen(
     onSelectTmdb: (TmdbTitle) -> Unit,
     onFindTmdbCandidates: () -> Unit,
     onTolokaSearch: (String) -> Unit,
+    onAutoTolokaSearch: (String, String?) -> Unit,
     onSelectTolokaHit: (String) -> Unit,
     onRetryTolokaMetadata: () -> Unit,
     onPlayTolokaFile: (Int) -> Unit,
     onToggleFavorite: () -> Unit,
     onSelectVoice: (Int) -> Unit,
     onSelectEpisode: (Int) -> Unit,
+    onOpenSeason: (Int) -> Unit,
     onWatchClick: () -> Unit,
     onTrailerClick: () -> Unit,
     onBackClick: () -> Unit,
@@ -82,7 +91,8 @@ fun DetailsScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(AppColors.BackgroundDark)
+            .background(if (experimentalArtwork != null)
+                experimentalPalette?.background ?: AppColors.BackgroundDark else AppColors.BackgroundDark)
             .padding(32.dp)
     ) {
         when (state) {
@@ -112,6 +122,7 @@ fun DetailsScreen(
                 }
             }
             is DetailsState.Ready -> {
+                val surfaceColors = detailsSurfaceColors(experimentalPalette, experimentalArtwork != null)
                 val isMovie = state.details.format.equals("MOVIE", ignoreCase = true)
                 val watchFocusRequester = remember(state.details.id) { FocusRequester() }
                 var initialWatchFocusSet by remember(state.details.id) { mutableStateOf(false) }
@@ -120,9 +131,25 @@ fun DetailsScreen(
                 var showTmdbDialog by remember(state.details.id) { mutableStateOf(false) }
                 var showRelatedDialog by remember(state.details.id) { mutableStateOf(false) }
                 var showTolokaQueryDialog by remember(state.details.id) { mutableStateOf(false) }
+                var showEpisodeDialog by remember(state.details.id) { mutableStateOf(false) }
+                var showSynopsisDialog by remember(state.details.id) { mutableStateOf(false) }
+                LaunchedEffect(showEpisodeDialog) {
+                    if (!showEpisodeDialog && initialWatchFocusSet) watchFocusRequester.requestFocus()
+                }
                 var videoTab by rememberSaveable(state.details.id) { mutableStateOf("online") }
+                val onlineUnavailable = state.videoSource is VideoSourceState.NotFound &&
+                    state.tmdbLink !is TmdbLinkState.Loading &&
+                    state.seriesSeasons.count { it.animeId != null } <= 1
+                val displayVideoTab = if (onlineUnavailable) "torrent" else videoTab
+                var automaticTorrentSearchStarted by remember(state.details.id) { mutableStateOf(false) }
                 val anitubeUkrainianTitle = (state.videoSource as? VideoSourceState.Success)?.release?.title
                 val tmdbUkrainianTitle = state.tmdbLink.ukrainianTitle
+                val seriesTitle = (state.tmdbLink as? TmdbLinkState.Confirmed)?.title
+                    ?.takeIf { it.type == ua.any2b.core.tmdb.TmdbMediaType.TV }
+                    ?.let { it.ukrainianTitle ?: it.title }
+                val seasonIds = state.seriesSeasons
+                    .mapNotNull { it.animeId }.filter { it != state.details.id }.toSet()
+                val relatedOutsideSeries = state.details.related.filterNot { it.id in seasonIds }
                 val tolokaUkrainianTitle = anitubeUkrainianTitle ?: tmdbUkrainianTitle
                 val customTolokaQueries = remember(state.details.id) { mutableStateListOf<String>() }
                 val tolokaOptions = (customTolokaQueries.map { "Власний" to it } +
@@ -137,8 +164,30 @@ fun DetailsScreen(
                         tolokaQuery = tolokaOptions.first().second
                     }
                 }
-                LaunchedEffect(videoTab, state.details.id) {
-                    if (videoTab == "torrent") {
+                LaunchedEffect(onlineUnavailable, state.details.id) {
+                    if (onlineUnavailable) {
+                        // TMDB can trigger one last AniTube retry immediately after resolving.
+                        delay(250)
+                        videoTab = "torrent"
+                        if (!automaticTorrentSearchStarted && state.tolokaSearch is TolokaSearchState.Idle) {
+                            automaticTorrentSearchStarted = true
+                            val initial = tolokaOptions.firstOrNull()?.second.orEmpty()
+                            if (initial.isNotBlank()) {
+                                tolokaQuery = initial
+                                onAutoTolokaSearch(initial, state.details.title.english)
+                            }
+                        }
+                    }
+                }
+                LaunchedEffect(state.tolokaSearch, onlineUnavailable) {
+                    val result = state.tolokaSearch as? TolokaSearchState.Results
+                    if (onlineUnavailable && result != null) {
+                        tolokaQuery = result.query
+                        tolokaQueryCustomized = true
+                    }
+                }
+                LaunchedEffect(videoTab, onlineUnavailable, state.details.id) {
+                    if (videoTab == "torrent" && !onlineUnavailable) {
                         val currentQuery = if (tolokaQueryCustomized) tolokaQuery
                             else tolokaOptions.firstOrNull()?.second.orEmpty()
                         if (currentQuery.isNotBlank()) {
@@ -165,7 +214,8 @@ fun DetailsScreen(
                         modifier = Modifier
                             .width(220.dp)
                             .fillMaxHeight()
-                            .verticalScroll(rememberScrollState()),
+                            .then(if (experimentalArtwork == null)
+                                Modifier.verticalScroll(rememberScrollState()) else Modifier),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
@@ -173,15 +223,22 @@ fun DetailsScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .aspectRatio(2f / 3f)
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(AppColors.SurfaceDark)
+                                .then(if (experimentalArtwork == null)
+                                    Modifier.clip(RoundedCornerShape(16.dp)) else Modifier)
+                                .background(surfaceColors.panel)
                         ) {
-                            AsyncImage(
-                                model = state.details.cover,
-                                contentDescription = state.details.title.display,
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxSize()
-                            )
+                            if (experimentalArtwork != null) {
+                                FanartPoster(experimentalArtwork, state.details.title.display,
+                                    experimentalPalette?.background ?: AppColors.BackgroundDark,
+                                    Modifier.fillMaxSize())
+                            } else {
+                                AsyncImage(
+                                    model = state.details.cover,
+                                    contentDescription = state.details.title.display,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
                             Box(
                                 modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth().height(80.dp)
                                     .background(Brush.verticalGradient(listOf(
@@ -213,12 +270,12 @@ fun DetailsScreen(
                             val favBg = when {
                                 isFavFocused -> AppColors.NeonCyanLight
                                 state.isFavorite -> AppColors.NeonCyan
-                                else -> AppColors.SurfaceDark
+                                else -> surfaceColors.card
                             }
                             val favText = when {
                                 isFavFocused -> AppColors.ButtonDarkText
                                 state.isFavorite -> AppColors.ButtonDarkText
-                                else -> AppColors.AccentLight
+                                else -> surfaceColors.text
                             }
                             OutlinedButton(
                                 onClick = onToggleFavorite,
@@ -249,8 +306,8 @@ fun DetailsScreen(
 
                             // 2. Trailer Button
                             var isTrailerFocused by remember { mutableStateOf(false) }
-                            val trailerBg = if (isTrailerFocused) AppColors.NeonCyanLight else AppColors.SurfaceDark
-                            val trailerText = if (isTrailerFocused) AppColors.ButtonDarkText else Color.White
+                            val trailerBg = if (isTrailerFocused) AppColors.NeonCyanLight else surfaceColors.card
+                            val trailerText = if (isTrailerFocused) AppColors.ButtonDarkText else surfaceColors.text
                             OutlinedButton(
                                 onClick = onTrailerClick,
                                 scale = OutlinedButtonDefaults.scale(scale = 1f, focusedScale = 1f),
@@ -280,11 +337,11 @@ fun DetailsScreen(
 
                             // 3. Related Button ("Пов'язане")
                             var isRelatedFocused by remember { mutableStateOf(false) }
-                            val relatedBg = if (isRelatedFocused) AppColors.NeonCyanLight else AppColors.SurfaceDark
-                            val relatedText = if (isRelatedFocused) AppColors.ButtonDarkText else Color.White
+                            val relatedBg = if (isRelatedFocused) AppColors.NeonCyanLight else surfaceColors.card
+                            val relatedText = if (isRelatedFocused) AppColors.ButtonDarkText else surfaceColors.text
                             OutlinedButton(
                                 onClick = { showRelatedDialog = true },
-                                enabled = state.details.related.isNotEmpty(),
+                                enabled = relatedOutsideSeries.isNotEmpty(),
                                 scale = OutlinedButtonDefaults.scale(scale = 1f, focusedScale = 1f),
                                 shape = OutlinedButtonDefaults.shape(RoundedCornerShape(10.dp)),
                                 border = OutlinedButtonDefaults.border(border = Border.None, focusedBorder = Border.None),
@@ -308,11 +365,6 @@ fun DetailsScreen(
                                 Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                                     FontAwesomeIcon(FaIcons.LINK, color = relatedText, size = 18.sp)
                                 }
-                            }
-                        }
-                        if (state.details.genres.isNotEmpty()) {
-                            Box(Modifier.padding(top = 8.dp)) {
-                                DetailsGenreTags(state.details.genres, onOpenGenre)
                             }
                         }
                     }
@@ -340,8 +392,23 @@ fun DetailsScreen(
                                 Row(modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                                     verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        text = state.details.title.display,
+                                    if (experimentalArtwork != null) {
+                                        FanartLogo(experimentalArtwork, state.details.title.display,
+                                            Modifier.widthIn(max = 460.dp).height(82.dp)
+                                                .combinedClickable(
+                                                    onClick = {
+                                                        onResetManualSearch()
+                                                        showManualDialog = true
+                                                    },
+                                                    onLongClick = {
+                                                        onFindTmdbCandidates()
+                                                        showTmdbDialog = true
+                                                    },
+                                                ).semantics {
+                                                    contentDescription = "${state.details.title.display}. OK — змінити реліз AniTube; утримувати — уточнити TMDB"
+                                                })
+                                    } else Text(
+                                        text = seriesTitle ?: state.details.title.display,
                                         modifier = Modifier.weight(1f, fill = false)
                                             .then(if (sourceTitle == null) Modifier.combinedClickable(
                                                 onClick = {
@@ -354,16 +421,20 @@ fun DetailsScreen(
                                                 },
                                             ) else Modifier),
                                         style = MaterialTheme.typography.headlineLarge,
-                                        color = Color.White,
+                                        color = surfaceColors.text,
                                         fontWeight = FontWeight.Bold,
                                         maxLines = 2,
                                         overflow = TextOverflow.Ellipsis,
                                     )
-                                    state.details.seasonYear?.let { year ->
-                                        Text("$year", color = AppColors.TextSecondary, fontSize = 16.sp)
+                                    ((state.tmdbLink as? TmdbLinkState.Confirmed)?.title
+                                        ?.takeIf { it.type == ua.any2b.core.tmdb.TmdbMediaType.TV }?.year
+                                        ?: state.details.seasonYear)?.let { year ->
+                                        Text("$year", color = if (experimentalArtwork != null &&
+                                            experimentalPalette?.light == true) Color(0xFF465466)
+                                            else AppColors.TextSecondary, fontSize = 16.sp)
                                     }
                                 }
-                                if (sourceTitle != null) {
+                                if (sourceTitle != null && experimentalArtwork == null) {
                                     val displayTitle = if (anitubeUkrainianTitle != null) sourceTitle
                                         else "$sourceTitle · TMDB"
                                     var sourceTitleFocused by remember { mutableStateOf(false) }
@@ -393,8 +464,20 @@ fun DetailsScreen(
                                         overflow = TextOverflow.Ellipsis,
                                     )
                                 }
+                                if (fanartNotice != null) {
+                                    Text(fanartNotice, color = AppColors.TextSecondary,
+                                        style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                            if (!state.details.description.isNullOrBlank()) {
+                                TmdbInfoChip("Synopsis", surfaceColors) { showSynopsisDialog = true }
                             }
 
+                        }
+
+                        if (state.details.genres.isNotEmpty()) {
+                            DetailsGenreTags(state.details.genres, onOpenGenre,
+                                light = experimentalArtwork != null && experimentalPalette?.light == true)
                         }
 
                         // SCROLLABLE TAB CONTENT AREA
@@ -409,7 +492,7 @@ fun DetailsScreen(
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .background(AppColors.SurfaceDark, RoundedCornerShape(12.dp))
+                                    .background(surfaceColors.panel, RoundedCornerShape(12.dp))
                                     .padding(bottom = 12.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
@@ -417,15 +500,20 @@ fun DetailsScreen(
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .background(AppColors.SurfaceCard.copy(alpha = 0.4f), RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
+                                        .background(surfaceColors.card, RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
                                         .padding(horizontal = 16.dp, vertical = 10.dp),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    SegmentedControl(selectedTab = videoTab) { tab ->
-                                        videoTab = tab
+                                    if (onlineUnavailable) {
+                                        SegmentButton("Торент", selected = true,
+                                            surfaceColors = surfaceColors,
+                                            icon = FaIcons.ASTERISK) { videoTab = "torrent" }
+                                    } else {
+                                        SegmentedControl(selectedTab = videoTab,
+                                            surfaceColors = surfaceColors) { tab -> videoTab = tab }
                                     }
-                                    if (videoTab == "torrent") {
+                                    if (displayVideoTab == "torrent") {
                                         var queryFocused by remember { mutableStateOf(false) }
                                         Text(
                                             text = tolokaQuery,
@@ -444,7 +532,7 @@ fun DetailsScreen(
                                 }
 
                                 // Content directly below without gaps
-                                if (videoTab == "online") {
+                                if (displayVideoTab == "online") {
                                     // Watch Progress & Compact Watch Button inside Online tab
                                     if (state.historyEntry != null) {
                                         Column(
@@ -554,8 +642,8 @@ fun DetailsScreen(
                                                     verticalAlignment = Alignment.CenterVertically,
                                                 ) {
                                                     var isWatchFocused by remember { mutableStateOf(false) }
-                                                    val watchBg = if (isWatchFocused) AppColors.NeonCyanLight else AppColors.SurfaceCard
-                                                    val watchText = if (isWatchFocused) AppColors.ButtonDarkText else Color.White
+                                                    val watchBg = if (isWatchFocused) AppColors.NeonCyanLight else surfaceColors.card
+                                                    val watchText = if (isWatchFocused) AppColors.ButtonDarkText else surfaceColors.text
                                                     Button(
                                                         onClick = onWatchClick,
                                                         enabled = canWatch,
@@ -667,78 +755,20 @@ fun DetailsScreen(
                                         }
                                     }
 
-                                    // Episodes for selected voice
-                                    val currentVoice = if (state.videoSource is VideoSourceState.Success) {
-                                        state.voices.getOrNull(state.selectedVoiceIndex)
-                                    } else null
-                                    val watchedEpNumber = state.historyEntry?.episodeNumber ?: -1
-                                    if (!isMovie && currentVoice != null && currentVoice.episodes.isNotEmpty()) {
-                                        Text(
-                                            "Серії:",
+                                    // Season and episode choices stay together below playback.
+                                    val currentVoice = if (state.videoSource is VideoSourceState.Success)
+                                        state.voices.getOrNull(state.selectedVoiceIndex) else null
+                                    val numbered = state.seriesSeasons
+                                    if (!isMovie && (numbered.isNotEmpty() ||
+                                            currentVoice?.episodes?.isNotEmpty() == true)) {
+                                        val currentSeason = numbered.firstOrNull { it.animeId == state.details.id }
+                                        OutlinedButton(
+                                            onClick = { showEpisodeDialog = true },
                                             modifier = Modifier.padding(horizontal = 16.dp),
-                                            color = AppColors.TextLight,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Medium,
-                                        )
-                                        LazyRow(
-                                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                            modifier = Modifier.fillMaxWidth().graphicsLayer { clip = false }
                                         ) {
-                                            itemsIndexed(currentVoice.episodes) { epIndex, episode ->
-                                                var isEpFocused by remember { mutableStateOf(false) }
-                                                val isEpSelected = epIndex == state.selectedEpisodeIndex
-                                                val isWatched = episode.episodeNumber < watchedEpNumber ||
-                                                        (state.historyEntry != null && episode.episodeNumber == watchedEpNumber && state.historyEntry.progress >= 0.99f)
-                                                val bg = when {
-                                                    isEpFocused -> AppColors.NeonCyanLight
-                                                    isEpSelected -> AppColors.NeonCyan
-                                                    else -> AppColors.SurfaceCardHover
-                                                }
-                                                val textColor = when {
-                                                    isEpFocused -> AppColors.ButtonDarkText
-                                                    isEpSelected -> AppColors.ButtonDarkText
-                                                    isWatched -> AppColors.TextWatched
-                                                    else -> AppColors.TextSecondary
-                                                }
-                                                val epText = episode.title.takeIf { it.isNotBlank() && !it.contains("серія", true) }
-                                                    ?: "Серія ${episode.episodeNumber}"
-
-                                                Surface(
-                                                    onClick = { onSelectEpisode(epIndex) },
-                                                    scale = ClickableSurfaceDefaults.scale(scale = 1f, focusedScale = 1f),
-                                                    shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
-                                                    border = ClickableSurfaceDefaults.border(border = Border.None, focusedBorder = Border.None),
-                                                    glow = ClickableSurfaceDefaults.glow(
-                                                        glow = Glow.None,
-                                                        focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 6.dp)
-                                                    ),
-                                                    colors = ClickableSurfaceDefaults.colors(
-                                                        containerColor = bg,
-                                                        focusedContainerColor = bg
-                                                    ),
-                                                    modifier = Modifier
-                                                        .height(32.dp)
-                                                        .zIndex(if (isEpFocused) 1f else 0f)
-                                                        .onFocusChanged { isEpFocused = it.isFocused }
-                                                        .neonGlow(focused = isEpFocused, borderRadius = 8.dp)
-                                                ) {
-                                                    Box(
-                                                        modifier = Modifier
-                                                            .fillMaxHeight()
-                                                            .padding(horizontal = 10.dp),
-                                                        contentAlignment = Alignment.Center
-                                                    ) {
-                                                        Text(
-                                                            text = epText,
-                                                            color = textColor,
-                                                            fontSize = 11.sp,
-                                                            fontWeight = if (isEpSelected) FontWeight.Bold else FontWeight.Normal,
-                                                            maxLines = 1
-                                                        )
-                                                    }
-                                                }
-                                            }
+                                            val episode = currentVoice?.episodes?.getOrNull(state.selectedEpisodeIndex)
+                                            Text((currentSeason?.let { "Сезон ${it.number} · " } ?: "") +
+                                                (episode?.let { "Серія ${it.episodeNumber}" } ?: "Вибрати серію") + "  ⌄")
                                         }
                                     }
                                 } else {
@@ -753,6 +783,7 @@ fun DetailsScreen(
                                         onSelect = onSelectTolokaHit,
                                         onRetryMetadata = onRetryTolokaMetadata,
                                         onPlayFile = onPlayTolokaFile,
+                                        surfaceColors = surfaceColors,
                                     )
                                 }
                             }
@@ -761,9 +792,11 @@ fun DetailsScreen(
                             if (state.details.recommendations.isNotEmpty()) {
                                 DetailsTitleRow(
                                     title = "Рекомендації",
-                                    items = state.details.recommendations,
+                                    light = experimentalArtwork != null && experimentalPalette?.light == true,
+                                    items = groupNumberedTvSeasons(state.details.recommendations),
                                     showRelatedBadge = false,
-                                    showMore = state.details.recommendations.size > 13 || state.details.recommendationsHasMore,
+                                    showMore = groupNumberedTvSeasons(state.details.recommendations).size > 13 ||
+                                        state.details.recommendationsHasMore,
                                     onOpen = onOpenRelated,
                                     onMore = onMoreRecommendations,
                                 )
@@ -773,9 +806,40 @@ fun DetailsScreen(
                 }
 
                 // Related Dialog ("Пов'язане")
+                if (showSynopsisDialog) {
+                    Dialog(onDismissRequest = { showSynopsisDialog = false }) {
+                        Column(Modifier.width(680.dp).heightIn(max = 560.dp)
+                            .background(surfaceColors.panel, RoundedCornerShape(12.dp))
+                            .verticalScroll(rememberScrollState()).padding(24.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                            Text("Синопсис", color = surfaceColors.text,
+                                style = MaterialTheme.typography.titleLarge)
+                            Text(state.details.description.orEmpty(), color = surfaceColors.mutedText)
+                            OutlinedButton(onClick = { showSynopsisDialog = false }) { Text("Назад") }
+                        }
+                    }
+                }
+                if (showEpisodeDialog) {
+                    val voice = state.voices.getOrNull(state.selectedVoiceIndex)
+                    SeasonEpisodeDialog(
+                        seasons = state.seriesSeasons,
+                        currentAnimeId = state.details.id,
+                        episodes = voice?.episodes.orEmpty(),
+                        selectedEpisodeIndex = state.selectedEpisodeIndex,
+                        onDismiss = { showEpisodeDialog = false },
+                        onEpisode = { index ->
+                            onSelectEpisode(index)
+                            showEpisodeDialog = false
+                        },
+                        onSeason = { id ->
+                            showEpisodeDialog = false
+                            onOpenSeason(id)
+                        },
+                    )
+                }
                 if (showRelatedDialog) {
                     RelatedDialog(
-                        related = state.details.related,
+                        related = relatedOutsideSeries,
                         onDismiss = { showRelatedDialog = false },
                         onOpen = { card ->
                             showRelatedDialog = false
@@ -901,33 +965,36 @@ private fun TmdbMatchDialog(
 @Composable
 private fun SegmentedControl(
     selectedTab: String,
+    surfaceColors: DetailsSurfaceColors,
     onTabSelected: (String) -> Unit
 ) {
     Row(
         modifier = Modifier
             .clip(RoundedCornerShape(10.dp))
-            .background(AppColors.SurfaceCard)
+            .background(surfaceColors.card)
             .padding(3.dp),
         horizontalArrangement = Arrangement.spacedBy(3.dp)
     ) {
-        SegmentButton("Онлайн", selected = selectedTab == "online") {
+        SegmentButton("Онлайн", selected = selectedTab == "online", surfaceColors = surfaceColors) {
             onTabSelected("online")
         }
-        SegmentButton("Торент", selected = selectedTab == "torrent") {
+        SegmentButton("Торент", selected = selectedTab == "torrent",
+            surfaceColors = surfaceColors, icon = FaIcons.ASTERISK) {
             onTabSelected("torrent")
         }
     }
 }
 
 @Composable
-private fun SegmentButton(label: String, selected: Boolean, onClick: () -> Unit) {
+private fun SegmentButton(label: String, selected: Boolean,
+    surfaceColors: DetailsSurfaceColors, icon: String? = null, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     val bg = when {
         focused -> AppColors.NeonCyanLight
         selected -> AppColors.NeonCyan
         else -> Color.Transparent
     }
-    val textColor = if (selected || focused) AppColors.ButtonDarkText else Color.White
+    val textColor = if (selected || focused) AppColors.ButtonDarkText else surfaceColors.text
 
     Surface(
         onClick = onClick,
@@ -943,12 +1010,15 @@ private fun SegmentButton(label: String, selected: Boolean, onClick: () -> Unit)
             .zIndex(if (focused) 1f else 0f)
             .onFocusChanged { focused = it.isFocused }
             .neonGlow(focused = focused, borderRadius = 8.dp)
+            .semantics { contentDescription = label }
     ) {
         Box(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
             contentAlignment = Alignment.Center
         ) {
-            Text(label, color = textColor, fontSize = 12.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
+            if (icon != null) FontAwesomeIcon(icon, color = textColor, size = 14.sp)
+            else Text(label, color = textColor, fontSize = 12.sp,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
         }
     }
 }
@@ -1018,6 +1088,7 @@ internal fun TolokaSearchPanel(
     onRetryMetadata: () -> Unit,
     onPlayFile: (Int) -> Unit,
     manualSearch: Boolean = false,
+    surfaceColors: DetailsSurfaceColors = detailsSurfaceColors(null, false),
 ) {
     Column(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
@@ -1025,33 +1096,51 @@ internal fun TolokaSearchPanel(
     ) {
         when (searchState) {
             TolokaSearchState.Idle -> Text(if (manualSearch) "Введіть назву й натисніть «Шукати»." else "Пошук роздач почнеться автоматично.",
-                color = AppColors.TextSecondary)
-            TolokaSearchState.Loading -> Text("Шукаємо роздачі…", color = AppColors.TextLight)
+                color = surfaceColors.mutedText)
+            TolokaSearchState.Loading -> Text("Шукаємо роздачі…", color = surfaceColors.text)
             is TolokaSearchState.Error -> {
                 Text(searchState.message, color = AppColors.ErrorRed)
                 Button(onClick = onSearch) { Text("Повторити пошук") }
             }
             is TolokaSearchState.Results -> {
+                var showWeak by rememberSaveable(searchState.query) { mutableStateOf(false) }
                 if (searchState.query != query.trim()) {
                     Text("Пошук за новим запитом…",
                         color = AppColors.TextSecondary)
-                } else if (searchState.hits.isEmpty()) {
-                    Text(if (manualSearch) "Роздач за цим запитом не знайдено." else "Підхожих роздач немає. Знайдено: ${searchState.totalFound}; відсіяно за назвою, роком або сезоном.",
-                        color = AppColors.TextLight)
                 } else {
-                    Text(if (manualSearch) "Знайдено роздач: ${searchState.hits.size}" else "Підхожих роздач: ${searchState.hits.size} із ${searchState.totalFound}",
-                        color = AppColors.TextSecondary, fontSize = 12.sp)
-                    searchState.hits.forEach { hit ->
+                    if (searchState.hits.isEmpty()) Text(
+                        if (searchState.weakHits.isNotEmpty()) "Точних збігів немає. Можна переглянути сумнівні роздачі нижче."
+                        else if (manualSearch) "Відеороздач за цим запитом не знайдено."
+                        else "Підхожих роздач немає. Знайдено: ${searchState.totalFound}; відсіяно за назвою, роком або сезоном.",
+                        color = surfaceColors.text)
+                    if (searchState.hits.isNotEmpty()) Text(
+                        "Підхожих роздач: ${searchState.hits.size} із ${searchState.totalFound}",
+                        color = surfaceColors.mutedText, fontSize = 12.sp)
+                    val selectedWeak = searchState.selectedId?.let { id ->
+                        searchState.weakHits.any { it.id == id }
+                    } == true
+                    val visibleHits = searchState.hits +
+                        if (showWeak || selectedWeak) searchState.weakHits else emptyList()
+                    visibleHits.forEach { hit ->
                         TolokaResultRow(
                             hit = hit,
                             selected = hit.id == searchState.selectedId,
                             opened = hit.id in openedTopics,
                             enabled = transferState !is TolokaTransferState.Loading,
                             onClick = { onSelect(hit.id) },
+                            surfaceColors = surfaceColors,
                         )
                         if (hit.id == searchState.selectedId) {
                             TolokaTransferContent(transferState, playbackStatus, openedFiles,
-                                onSearch, onRetryMetadata, onPlayFile)
+                                onSearch, onRetryMetadata, onPlayFile, surfaceColors)
+                        }
+                    }
+                    if (searchState.weakHits.isNotEmpty()) {
+                        Button(onClick = { showWeak = !showWeak },
+                            modifier = Modifier.fillMaxWidth()) {
+                            Text(if (showWeak || selectedWeak)
+                                "Згорнути сумнівні збіги"
+                            else "…  Показати ще ${searchState.weakHits.size} сумнівних збігів")
                         }
                     }
                 }
@@ -1199,6 +1288,7 @@ private fun TolokaTransferContent(
     onSearch: () -> Unit,
     onRetryMetadata: () -> Unit,
     onPlayFile: (Int) -> Unit,
+    surfaceColors: DetailsSurfaceColors,
 ) {
     Column(
         modifier = Modifier.fillMaxWidth().padding(start = 24.dp),
@@ -1249,7 +1339,7 @@ private fun TolokaTransferContent(
                         scale = CardDefaults.scale(scale = 1f, focusedScale = 1f),
                         shape = CardDefaults.shape(RoundedCornerShape(10.dp)),
                         colors = CardDefaults.colors(
-                            containerColor = if (opened) AppColors.SurfaceDark else AppColors.SurfaceCard,
+                            containerColor = if (opened) surfaceColors.panel else surfaceColors.card,
                             focusedContainerColor = AppColors.NeonCyanLight,
                         ),
                         modifier = Modifier.fillMaxWidth()
@@ -1263,12 +1353,12 @@ private fun TolokaTransferContent(
                             verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(file.path, color = when {
                                 focused -> AppColors.ButtonDarkText
-                                else -> Color.White
+                                else -> surfaceColors.text
                             }.let { if (opened) lerp(it, Color.Black, 0.3f) else it })
                             Text(formatFileSize(file.length), fontSize = 12.sp,
                                 color = when {
                                     focused -> AppColors.ButtonDarkText
-                                    else -> AppColors.TextSecondary
+                                    else -> surfaceColors.mutedText
                                 }.let { if (opened) lerp(it, Color.Black, 0.3f) else it })
                         }
                     }
@@ -1287,14 +1377,15 @@ private fun formatFileSize(bytes: Long): String = when {
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun TolokaResultRow(hit: TolokaHit, selected: Boolean, opened: Boolean, enabled: Boolean, onClick: () -> Unit) {
+private fun TolokaResultRow(hit: TolokaHit, selected: Boolean, opened: Boolean, enabled: Boolean,
+    onClick: () -> Unit, surfaceColors: DetailsSurfaceColors) {
     var focused by remember { mutableStateOf(false) }
     val background = when {
         focused -> AppColors.NeonCyanLight
         selected -> AppColors.NeonCyan
-        else -> AppColors.SurfaceCard
+        else -> surfaceColors.card
     }
-    val foreground = if (focused || selected) AppColors.ButtonDarkText else Color.White
+    val foreground = if (focused || selected) AppColors.ButtonDarkText else surfaceColors.text
     Card(
         onClick = { if (enabled) onClick() },
         scale = CardDefaults.scale(scale = 1f, focusedScale = 1f),
@@ -1334,6 +1425,7 @@ private fun TolokaResultRow(hit: TolokaHit, selected: Boolean, opened: Boolean, 
 @Composable
 private fun DetailsTitleRow(
     title: String,
+    light: Boolean,
     items: List<AnimeCard>,
     showRelatedBadge: Boolean,
     showMore: Boolean,
@@ -1341,7 +1433,8 @@ private fun DetailsTitleRow(
     onMore: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(title, style = MaterialTheme.typography.titleMedium, color = AppColors.TextLight)
+        Text(title, style = MaterialTheme.typography.titleMedium,
+            color = if (light) Color(0xFF263241) else AppColors.TextLight)
         LazyRow(
             contentPadding = PaddingValues(vertical = 4.dp, horizontal = 0.dp),
             horizontalArrangement = Arrangement.spacedBy(20.dp),
@@ -1662,14 +1755,14 @@ private fun StudioVoiceDialog(
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalTvMaterial3Api::class)
 @Composable
-private fun DetailsGenreTags(genres: List<String>, onOpenGenre: (String) -> Unit) {
-    FlowRow(
+private fun DetailsGenreTags(genres: List<String>, onOpenGenre: (String) -> Unit,
+    light: Boolean) {
+    LazyRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-        maxLines = 3,
         modifier = Modifier.fillMaxWidth(),
+        reverseLayout = true,
     ) {
-        genres.forEach { genre ->
+        itemsIndexed(genres.reversed()) { _, genre ->
             var isFocused by remember(genre) { mutableStateOf(false) }
             val chipShape = RoundedCornerShape(percent = 50)
             Surface(
@@ -1678,7 +1771,8 @@ private fun DetailsGenreTags(genres: List<String>, onOpenGenre: (String) -> Unit
                 shape = ClickableSurfaceDefaults.shape(chipShape),
                 border = ClickableSurfaceDefaults.border(
                     border = Border(
-                        border = BorderStroke(1.5.dp, AppColors.TextMuted.copy(alpha = 0.65f)),
+                        border = BorderStroke(1.5.dp, if (light) Color(0xFF596575)
+                            else AppColors.TextMuted.copy(alpha = 0.65f)),
                         shape = chipShape,
                     ),
                     focusedBorder = Border.None,
@@ -1694,11 +1788,70 @@ private fun DetailsGenreTags(genres: List<String>, onOpenGenre: (String) -> Unit
                 Text(
                     genreLabel(genre),
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                    color = if (isFocused) AppColors.ButtonDarkText else AppColors.TextLight,
+                    color = if (isFocused) AppColors.ButtonDarkText else if (light)
+                        Color(0xFF263241) else AppColors.TextLight,
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
                 )
             }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SeasonEpisodeDialog(
+    seasons: List<NumberedSeason>,
+    currentAnimeId: Int,
+    episodes: List<AnitubeEpisode>,
+    selectedEpisodeIndex: Int,
+    onDismiss: () -> Unit,
+    onEpisode: (Int) -> Unit,
+    onSeason: (Int) -> Unit,
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            Modifier.width(640.dp).heightIn(max = 600.dp)
+                .background(AppColors.SurfaceDark, RoundedCornerShape(12.dp))
+                .verticalScroll(rememberScrollState()).padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Text("Сезони та серії", color = Color.White,
+                style = MaterialTheme.typography.titleLarge)
+            if (seasons.isNotEmpty()) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    seasons.forEach { season ->
+                        val current = season.animeId == currentAnimeId
+                        OutlinedButton(
+                            onClick = { season.animeId?.let { if (!current) onSeason(it) } },
+                            enabled = season.animeId != null,
+                        ) {
+                            Text("Сезон ${season.number}" +
+                                if (season.animeId == null) " · немає релізу" else if (current) " ✓" else "")
+                        }
+                    }
+                }
+            }
+            if (episodes.isEmpty()) {
+                Text("Для цього сезону серії ще не завантажені. Оберіть реліз AniTube.",
+                    color = AppColors.TextSecondary)
+            } else {
+                Text("Серії поточного сезону", color = AppColors.TextLight)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    episodes.forEachIndexed { index, episode ->
+                        Button(onClick = { onEpisode(index) },
+                            colors = ButtonDefaults.colors(
+                                containerColor = if (index == selectedEpisodeIndex)
+                                    AppColors.NeonCyan else AppColors.SurfaceCard,
+                                contentColor = if (index == selectedEpisodeIndex)
+                                    AppColors.ButtonDarkText else Color.White,
+                            )) { Text("${episode.episodeNumber}") }
+                    }
+                }
+            }
+            OutlinedButton(onClick = onDismiss) { Text("Назад") }
         }
     }
 }
@@ -1781,12 +1934,14 @@ private fun DetailsScreenPreview() {
             onSelectTmdb = {},
             onFindTmdbCandidates = {},
             onTolokaSearch = {},
+            onAutoTolokaSearch = { _, _ -> },
             onSelectTolokaHit = {},
             onRetryTolokaMetadata = {},
             onPlayTolokaFile = {},
             onToggleFavorite = {},
             onSelectVoice = {},
             onSelectEpisode = {},
+            onOpenSeason = {},
             onWatchClick = {},
             onTrailerClick = {},
             onBackClick = {},

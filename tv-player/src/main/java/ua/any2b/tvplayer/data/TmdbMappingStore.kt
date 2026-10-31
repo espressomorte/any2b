@@ -20,6 +20,10 @@ class TmdbMappingStore private constructor(context: Context) {
         synchronized(lock) { readAll()[animeId] }
     }
 
+    suspend fun all(): Map<Int, TmdbMapping> = withContext(Dispatchers.IO) {
+        synchronized(lock) { readAll() }
+    }
+
     suspend fun put(animeId: Int, mapping: TmdbMapping) = withContext(Dispatchers.IO) {
         require(animeId > 0 && mapping.id > 0)
         synchronized(lock) {

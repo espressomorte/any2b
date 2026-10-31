@@ -10,11 +10,13 @@ lifecycle = "2.8.7"
 coil = "2.7.0"
 okhttp = "4.12.0"
 json = "20240303"
+jsoup = "1.23.2"
 
 [libraries]
 # Pure Kotlin / JVM
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 json = { group = "org.json", name = "json", version.ref = "json" }
+jsoup = { group = "org.jsoup", name = "jsoup", version.ref = "jsoup" }
 coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
 coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 

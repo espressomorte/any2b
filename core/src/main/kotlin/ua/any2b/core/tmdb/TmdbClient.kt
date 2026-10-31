@@ -78,7 +78,7 @@ fun TmdbDetails.trailerSearchUrl(): String {
     return "https://www.youtube.com/results?search_query=${URLEncoder.encode(query, "UTF-8")}"
 }
 
-data class TmdbSeason(val number: Int, val name: String?, val year: Int?)
+data class TmdbSeason(val number: Int, val name: String?, val year: Int?, val episodeCount: Int? = null)
 
 sealed class TmdbFailure(message: String) : IOException(message) {
     class MissingToken : TmdbFailure("Ключ доступу не налаштовано")
@@ -97,23 +97,33 @@ class TmdbClient(
         .build(),
     private val baseUrl: HttpUrl = "https://api.themoviedb.org/3/".toHttpUrl(),
 ) {
-    suspend fun popular(type: TmdbMediaType, token: String): List<TmdbTitle> =
-        listPage(type, token, TmdbListSort.POPULARITY, 1).titles
+    suspend fun popular(type: TmdbMediaType, token: String, genreId: Int? = null): List<TmdbTitle> =
+        listPage(type, token, TmdbListSort.POPULARITY, 1, genreId).titles
 
-    suspend fun listPage(type: TmdbMediaType, token: String, sort: TmdbListSort, page: Int): TmdbPage {
+    suspend fun listPage(type: TmdbMediaType, token: String, sort: TmdbListSort, page: Int,
+        genreId: Int? = null): TmdbPage {
         require(page in 1..500)
-        val json = if (sort == TmdbListSort.POPULARITY) {
+        require(genreId == null || genreId > 0)
+        val json = if (sort == TmdbListSort.POPULARITY && genreId == null) {
             request(listOf(type.path, "popular"), token, "uk-UA", "page" to page.toString())
         } else {
             val sortBy = when (sort) {
                 TmdbListSort.RATING -> "vote_average.desc"
                 TmdbListSort.YEAR -> if (type == TmdbMediaType.MOVIE) "primary_release_date.desc" else "first_air_date.desc"
-                TmdbListSort.POPULARITY -> error("Handled above")
+                TmdbListSort.POPULARITY -> "popularity.desc"
             }
-            request(listOf("discover", type.path), token, "uk-UA", "page" to page.toString(),
-                "sort_by" to sortBy, "vote_count.gte" to if (sort == TmdbListSort.RATING) "100" else "0")
+            val parameters = buildList {
+                add("page" to page.toString())
+                add("sort_by" to sortBy)
+                if (sort == TmdbListSort.RATING) add("vote_count.gte" to "100")
+                genreId?.let { add("with_genres" to it.toString()) }
+                if (genreId != null && type == TmdbMediaType.MOVIE)
+                    add("with_runtime.gte" to "60")
+            }
+            request(listOf("discover", type.path), token, "uk-UA", *parameters.toTypedArray())
         }
-        return TmdbPage(parseList(json, type, "uk-UA"), page,
+        return TmdbPage(parseList(json, type, "uk-UA")
+            .filter { genreId == null || genreId in it.genreIds }, page,
             json.optInt("total_pages", page).coerceIn(page, 500))
     }
 
@@ -222,7 +232,8 @@ class TmdbClient(
                 (0 until array.length()).mapNotNull { index ->
                     val season = array.optJSONObject(index) ?: return@mapNotNull null
                     TmdbSeason(season.optInt("season_number"), season.optionalString("name"),
-                        season.optionalString("air_date")?.take(4)?.toIntOrNull())
+                        season.optionalString("air_date")?.take(4)?.toIntOrNull(),
+                        season.optInt("episode_count").takeIf { it > 0 })
                 }
             }.orEmpty() else emptyList(),
             directors = directors,

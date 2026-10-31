@@ -10,6 +10,7 @@ import kotlinx.coroutines.launch
 import ua.any2b.core.anilist.AniListClient
 import ua.any2b.core.anilist.AnimeCard
 import ua.any2b.core.anilist.Title
+import ua.any2b.core.anilist.groupNumberedTvSeasons
 import ua.any2b.tvplayer.data.FavoritesManager
 import ua.any2b.tvplayer.data.WatchHistoryManager
 
@@ -29,6 +30,7 @@ class CategoryViewModel(
     private val historyManager = WatchHistoryManager(application)
     private var page = 0
     private var localItems: List<AnimeCard> = emptyList()
+    private var loadedRawItems: List<AnimeCard> = emptyList()
 
     private val _state = MutableStateFlow(CategoryState())
     val state: StateFlow<CategoryState> = _state
@@ -56,8 +58,8 @@ class CategoryViewModel(
                 val recommendationsId = recommendationsAnimeId
                 when {
                     isLocal -> {
-                        nextItems = localItems.drop(current.items.size).take(PAGE_SIZE)
-                        hasMore = current.items.size + nextItems.size < localItems.size
+                        nextItems = localItems.drop(loadedRawItems.size).take(PAGE_SIZE)
+                        hasMore = loadedRawItems.size + nextItems.size < localItems.size
                     }
                     relatedId != null -> {
                         nextItems = client.animeDetails(relatedId).related
@@ -75,7 +77,8 @@ class CategoryViewModel(
                         hasMore = nextItems.size == PAGE_SIZE
                     }
                 }
-                val allItems = (current.items + nextItems).distinctBy { it.id }
+                loadedRawItems = (loadedRawItems + nextItems).distinctBy { it.id }
+                val allItems = groupNumberedTvSeasons(loadedRawItems)
                 _state.value = CategoryState(
                     items = allItems,
                     hasMore = hasMore,
@@ -91,9 +94,11 @@ class CategoryViewModel(
     fun refreshLocal() {
         if (!isLocal) return
         localItems = readLocalItems()
-        val visibleCount = maxOf(PAGE_SIZE, _state.value.items.size)
+        val visibleCount = maxOf(PAGE_SIZE, loadedRawItems.size)
         val visible = localItems.take(visibleCount)
-        _state.value = CategoryState(items = visible, hasMore = visible.size < localItems.size)
+        loadedRawItems = visible
+        _state.value = CategoryState(items = groupNumberedTvSeasons(visible),
+            hasMore = visible.size < localItems.size)
     }
 
     private fun readLocalItems(): List<AnimeCard> = when (categoryId) {

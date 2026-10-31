@@ -11,10 +11,18 @@ import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.tv.material3.Text
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ua.any2b.core.tmdb.TmdbMediaType
 import ua.any2b.core.tmdb.trailerSearchUrl
 import ua.any2b.tvplayer.data.ExternalVideoPlayers
+import ua.any2b.tvplayer.data.FanartKeyStore
 import ua.any2b.tvplayer.data.SettingsManager
 import ua.any2b.tvplayer.data.TorrServerAuthStore
 import ua.any2b.tvplayer.data.TolokaPlaybackStore
@@ -22,6 +30,14 @@ import ua.any2b.tvplayer.ui.AppTheme
 import ua.any2b.tvplayer.ui.TmdbDetailsScreen
 import ua.any2b.tvplayer.ui.TmdbDetailsViewModel
 import ua.any2b.tvplayer.ui.TolokaSearchViewModel
+import ua.any2b.tvplayer.ui.TolokaSearchState
+import ua.any2b.tvplayer.ui.TmdbDetailsState
+import ua.any2b.tvplayer.ui.tmdbTorrentQueryOptions
+import ua.any2b.tvplayer.ui.FanartArtworkKey
+import ua.any2b.tvplayer.ui.FanartArtworkState
+import ua.any2b.tvplayer.ui.FanartArtworkViewModel
+import ua.any2b.tvplayer.ui.FanartDayTheme
+import ua.any2b.tvplayer.ui.AppColors
 
 class TmdbDetailsActivity : ComponentActivity() {
     companion object {
@@ -35,6 +51,7 @@ class TmdbDetailsActivity : ComponentActivity() {
 
     private val detailsViewModel: TmdbDetailsViewModel by viewModels()
     private val tolokaViewModel: TolokaSearchViewModel by viewModels()
+    private val fanartViewModel: FanartArtworkViewModel by viewModels()
     private var launchingPlayer = false
     private var openedFiles by mutableStateOf(emptySet<Int>())
     private var selectedTopicId: String? = null
@@ -55,18 +72,63 @@ class TmdbDetailsActivity : ComponentActivity() {
         val preferredTitle = intent.getStringExtra(EXTRA_PREFERRED_TITLE)
         val originalLanguage = intent.getStringExtra(EXTRA_ORIGINAL_LANGUAGE)
         val originalTitle = intent.getStringExtra(EXTRA_ORIGINAL_TITLE)
+        val experimental = SettingsManager(this).isExperimentalAppearanceEnabled() &&
+            !FanartKeyStore(this).read().isNullOrBlank()
         detailsViewModel.load(type, id, query, preferredTitle, originalLanguage, originalTitle)
         setContent {
             AppTheme {
+                val artworkKey = FanartArtworkKey(type, id)
+                LaunchedEffect(experimental, artworkKey) {
+                    if (experimental) fanartViewModel.load(type, id)
+                }
+                val artworkState = fanartViewModel.state.collectAsStateWithLifecycle().value
+                val detailsState = detailsViewModel.state.collectAsStateWithLifecycle().value
+                val readyDetails = (detailsState as? TmdbDetailsState.Ready)?.details
+                LaunchedEffect(readyDetails?.title?.type, readyDetails?.title?.id,
+                    readyDetails?.title?.englishTitle) {
+                    val details = readyDetails ?: return@LaunchedEffect
+                    if (tolokaViewModel.state.value.search !is TolokaSearchState.Idle) {
+                        tolokaViewModel.updateAutomaticDetails(details)
+                        return@LaunchedEffect
+                    }
+                    val initial = tmdbTorrentQueryOptions(details).firstOrNull()?.second
+                        ?: details.title.title
+                    val english = details.title.englishTitle
+                        ?: details.title.originalTitle?.takeIf {
+                            details.title.originalLanguage == "en"
+                        }
+                    tolokaViewModel.searchAutomatically(details, initial, english)
+                }
+                if (experimental && detailsState is ua.any2b.tvplayer.ui.TmdbDetailsState.Ready &&
+                    (artworkState as? FanartArtworkState.Ready)?.key != artworkKey) {
+                    Box(Modifier.fillMaxSize().background(AppColors.BackgroundDark),
+                        contentAlignment = Alignment.Center) { Text("Готуємо вигляд деталей…") }
+                    return@AppTheme
+                }
+                val activePalette = if (experimental)
+                    (artworkState as? FanartArtworkState.Ready)
+                        ?.takeIf { it.key == artworkKey }?.palette else null
+                FanartDayTheme(activePalette?.light == true) {
                 TmdbDetailsScreen(
-                    state = detailsViewModel.state.collectAsStateWithLifecycle().value,
+                    state = detailsState,
+                    experimentalPalette = activePalette,
+                    experimentalArtwork = if (experimental)
+                        (artworkState as? FanartArtworkState.Ready)
+                            ?.takeIf { it.key == artworkKey }?.artwork else null,
+                    fanartNotice = if (experimental)
+                        (artworkState as? FanartArtworkState.Ready)
+                            ?.takeIf { it.key == artworkKey }?.reason?.let { "fanart.tv: $it" }
+                        else null,
                     toloka = tolokaViewModel.state.collectAsStateWithLifecycle().value,
                     openedFiles = openedFiles,
                     onRetryDetails = {
                         detailsViewModel.load(type, id, query, preferredTitle,
                             originalLanguage, originalTitle, force = true)
                     },
-                    onSearchTorrent = tolokaViewModel::search,
+                    onSearchTorrent = { query ->
+                        val details = (detailsViewModel.state.value as? TmdbDetailsState.Ready)?.details
+                        if (details != null) tolokaViewModel.searchForTmdb(details, query)
+                    },
                     onSelectTorrent = { topicId ->
                         selectedTopicId = topicId
                         openedFiles = TolokaPlaybackStore(this).openedTmdbFileIds(
@@ -96,6 +158,7 @@ class TmdbDetailsActivity : ComponentActivity() {
                     },
                     onBack = ::finish,
                 )
+                }
             }
         }
     }

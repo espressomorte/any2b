@@ -29,7 +29,7 @@ class HomeRowsTest {
         assertEquals(13, thirteen.previewItems.size)
         assertTrue(fourteen.hasFullList)
         assertEquals((1..13).toList(), fourteen.previewItems.map { it.id })
-        assertEquals(14, HOME_FETCH_SIZE)
+        assertEquals(25, HOME_FETCH_SIZE)
     }
 
     private fun card(id: Int) = AnimeCard(

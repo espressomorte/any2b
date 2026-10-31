@@ -109,6 +109,28 @@ class TmdbClientTest {
     }
 
     @Test
+    fun animationListsUseDiscoverWithGenre16ForBothMediaTypes() = runBlocking {
+        val requests = mutableListOf<Request>()
+        val client = client { request ->
+            requests += request
+            fixture(request, 200, if (request.url.encodedPath.endsWith("/tv"))
+                """{"page":1,"total_pages":2,"results":[
+                    {"id":10,"name":"Анімація","genre_ids":[16],"first_air_date":"2025-01-01"},
+                    {"id":11,"name":"Ігровий серіал","genre_ids":[18],"first_air_date":"2025-01-01"}]}"""
+                else """{"page":1,"total_pages":2,"results":[
+                    {"id":20,"title":"Анімація","genre_ids":[16],"release_date":"2025-01-01"},
+                    {"id":21,"title":"Ігровий фільм","genre_ids":[18],"release_date":"2025-01-01"}]}""")
+        }
+        assertEquals(listOf(10), client.popular(TmdbMediaType.TV, "key", genreId = 16).map { it.id })
+        assertEquals(listOf(20), client.popular(TmdbMediaType.MOVIE, "key", genreId = 16).map { it.id })
+        assertEquals(listOf("/3/discover/tv", "/3/discover/movie"),
+            requests.map { it.url.encodedPath })
+        assertTrue(requests.all { it.url.queryParameter("with_genres") == "16" &&
+            it.url.queryParameter("sort_by") == "popularity.desc" })
+        assertEquals("60", requests[1].url.queryParameter("with_runtime.gte"))
+    }
+
+    @Test
     fun trailerSearchUsesOriginalTitleAndYear() {
         val title = TmdbTitle(1, TmdbMediaType.MOVIE, "Українська назва",
             "English Name", 2025, null, null, null)

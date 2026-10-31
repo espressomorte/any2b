@@ -8,6 +8,12 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -15,8 +21,16 @@ import ua.any2b.tvplayer.ui.AppTheme
 import ua.any2b.tvplayer.ui.DetailsScreen
 import ua.any2b.tvplayer.ui.DetailsViewModel
 import ua.any2b.tvplayer.ui.DetailsState
+import ua.any2b.tvplayer.ui.FanartArtworkKey
+import ua.any2b.tvplayer.ui.FanartArtworkState
+import ua.any2b.tvplayer.ui.FanartArtworkViewModel
+import ua.any2b.tvplayer.ui.FanartDayTheme
+import ua.any2b.tvplayer.ui.TmdbLinkState
+import ua.any2b.tvplayer.ui.AppColors
+import androidx.tv.material3.Text
 import ua.any2b.tvplayer.ui.genreLabel
 import ua.any2b.tvplayer.data.ExternalVideoPlayers
+import ua.any2b.tvplayer.data.FanartKeyStore
 import ua.any2b.tvplayer.data.SettingsManager
 import ua.any2b.tvplayer.data.TorrServerAuthStore
 import ua.any2b.tvplayer.data.TolokaPlaybackStore
@@ -26,6 +40,7 @@ class DetailsActivity : ComponentActivity() {
 
     private var refreshAfterPlayback = false
     private var launchingTolokaPlayer = false
+    private val fanartViewModel: FanartArtworkViewModel by viewModels()
 
     private val animeId: Int by lazy {
         intent.getIntExtra("ANIME_ID", 1)
@@ -43,11 +58,48 @@ class DetailsActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         refreshAfterPlayback = savedInstanceState?.getBoolean("refresh_after_playback") ?: false
+        val experimental = SettingsManager(this).isExperimentalAppearanceEnabled() &&
+            !FanartKeyStore(this).read().isNullOrBlank()
         setContent {
             AppTheme {
                 val state = viewModel.state.collectAsStateWithLifecycle().value
+                val fanartTitle = (state as? DetailsState.Ready)?.tmdbLink?.let { link ->
+                    when (link) {
+                        is TmdbLinkState.Confirmed -> link.title
+                        is TmdbLinkState.Candidates -> link.suggested
+                        else -> null
+                    }
+                }
+                val artworkKey = fanartTitle?.let { FanartArtworkKey(it.type, it.id) }
+                LaunchedEffect(experimental, artworkKey) {
+                    if (experimental && artworkKey != null) {
+                        fanartViewModel.load(artworkKey.type, artworkKey.id)
+                    }
+                }
+                val artworkState = fanartViewModel.state.collectAsStateWithLifecycle().value
+                val awaitingArtwork = experimental && state is DetailsState.Ready &&
+                    (state.tmdbLink is TmdbLinkState.Loading ||
+                        (artworkKey != null &&
+                            (artworkState as? FanartArtworkState.Ready)?.key != artworkKey))
+                if (awaitingArtwork) {
+                    Box(Modifier.fillMaxSize().background(AppColors.BackgroundDark),
+                        contentAlignment = Alignment.Center) { Text("Готуємо вигляд деталей…") }
+                    return@AppTheme
+                }
+                val activePalette = if (experimental && artworkKey != null)
+                    (artworkState as? FanartArtworkState.Ready)
+                        ?.takeIf { it.key == artworkKey }?.palette else null
+                FanartDayTheme(activePalette?.light == true) {
                 DetailsScreen(
                     state = state,
+                    experimentalPalette = activePalette,
+                    experimentalArtwork = if (experimental && artworkKey != null)
+                        (artworkState as? FanartArtworkState.Ready)
+                            ?.takeIf { it.key == artworkKey }?.artwork else null,
+                    fanartNotice = if (!experimental || state !is DetailsState.Ready) null
+                        else if (artworkKey == null) "fanart.tv: немає відповідного TMDB ID"
+                        else (artworkState as? FanartArtworkState.Ready)
+                            ?.takeIf { it.key == artworkKey }?.reason?.let { "fanart.tv: $it" },
                     onRetry = viewModel::loadDetails,
                     onRetryVideoSource = viewModel::retryVideoSource,
                     onSelectRelease = viewModel::selectRelease,
@@ -56,6 +108,7 @@ class DetailsActivity : ComponentActivity() {
                     onSelectTmdb = viewModel::confirmTmdbLink,
                     onFindTmdbCandidates = { viewModel.retryTmdbLink(ignoreSaved = true) },
                     onTolokaSearch = viewModel::searchToloka,
+                    onAutoTolokaSearch = viewModel::searchTolokaAutomatically,
                     onSelectTolokaHit = viewModel::selectTolokaHit,
                     onRetryTolokaMetadata = viewModel::retryTolokaMetadata,
                     onPlayTolokaFile = { fileId -> openTolokaFile(fileId) },
@@ -92,12 +145,16 @@ class DetailsActivity : ComponentActivity() {
                             putExtra("ANIME_ID", card.id)
                         })
                     },
+                    onOpenSeason = { seasonId ->
+                        viewModel.selectSeason(seasonId)
+                    },
                     onOpenGenre = { genre ->
                         openDetailsCategory("genre:$genre", genreLabel(genre))
                     },
                     onMoreRelated = { openDetailsCategory("related:$animeId", "Пов’язані релізи") },
                     onMoreRecommendations = { openDetailsCategory("recommendations:$animeId", "Рекомендації") },
                 )
+                }
             }
         }
     }
@@ -144,7 +201,7 @@ class DetailsActivity : ComponentActivity() {
         }
         startActivity(Intent(this, PlayerActivity::class.java).apply {
             putExtra(PlayerActivity.EXTRA_STREAM_URL, streamUrl)
-            putExtra(PlayerActivity.EXTRA_ANIME_ID, animeId)
+            putExtra(PlayerActivity.EXTRA_ANIME_ID, viewModel.activeAnimeId())
             putExtra(PlayerActivity.EXTRA_VOICE_INDEX, voiceIndex)
             putExtra(PlayerActivity.EXTRA_EPISODE_INDEX, episodeIndex)
             putExtra(PlayerActivity.EXTRA_EPISODE_NUMBER, episodeNumber)
@@ -172,7 +229,7 @@ class DetailsActivity : ComponentActivity() {
             if (externalIntent != null) {
                 try {
                     startActivity(externalIntent)
-                    TolokaPlaybackStore(this).markOpened(animeId, topicId, fileId)
+                    TolokaPlaybackStore(this).markOpened(viewModel.activeAnimeId(), topicId, fileId)
                     viewModel.refreshTolokaPlaybackMarks()
                     viewModel.reportTolokaPlaybackStatus("URL передано зовнішньому плеєру. Результат відтворення перевіряйте в ньому")
                     return
@@ -191,7 +248,7 @@ class DetailsActivity : ComponentActivity() {
             startActivity(Intent(this, PlayerActivity::class.java).apply {
                 putExtra(PlayerActivity.EXTRA_STREAM_URL, url)
                 putExtra(PlayerActivity.EXTRA_SOURCE_TYPE, PlayerActivity.SOURCE_TOLOKA)
-                putExtra(PlayerActivity.EXTRA_ANIME_ID, animeId)
+                putExtra(PlayerActivity.EXTRA_ANIME_ID, viewModel.activeAnimeId())
                 putExtra(PlayerActivity.EXTRA_TOLOKA_TOPIC_ID, topicId)
                 putExtra(PlayerActivity.EXTRA_TOLOKA_FILE_ID, fileId)
             })

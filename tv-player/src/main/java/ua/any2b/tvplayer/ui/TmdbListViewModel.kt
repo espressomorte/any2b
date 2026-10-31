@@ -14,6 +14,8 @@ import ua.any2b.core.tmdb.TmdbMediaType
 import ua.any2b.core.tmdb.TmdbTitle
 import ua.any2b.tvplayer.data.TmdbFavoritesStore
 import ua.any2b.tvplayer.data.TmdbWatchHistoryStore
+import ua.any2b.tvplayer.data.MalTmdbCatalog
+import ua.any2b.tvplayer.data.tmdbHomeRecommendations
 import ua.any2b.tvplayer.data.workerTmdbConnection
 
 data class TmdbListState(
@@ -27,6 +29,7 @@ data class TmdbListState(
 )
 
 class TmdbListViewModel(application: Application) : AndroidViewModel(application) {
+    private val malTmdbCatalog = MalTmdbCatalog(application)
     private val history = TmdbWatchHistoryStore(application)
     private val favorites = TmdbFavoritesStore(application)
     private val _state = MutableStateFlow(TmdbListState())
@@ -35,7 +38,9 @@ class TmdbListViewModel(application: Application) : AndroidViewModel(application
 
     fun open(category: String) {
         val normalized = category.takeIf {
-            it == "tv" || it == "movie" || it == "history"
+            it == "tv" || it == "movie" || it == "history" ||
+                it == "animation_tv" || it == "animation_movie" ||
+                it == "mal_top" || it == "recommendations"
         } ?: "favorites"
         if (_state.value.category == normalized && (_state.value.page > 0 || _state.value.loading)) return
         loadJob?.cancel()
@@ -54,6 +59,8 @@ class TmdbListViewModel(application: Application) : AndroidViewModel(application
 
     fun changeSort(sort: TmdbListSort) {
         if (_state.value.category == "favorites" || _state.value.category == "history" ||
+            _state.value.category == "mal_top" ||
+            _state.value.category == "recommendations" ||
             _state.value.sort == sort) return
         loadJob?.cancel()
         _state.value = _state.value.copy(sort = sort, titles = emptyList(), page = 0,
@@ -65,14 +72,31 @@ class TmdbListViewModel(application: Application) : AndroidViewModel(application
         val current = _state.value
         if (current.category == "favorites" || current.category == "history" ||
             current.loading || current.page > 0 && !current.hasMore) return
-        val type = if (current.category == "tv") TmdbMediaType.TV else TmdbMediaType.MOVIE
+        val type = if (current.category == "tv" || current.category == "animation_tv")
+            TmdbMediaType.TV else TmdbMediaType.MOVIE
         val nextPage = current.page + 1
         _state.value = current.copy(loading = true, error = null)
         loadJob = viewModelScope.launch {
             try {
+                if (current.category == "mal_top") {
+                    val result = malTmdbCatalog.page(nextPage)
+                    val latest = _state.value
+                    val titles = (latest.titles + result.titles).distinctBy { it.type to it.id }
+                    _state.value = latest.copy(titles = titles, page = nextPage,
+                        hasMore = result.hasMore && titles.size > latest.titles.size,
+                        loading = false)
+                    return@launch
+                }
+                if (current.category == "recommendations") {
+                    val titles = tmdbHomeRecommendations(getApplication())
+                    _state.value = _state.value.copy(titles = titles, page = 1,
+                        hasMore = false, loading = false)
+                    return@launch
+                }
                 val connection = workerTmdbConnection(getApplication())
                     ?: throw IllegalStateException("Налаштуйте URL і ключ Worker")
-                val result = connection.client.listPage(type, connection.accessKey, current.sort, nextPage)
+                val result = connection.client.listPage(type, connection.accessKey, current.sort,
+                    nextPage, genreId = if (current.category.startsWith("animation_")) 16 else null)
                 val latest = _state.value
                 _state.value = latest.copy(titles = (latest.titles + result.titles)
                     .distinctBy { it.type to it.id }, page = result.page,

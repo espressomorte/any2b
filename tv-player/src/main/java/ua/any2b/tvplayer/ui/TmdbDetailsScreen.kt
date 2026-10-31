@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -62,12 +63,16 @@ import ua.any2b.core.tmdb.TmdbDetails
 import ua.any2b.core.tmdb.TmdbMediaType
 import ua.any2b.core.tmdb.TmdbTitle
 import ua.any2b.core.toloka.shortenedSearchNames
+import ua.any2b.core.fanart.FanartArtwork
 import java.util.Locale
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun TmdbDetailsScreen(
     state: TmdbDetailsState,
+    experimentalArtwork: FanartArtwork? = null,
+    experimentalPalette: FanartPalette? = null,
+    fanartNotice: String? = null,
     toloka: FreeTolokaState,
     openedFiles: Set<Int>,
     onRetryDetails: () -> Unit,
@@ -81,7 +86,9 @@ fun TmdbDetailsScreen(
     onOpenRelated: (TmdbTitle) -> Unit,
     onBack: () -> Unit,
 ) {
-    Box(Modifier.fillMaxSize().background(AppColors.BackgroundDark).padding(32.dp)) {
+    Box(Modifier.fillMaxSize().background(if (experimentalArtwork != null)
+        experimentalPalette?.background ?: AppColors.BackgroundDark else AppColors.BackgroundDark)
+        .padding(32.dp)) {
         when (state) {
             TmdbDetailsState.Loading -> Text("Завантаження деталей TMDB…",
                 modifier = Modifier.align(Alignment.Center), color = AppColors.AccentLight)
@@ -95,6 +102,9 @@ fun TmdbDetailsScreen(
             }
             is TmdbDetailsState.Ready -> TmdbDetailsContent(
                 details = state.details,
+                experimentalArtwork = experimentalArtwork,
+                experimentalPalette = experimentalPalette,
+                fanartNotice = fanartNotice,
                 isFavorite = state.isFavorite,
                 related = state.related,
                 toloka = toloka,
@@ -117,6 +127,9 @@ fun TmdbDetailsScreen(
 @Composable
 private fun TmdbDetailsContent(
     details: TmdbDetails,
+    experimentalArtwork: FanartArtwork?,
+    experimentalPalette: FanartPalette?,
+    fanartNotice: String?,
     isFavorite: Boolean,
     related: TmdbRelatedState,
     toloka: FreeTolokaState,
@@ -132,6 +145,15 @@ private fun TmdbDetailsContent(
     onBack: () -> Unit,
 ) {
     val title = details.title
+    val surfaceColors = detailsSurfaceColors(experimentalPalette, experimentalArtwork != null)
+    val dayText = if (experimentalArtwork != null && experimentalPalette?.light == true)
+        Color(0xFF263241) else AppColors.TextSecondary
+    val countries = details.countryCodes.mapNotNull { code ->
+        code.takeIf { it.matches(Regex("[A-Za-z]{2}")) }?.let {
+            Locale.forLanguageTag("und-${it.uppercase(Locale.ROOT)}")
+                .getDisplayCountry(Locale.forLanguageTag("uk"))
+        }?.takeIf(String::isNotBlank)
+    }
     var torrentOpened by rememberSaveable(title.type, title.id) { mutableStateOf(false) }
     val customTorrentQueries = remember(title.type, title.id) { mutableStateListOf<String>() }
     val torrentOptions = (customTorrentQueries.map { "Власний" to it } +
@@ -144,41 +166,64 @@ private fun TmdbDetailsContent(
     val torrentFocus = remember(title.type, title.id) { FocusRequester() }
     var showRelated by rememberSaveable(title.type, title.id) { mutableStateOf(false) }
     var infoDialog by rememberSaveable(title.type, title.id) { mutableStateOf<String?>(null) }
+    LaunchedEffect(title.type, title.id) { torrentOpened = true }
     LaunchedEffect(title.type, title.id) { torrentFocus.requestFocus() }
     LaunchedEffect(title.englishTitle, details.alternativeTitles) {
         if (!torrentQueryCustomized && torrentOptions.isNotEmpty()) {
             torrentQuery = torrentOptions.first().second
         }
     }
+    LaunchedEffect(toloka.search) {
+        val result = toloka.search as? TolokaSearchState.Results
+        if (result != null && !torrentQueryCustomized) torrentQuery = result.query
+    }
 
     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(36.dp)) {
         Column(Modifier.width(220.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Box(Modifier.fillMaxWidth().aspectRatio(2f / 3f)
-                .clip(RoundedCornerShape(16.dp)).background(AppColors.SurfaceCard)) {
-                AsyncImage(model = title.posterUrl, contentDescription = title.title,
-                    contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-                title.rating?.let { score ->
+                .then(if (experimentalArtwork == null)
+                    Modifier.clip(RoundedCornerShape(16.dp)) else Modifier)
+                .background(AppColors.SurfaceCard)) {
+                if (experimentalArtwork != null) {
+                    FanartPoster(experimentalArtwork, title.title,
+                        experimentalPalette?.background ?: AppColors.BackgroundDark,
+                        Modifier.fillMaxSize())
+                } else {
+                    AsyncImage(model = title.posterUrl, contentDescription = title.title,
+                        contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                }
+                if (experimentalArtwork == null) title.rating?.let { score ->
                     ReleaseBadge((score * 10).toInt(), Modifier.align(Alignment.TopEnd).padding(8.dp))
                 }
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 TmdbDetailAction(FaIcons.BOOKMARK,
                     if (isFavorite) "Вилучити з обраного" else "Додати в обране",
-                    selected = isFavorite, modifier = Modifier.weight(1f), onClick = onToggleFavorite)
+                    selected = isFavorite, modifier = Modifier.weight(1f),
+                    surfaceColors = surfaceColors, onClick = onToggleFavorite)
                 TmdbDetailAction(FaIcons.FILM, "Відкрити трейлер",
-                    modifier = Modifier.weight(1f), onClick = onTrailer)
+                    modifier = Modifier.weight(1f), surfaceColors = surfaceColors, onClick = onTrailer)
                 TmdbDetailAction(FaIcons.LINK, "Пов’язані тайтли",
-                    modifier = Modifier.weight(1f), onClick = { showRelated = true })
+                    modifier = Modifier.weight(1f), surfaceColors = surfaceColors,
+                    onClick = { showRelated = true })
             }
             val typeLabel = if (title.type == TmdbMediaType.MOVIE) "Фільм" else "Серіал"
-            Text(typeLabel, color = AppColors.TextSecondary, style = MaterialTheme.typography.titleSmall)
-            details.runtimeMinutes?.let { Text("Тривалість: $it хв", color = AppColors.TextLight) }
+            if (experimentalArtwork != null) {
+                val metadata = listOfNotNull(
+                    title.year?.toString(),
+                    countries.joinToString(", ").takeIf(String::isNotBlank),
+                    title.rating?.let { "TMDB: ${String.format(Locale.US, "%.1f", it)}" },
+                ).joinToString("  ·  ")
+                if (metadata.isNotBlank()) Text(metadata, color = dayText,
+                    style = MaterialTheme.typography.titleSmall)
+            } else Text(typeLabel, color = dayText, style = MaterialTheme.typography.titleSmall)
+            details.runtimeMinutes?.let { Text("Тривалість: $it хв", color = dayText) }
             if (title.type == TmdbMediaType.TV) {
-                details.seasons?.let { Text("Сезонів: $it", color = AppColors.TextLight) }
-                details.episodes?.let { Text("Серій: $it", color = AppColors.TextLight) }
+                details.seasons?.let { Text("Сезонів: $it", color = dayText) }
+                details.episodes?.let { Text("Серій: $it", color = dayText) }
             }
             if (details.genres.isNotEmpty()) {
-                Text(details.genres.joinToString(" · "), color = AppColors.TextSecondary,
+                Text(details.genres.joinToString(" · "), color = dayText,
                     style = MaterialTheme.typography.bodySmall)
             }
         }
@@ -188,17 +233,17 @@ private fun TmdbDetailsContent(
                 horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(title.title, modifier = Modifier.weight(1f, fill = false),
-                        style = MaterialTheme.typography.headlineLarge, color = Color.White,
+                    if (experimentalArtwork != null) {
+                        FanartLogo(experimentalArtwork, title.title,
+                            Modifier.widthIn(max = 460.dp).height(82.dp))
+                    } else Text(title.title, modifier = Modifier.weight(1f, fill = false),
+                        style = MaterialTheme.typography.headlineLarge,
+                    color = surfaceColors.text,
                         fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    title.year?.let { Text("$it", color = AppColors.TextSecondary, fontSize = 16.sp) }
-                    val countries = details.countryCodes.mapNotNull { code ->
-                        code.takeIf { it.matches(Regex("[A-Za-z]{2}")) }?.let {
-                            Locale.forLanguageTag("und-${it.uppercase(Locale.ROOT)}")
-                                .getDisplayCountry(Locale.forLanguageTag("uk"))
-                        }?.takeIf(String::isNotBlank)
+                    if (experimentalArtwork == null) title.year?.let {
+                        Text("$it", color = AppColors.TextSecondary, fontSize = 16.sp)
                     }
-                    if (countries.isNotEmpty()) {
+                    if (experimentalArtwork == null && countries.isNotEmpty()) {
                         Text(countries.joinToString(", "), modifier = Modifier.widthIn(max = 360.dp),
                             color = AppColors.TextSecondary, fontSize = 16.sp,
                             maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -210,43 +255,43 @@ private fun TmdbDetailsContent(
                 horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 val secondaryTitle = title.englishTitle?.takeIf { it != title.title }
                     ?: title.originalTitle?.takeIf { it != title.title }
-                secondaryTitle?.let {
+                secondaryTitle?.takeIf { experimentalArtwork == null }?.let {
                     Text(it, modifier = Modifier.weight(1f, fill = false),
                         style = MaterialTheme.typography.titleMedium, color = AppColors.TextLight,
                         maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
                 if (!title.overview.isNullOrBlank()) {
-                    TmdbInfoChip("Synopsis") { infoDialog = "synopsis" }
+                    TmdbInfoChip("Synopsis", surfaceColors) { infoDialog = "synopsis" }
                 }
                 if (details.directors.isNotEmpty() || details.cast.isNotEmpty()) {
-                    TmdbInfoChip("Crew") { infoDialog = "crew" }
+                    TmdbInfoChip("Crew", surfaceColors) { infoDialog = "crew" }
                 }
+            }
+            if (fanartNotice != null) {
+                Text(fanartNotice, color = AppColors.TextSecondary,
+                    style = MaterialTheme.typography.bodySmall)
             }
 
             Row(
-                modifier = Modifier.fillMaxWidth().background(AppColors.SurfaceDark, RoundedCornerShape(12.dp))
+                modifier = Modifier.fillMaxWidth().background(surfaceColors.panel, RoundedCornerShape(12.dp))
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Button(
-                    onClick = {
-                        if (!torrentOpened) {
-                            torrentOpened = true
-                            onSearchTorrent(torrentQuery)
-                        }
-                    },
+                    onClick = { torrentOpened = true },
                     colors = ButtonDefaults.colors(
-                        containerColor = if (torrentOpened) AppColors.NeonCyan else AppColors.SurfaceCard,
-                        contentColor = if (torrentOpened) AppColors.ButtonDarkText else Color.White,
+                        containerColor = if (torrentOpened) AppColors.NeonCyan else surfaceColors.card,
+                        contentColor = if (torrentOpened) AppColors.ButtonDarkText else surfaceColors.text,
                     ),
-                    modifier = Modifier.focusRequester(torrentFocus),
-                ) { Text("Торент") }
+                    modifier = Modifier.focusRequester(torrentFocus)
+                        .semantics { contentDescription = "Торент" },
+                ) { FontAwesomeIcon(FaIcons.ASTERISK, size = 20.sp) }
                 if (torrentOpened) {
                     Spacer(Modifier.width(16.dp))
-                    Box(Modifier.weight(1f).background(AppColors.SurfaceCard, RoundedCornerShape(8.dp))
+                    Box(Modifier.weight(1f).background(surfaceColors.card, RoundedCornerShape(8.dp))
                         .padding(horizontal = 12.dp, vertical = 8.dp)) {
                         var queryFocused by remember { mutableStateOf(false) }
-                        Text(torrentQuery, color = if (queryFocused) AppColors.NeonCyanLight else Color.White,
+                        Text(torrentQuery, color = if (queryFocused) AppColors.NeonCyanLight else surfaceColors.text,
                             fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.fillMaxWidth()
                                 .onFocusChanged { queryFocused = it.isFocused }
@@ -260,7 +305,7 @@ private fun TmdbDetailsContent(
             }
             if (torrentOpened) {
                 Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState())
-                    .background(AppColors.SurfaceDark, RoundedCornerShape(12.dp))) {
+                    .background(surfaceColors.panel, RoundedCornerShape(12.dp))) {
                     TolokaSearchPanel(
                         query = torrentQuery,
                         searchState = toloka.search,
@@ -272,7 +317,8 @@ private fun TmdbDetailsContent(
                         onSelect = onSelectTorrent,
                         onRetryMetadata = onRetryMetadata,
                         onPlayFile = onPlayFile,
-                        manualSearch = true,
+                        manualSearch = false,
+                        surfaceColors = surfaceColors,
                     )
                 }
             }
@@ -308,7 +354,8 @@ private fun TmdbDetailsContent(
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun TmdbInfoChip(label: String, onClick: () -> Unit) {
+internal fun TmdbInfoChip(label: String, surfaceColors: DetailsSurfaceColors,
+    onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(percent = 50)
     Surface(onClick = onClick,
@@ -317,11 +364,11 @@ private fun TmdbInfoChip(label: String, onClick: () -> Unit) {
         border = ClickableSurfaceDefaults.border(
             border = Border(BorderStroke(1.dp, AppColors.TextMuted), shape = shape),
             focusedBorder = Border.None),
-        colors = ClickableSurfaceDefaults.colors(containerColor = AppColors.SurfaceDark,
+        colors = ClickableSurfaceDefaults.colors(containerColor = surfaceColors.card,
             focusedContainerColor = AppColors.NeonCyanLight),
         modifier = Modifier.onFocusChanged { focused = it.isFocused }) {
         Text(label, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-            color = if (focused) AppColors.ButtonDarkText else AppColors.TextLight,
+            color = if (focused) AppColors.ButtonDarkText else surfaceColors.text,
             fontSize = 12.sp)
     }
 }
@@ -356,7 +403,7 @@ private fun TmdbInfoDialog(section: String, details: TmdbDetails, onDismiss: () 
     }
 }
 
-private fun tmdbTorrentQueryOptions(details: TmdbDetails): List<Pair<String, String>> {
+internal fun tmdbTorrentQueryOptions(details: TmdbDetails): List<Pair<String, String>> {
     val title = details.title
     val year = title.year?.toString()
     return buildList {
@@ -371,7 +418,7 @@ private fun tmdbTorrentQueryOptions(details: TmdbDetails): List<Pair<String, Str
                 addVariant("$label · без уточнення", short)
             }
         }
-        addName("Українська", title.ukrainianTitle?.takeIf { name ->
+        addName("Українська", listOfNotNull(title.ukrainianTitle, title.title).firstOrNull { name ->
             name.any { it in '\u0400'..'\u04FF' }
         })
         addName("English", title.englishTitle)
@@ -386,14 +433,15 @@ private fun tmdbTorrentQueryOptions(details: TmdbDetails): List<Pair<String, Str
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun TmdbDetailAction(icon: String, label: String, selected: Boolean = false,
-    modifier: Modifier = Modifier, onClick: () -> Unit) {
+    modifier: Modifier = Modifier, surfaceColors: DetailsSurfaceColors,
+    onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     val background = when {
         focused -> AppColors.NeonCyanLight
         selected -> AppColors.NeonCyan
-        else -> AppColors.SurfaceDark
+        else -> surfaceColors.card
     }
-    val foreground = if (focused || selected) AppColors.ButtonDarkText else AppColors.AccentLight
+    val foreground = if (focused || selected) AppColors.ButtonDarkText else surfaceColors.text
     OutlinedButton(onClick = onClick,
         scale = OutlinedButtonDefaults.scale(scale = 1f, focusedScale = 1f),
         shape = OutlinedButtonDefaults.shape(RoundedCornerShape(10.dp)),

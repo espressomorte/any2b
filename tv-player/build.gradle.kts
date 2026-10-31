@@ -1,8 +1,18 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
 }
+
+val localProperties = Properties().apply {
+    val config = rootProject.file("local.properties")
+    if (config.exists()) config.inputStream().use { load(it) }
+}
+val malClientId = (providers.environmentVariable("MAL_CLIENT_ID").orNull
+    ?: localProperties.getProperty("mal.clientid").orEmpty())
+    .takeIf { it.matches(Regex("[0-9a-fA-F]{32}")) }.orEmpty()
 
 android {
     namespace = "ua.any2b.tvplayer"
@@ -22,6 +32,7 @@ android {
         versionName = providers.gradleProperty("appVersionName").orNull
             ?: githubTag?.removePrefix("v")
             ?: "0.1.0-alpha.1"
+        buildConfigField("String", "MAL_CLIENT_ID", "\"$malClientId\"")
     }
 
         val keystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
@@ -48,6 +59,7 @@ android {
     }
 
     compileOptions {
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -57,6 +69,7 @@ android {
     }
 
     buildFeatures {
+        buildConfig = true
         viewBinding = true
         compose = true
     }
@@ -68,6 +81,7 @@ android {
 }
 
 dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
     // Чистий Kotlin Core (AniList, AniTube, Fenix, Matcher)
     implementation(project(":core"))
 

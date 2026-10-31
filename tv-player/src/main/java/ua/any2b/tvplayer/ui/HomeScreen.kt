@@ -208,7 +208,7 @@ fun HomeScreen(
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun HomeActionButton(icon: String?, label: String, vector: Int? = null,
+internal fun HomeActionButton(icon: String?, label: String, vector: Int? = null,
     onClick: () -> Unit) {
     var isFocused by remember { mutableStateOf(false) }
 

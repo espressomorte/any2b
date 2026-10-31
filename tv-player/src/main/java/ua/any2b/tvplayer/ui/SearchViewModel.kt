@@ -11,6 +11,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import ua.any2b.core.anilist.AniListClient
 import ua.any2b.core.anilist.AnimeCard
+import ua.any2b.core.anilist.groupNumberedTvSeasons
 
 class SearchViewModel(
     private val aniListClient: AniListClient = AniListClient()
@@ -58,7 +59,7 @@ class SearchViewModel(
     private suspend fun executeSearch(q: String) {
         try {
             val results = withContext(Dispatchers.IO) { aniListClient.search(q) }
-            _searchResults.value = results
+            _searchResults.value = groupNumberedTvSeasons(results)
         } catch (_: Exception) {
             _searchResults.value = emptyList()
         } finally {

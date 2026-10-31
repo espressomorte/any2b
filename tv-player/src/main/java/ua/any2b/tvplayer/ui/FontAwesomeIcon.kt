@@ -26,6 +26,7 @@ object FaIcons {
     const val ARROW_UP = "\uf062"
     const val ARROW_DOWN = "\uf063"
     const val CHECK = "\uf00c"
+    const val ASTERISK = "\uf069"
 }
 
 @Composable

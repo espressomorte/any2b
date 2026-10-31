@@ -14,10 +14,13 @@ import ua.any2b.core.toloka.TorrServerClient
 import ua.any2b.core.toloka.TorrServerFailure
 import ua.any2b.core.toloka.TorrServerTorrent
 import ua.any2b.core.toloka.WorkerFailure
+import ua.any2b.core.toloka.TolokaTmdbRanker
+import ua.any2b.core.toloka.TolokaHit
+import ua.any2b.core.toloka.shortenedSearchNames
+import ua.any2b.core.tmdb.TmdbDetails
 import ua.any2b.tvplayer.data.SettingsManager
 import ua.any2b.tvplayer.data.TorrServerAuthStore
-import ua.any2b.tvplayer.data.WorkerConnections
-import ua.any2b.tvplayer.data.WorkerKeyStore
+import ua.any2b.tvplayer.data.TolokaConnections
 
 data class FreeTolokaState(
     val search: TolokaSearchState = TolokaSearchState.Idle,
@@ -28,30 +31,69 @@ data class FreeTolokaState(
 /** Manual Toloka search: no AniList match or release mapping is involved. */
 class TolokaSearchViewModel(application: Application) : AndroidViewModel(application) {
     private val settings = SettingsManager(application)
-    private val workerKeys = WorkerKeyStore(application)
     private val serverAuth = TorrServerAuthStore(application)
-    private val worker = WorkerConnections.client
     private val server = TorrServerClient()
     private val _state = MutableStateFlow(FreeTolokaState())
     val state: StateFlow<FreeTolokaState> = _state
 
     private var searchJob: Job? = null
     private var activeSearchQuery: String? = null
+    private var automaticQuery: String? = null
+    private var automaticEnglishTitle: String? = null
+    private var automaticDetails: TmdbDetails? = null
     private var transferJob: Job? = null
     private var uploadedTopicId: String? = null
     private var uploadedTorrent: TorrServerTorrent? = null
 
     fun search(query: String) {
+        clearAutomaticSearch()
+        searchInternal(query, null, null)
+    }
+
+    fun searchForTmdb(details: TmdbDetails, query: String) {
+        clearAutomaticSearch()
+        searchInternal(query, null, details)
+    }
+
+    fun searchAutomatically(details: TmdbDetails, query: String, englishTitle: String?) {
+        automaticQuery = query.trim()
+        automaticEnglishTitle = englishTitle
+        automaticDetails = details
+        searchInternal(query, englishTitle, details)
+    }
+
+    fun updateAutomaticDetails(details: TmdbDetails) {
+        val previous = automaticDetails ?: return
+        if (previous.title.type != details.title.type || previous.title.id != details.title.id) return
+        automaticDetails = details
+        val english = details.title.englishTitle
+            ?: details.title.originalTitle?.takeIf { details.title.originalLanguage == "en" }
+        if (english.isNullOrBlank() || english.equals(automaticEnglishTitle, ignoreCase = true)) return
+        automaticEnglishTitle = english
+        val result = _state.value.search as? TolokaSearchState.Results ?: return
+        val primary = automaticQuery ?: return
+        if (result.hits.isNotEmpty() || english.equals(result.query, ignoreCase = true) ||
+            english.equals(primary, ignoreCase = true)) return
+        clearAutomaticSearch()
+        searchInternal(english, english, details, result.weakHits)
+    }
+
+    private fun clearAutomaticSearch() {
+        automaticQuery = null
+        automaticEnglishTitle = null
+        automaticDetails = null
+    }
+
+    private fun searchInternal(query: String, englishTitle: String?, details: TmdbDetails?,
+        retainedWeak: List<TolokaHit> = emptyList()) {
         val trimmed = query.trim()
         if (trimmed.isBlank()) {
             _state.value = _state.value.copy(search = TolokaSearchState.Error("Введіть назву для пошуку"))
             return
         }
-        val workerUrl = settings.workerUrl()
-        val key = workerKeys.read()
-        if (workerUrl.isBlank() || key.isNullOrBlank()) {
+        if (!TolokaConnections.configured(getApplication())) {
             _state.value = _state.value.copy(search = TolokaSearchState.Error(
-                "Налаштуйте URL і ключ Worker у налаштуваннях застосунку"))
+                "Налаштуйте Toloka в розділі «Інтеграції»"))
             return
         }
         if (_state.value.search is TolokaSearchState.Loading && activeSearchQuery == trimmed) return
@@ -63,9 +105,36 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
         _state.value = FreeTolokaState(search = TolokaSearchState.Loading)
         searchJob = viewModelScope.launch {
             try {
-                val hits = worker.search(workerUrl, key, trimmed).results
+                val first = TolokaConnections.search(getApplication(), trimmed)
+                val attempts = mutableListOf(first)
+                val firstDetails = if (automaticQuery == trimmed) automaticDetails ?: details else details
+                var ranked = firstDetails?.let { TolokaTmdbRanker.rank(it, first.results) }
+                val availableEnglish = if (automaticQuery == trimmed)
+                    automaticEnglishTitle ?: englishTitle else englishTitle
+                var searchedQuery = trimmed
+                val fallbackQueries = availableEnglish?.trim()?.takeIf(String::isNotBlank)
+                    ?.let { listOf(it) + shortenedSearchNames(it) }.orEmpty()
+                    .distinctBy { it.lowercase() }
+                    .filterNot { it.equals(trimmed, ignoreCase = true) }
+                for (fallback in fallbackQueries) {
+                    if (ranked?.visible?.isNotEmpty() == true) break
+                    val response = TolokaConnections.search(getApplication(), fallback)
+                    attempts += response
+                    searchedQuery = fallback
+                    val currentDetails = if (automaticQuery == trimmed)
+                        automaticDetails ?: details else details
+                    ranked = currentDetails?.let { TolokaTmdbRanker.rank(it, response.results) }
+                }
+                val latestDetails = if (automaticQuery == trimmed) automaticDetails ?: details else details
+                val selected = attempts.last()
+                val hits = ranked?.visible ?: selected.results.filter(TolokaTmdbRanker::isVideoCandidate)
+                val weak = (retainedWeak + attempts.flatMap { attempt ->
+                    latestDetails?.let { TolokaTmdbRanker.rank(it, attempt.results).weak }.orEmpty()
+                }).distinctBy { it.id }.filterNot { hit -> hits.any { it.id == hit.id } }
+                val totalFound = attempts.flatMap { it.results }.distinctBy { it.id }.size
                 _state.value = _state.value.copy(
-                    search = TolokaSearchState.Results(trimmed, hits, hits.size))
+                    search = TolokaSearchState.Results(searchedQuery, hits,
+                        maxOf(totalFound, hits.size + weak.size), weakHits = weak))
             } catch (error: CancellationException) {
                 throw error
             } catch (error: WorkerFailure.RateLimited) {
@@ -83,28 +152,26 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
     fun selectHit(topicId: String) {
         if (_state.value.transfer is TolokaTransferState.Loading) return
         val results = _state.value.search as? TolokaSearchState.Results ?: return
-        if (results.hits.none { it.id == topicId }) return
+        if ((results.hits + results.weakHits).none { it.id == topicId }) return
         val serverUrl = settings.torrServerUrl()
         val cached = uploadedTorrent?.takeIf { uploadedTopicId == topicId }
-        val workerUrl = settings.workerUrl()
-        val key = workerKeys.read()
         _state.value = _state.value.copy(
             search = results.copy(selectedId = topicId), playbackStatus = null)
-        if (serverUrl.isBlank() || (cached == null && (workerUrl.isBlank() || key.isNullOrBlank()))) {
+        if (serverUrl.isBlank() || (cached == null && !TolokaConnections.configured(getApplication()))) {
             _state.value = _state.value.copy(transfer = TolokaTransferState.Error(
-                "Налаштуйте Worker і TorrServer у налаштуваннях застосунку"))
+                "Налаштуйте Toloka і TorrServer у розділі «Інтеграції»"))
             return
         }
         _state.value = _state.value.copy(transfer = TolokaTransferState.Loading(
-            if (cached == null) "Завантаження torrent із Worker" else "Читання файлів TorrServer",
+            if (cached == null) "Завантаження torrent із Toloka" else "Читання файлів TorrServer",
             if (cached == null) "Роздачу вибрано" else "Торент додано до TorrServer"))
         transferJob = viewModelScope.launch {
             var lastSuccess = if (cached == null) "Роздачу вибрано" else "Торент додано до TorrServer"
             try {
                 val auth = serverAuth.read()?.let { TorrServerBasicAuth(it.username, it.password) }
                 val torrent = cached ?: run {
-                    val bytes = worker.torrent(workerUrl, key!!, topicId)
-                    lastSuccess = "Torrent отримано з Worker"
+                    val bytes = TolokaConnections.torrent(getApplication(), topicId)
+                    lastSuccess = "Torrent отримано з Toloka"
                     _state.value = _state.value.copy(transfer = TolokaTransferState.Loading(
                         "Передавання torrent у TorrServer", lastSuccess))
                     server.upload(serverUrl, bytes, auth).also {
@@ -141,7 +208,7 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
                     lastSuccess = lastSuccess, repeatSearch = true))
             } catch (error: WorkerFailure.RateLimited) {
                 _state.value = _state.value.copy(transfer = TolokaTransferState.Error(
-                    "Worker обмежив запити. Повторіть через ${error.waitSeconds} с", lastSuccess))
+                    "Toloka обмежила запити. Повторіть через ${error.waitSeconds} с", lastSuccess))
             } catch (error: WorkerFailure) {
                 _state.value = _state.value.copy(transfer = TolokaTransferState.Error(
                     error.message.orEmpty(), lastSuccess))

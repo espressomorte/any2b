@@ -42,8 +42,12 @@ fun TmdbListScreen(state: TmdbListState, onOpen: (TmdbTitle) -> Unit,
     }
     val heading = when (state.category) {
         "history" -> "Історія переглядів"
+        "recommendations" -> "Рекомендації"
         "tv" -> "Популярні серіали"
         "movie" -> "Популярні фільми"
+        "animation_tv" -> "Популярні анімаційні серіали"
+        "animation_movie" -> "Популярні повнометражні анімаційні фільми"
+        "mal_top" -> "Аніме з найвищими оцінками"
         else -> "Обрані тайтли"
     }
     Column(Modifier.fillMaxSize().background(AppColors.BackgroundDark)
@@ -54,7 +58,9 @@ fun TmdbListScreen(state: TmdbListState, onOpen: (TmdbTitle) -> Unit,
             Text(heading, style = MaterialTheme.typography.headlineLarge, color = Color.White)
             OutlinedButton(onClick = onBack) { Text("Назад") }
         }
-        if (state.category != "favorites" && state.category != "history") {
+        if (state.category != "favorites" && state.category != "history" &&
+            state.category != "mal_top" &&
+            state.category != "recommendations") {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 listOf(TmdbListSort.POPULARITY to "Популярність",
                     TmdbListSort.RATING to "Рейтинг",

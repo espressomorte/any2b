@@ -68,8 +68,8 @@ class AniListClient(
             }
         }
 
-        val related = m.relationsCards()
-            .filterNot { it.id == id }
+        val relations = m.relationsCards().filterNot { it.card.id == id }
+        val related = relations.map { it.card }
         val recommendationsConnection = m.optJSONObject("recommendations")
         val recommendations = recommendationsConnection?.recommendedCards().orEmpty()
             .filterNot { it.id == id }
@@ -89,6 +89,7 @@ class AniListClient(
             genres = genres,
             studios = studios,
             related = related,
+            seasonRelations = relations.filter { it.type == "PREQUEL" || it.type == "SEQUEL" },
             recommendations = recommendations,
             recommendationsHasMore = recommendationsConnection?.optJSONObject("pageInfo")
                 ?.optBoolean("hasNextPage") == true,
@@ -232,13 +233,14 @@ query Category(${'$'}page: Int, ${'$'}perPage: Int$categoryVariables) {
         return media.toAnimeCards()
     }
 
-    private fun JSONObject.relationsCards(): List<AnimeCard> {
+    private fun JSONObject.relationsCards(): List<AnimeRelation> {
         val edges = optJSONObject("relations")?.optJSONArray("edges") ?: return emptyList()
-        val media = JSONArray()
-        for (i in 0 until edges.length()) {
-            edges.optJSONObject(i)?.optJSONObject("node")?.let { media.put(it) }
-        }
-        return media.toAnimeCards()
+        return (0 until edges.length()).mapNotNull { index ->
+            val edge = edges.optJSONObject(index) ?: return@mapNotNull null
+            val node = edge.optJSONObject("node") ?: return@mapNotNull null
+            if (node.optString("type") != "ANIME" || node.optBoolean("isAdult")) return@mapNotNull null
+            AnimeRelation(edge.optString("relationType"), node.toCard())
+        }.distinctBy { it.card.id }
     }
 
     private fun JSONObject.toCard(): AnimeCard {
@@ -318,6 +320,7 @@ query Details(${'$'}id: Int) {
     }
     relations {
       edges {
+        relationType
         node { ...relatedCard }
       }
     }

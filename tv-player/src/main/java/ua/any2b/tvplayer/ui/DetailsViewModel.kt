@@ -16,6 +16,9 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import ua.any2b.core.anilist.AniListClient
 import ua.any2b.core.anilist.AnimeDetails
+import ua.any2b.core.anilist.AnimeRelation
+import ua.any2b.core.anilist.NumberedSeason
+import ua.any2b.core.anilist.numberedSeasons
 import ua.any2b.core.anitube.AnitubeClient
 import ua.any2b.core.anitube.AnitubeSearchResult
 import ua.any2b.core.anitube.AnitubeVoice
@@ -43,8 +46,7 @@ import ua.any2b.tvplayer.data.WatchHistoryManager
 import ua.any2b.tvplayer.data.ReleaseMappingStore
 import ua.any2b.tvplayer.data.ReleaseSelection
 import ua.any2b.tvplayer.data.SettingsManager
-import ua.any2b.tvplayer.data.WorkerConnections
-import ua.any2b.tvplayer.data.WorkerKeyStore
+import ua.any2b.tvplayer.data.TolokaConnections
 import ua.any2b.tvplayer.data.TorrServerAuthStore
 import ua.any2b.tvplayer.data.TolokaPlaybackStore
 import ua.any2b.tvplayer.data.TmdbMapping
@@ -88,6 +90,7 @@ sealed interface TolokaSearchState {
         val hits: List<TolokaHit>,
         val totalFound: Int,
         val selectedId: String? = null,
+        val weakHits: List<TolokaHit> = emptyList(),
     ) : TolokaSearchState
     data class Error(val message: String) : TolokaSearchState
 }
@@ -108,6 +111,8 @@ sealed interface DetailsState {
     data object Loading : DetailsState
     data class Ready(
         val details: AnimeDetails,
+        val tmdbSeasonEntries: List<ua.any2b.core.tmdb.TmdbSeason> = emptyList(),
+        val seriesSeasons: List<NumberedSeason> = emptyList(),
         val tmdbLink: TmdbLinkState = TmdbLinkState.Loading,
         val videoSource: VideoSourceState = VideoSourceState.Loading,
         val manualReleaseSearch: ManualReleaseSearchState = ManualReleaseSearchState.Idle,
@@ -141,10 +146,8 @@ class DetailsViewModel(
     private val tmdbMappings = TmdbMappingStore.getInstance(context)
     private val appContext = context.applicationContext
     private val settingsManager = SettingsManager(context)
-    private val workerKeyStore = WorkerKeyStore(context)
     private val torrServerAuthStore = TorrServerAuthStore(context)
     private val tolokaPlaybackStore = TolokaPlaybackStore(context)
-    private val workerClient = WorkerConnections.client
     private val torrServerClient = TorrServerClient()
     private var manualSearchJob: Job? = null
     private var tolokaSearchJob: Job? = null
@@ -154,7 +157,15 @@ class DetailsViewModel(
     private var detailsJob: Job? = null
     private var videoSourceJob: Job? = null
     private var tmdbJob: Job? = null
+    private var seriesJob: Job? = null
+    private var seasonSwitchJob: Job? = null
+    private val seasonDetails = mutableMapOf<Int, AnimeDetails>()
+    private var rootDetails: AnimeDetails? = null
+    private var activeAnimeId = animeId
+    private var seasonChosenByUser = false
     private var retriedAniTubeWithTmdb = false
+
+    fun activeAnimeId(): Int = activeAnimeId
 
     private val _state = MutableStateFlow<DetailsState>(DetailsState.Loading)
     val state: StateFlow<DetailsState> = _state
@@ -167,6 +178,11 @@ class DetailsViewModel(
         detailsJob?.cancel()
         videoSourceJob?.cancel()
         tmdbJob?.cancel()
+        seriesJob?.cancel()
+        seasonSwitchJob?.cancel()
+        seasonDetails.clear()
+        activeAnimeId = animeId
+        seasonChosenByUser = false
         retriedAniTubeWithTmdb = false
         tolokaSearchJob?.cancel()
         tolokaTransferJob?.cancel()
@@ -174,6 +190,8 @@ class DetailsViewModel(
         detailsJob = viewModelScope.launch {
             try {
                 val details = withContext(Dispatchers.IO) { aniListClient.animeDetails(animeId) }
+                rootDetails = details
+                seasonDetails[animeId] = details
                 val historyEntry = try {
                     withContext(Dispatchers.IO) { historyManager.getEntry(animeId) }
                 } catch (e: CancellationException) {
@@ -216,7 +234,19 @@ class DetailsViewModel(
         tmdbJob = viewModelScope.launch {
             try {
                 tmdbMappings.put(animeId, TmdbMapping(candidate.type, candidate.id))
-                updateReady { it.copy(tmdbLink = TmdbLinkState.Confirmed(candidate)) }
+                val connection = workerTmdbConnection(appContext)
+                val tmdbDetails = try {
+                    connection?.client?.details(candidate.type, candidate.id, connection.accessKey)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    null
+                }
+                val enriched = tmdbDetails?.let { TmdbSeasonMatcher.enrich(ready.details, candidate, it.seasonEntries) }
+                    ?: candidate
+                updateReady { it.copy(tmdbLink = TmdbLinkState.Confirmed(enriched),
+                    tmdbSeasonEntries = tmdbDetails?.seasonEntries?.filter { season -> season.number > 0 }.orEmpty()) }
+                tmdbDetails?.let { discoverSeriesSeasons(ready.details, it.seasonEntries) }
                 maybeRetryAniTubeWithTmdb()
             } catch (error: CancellationException) {
                 throw error
@@ -235,7 +265,9 @@ class DetailsViewModel(
                 val tmdbDetails = connection.client.details(saved.type, saved.id, connection.accessKey)
                 val title = TmdbSeasonMatcher.enrich(details, tmdbDetails.title,
                     tmdbDetails.seasonEntries)
-                updateReady { it.copy(tmdbLink = TmdbLinkState.Confirmed(title)) }
+                updateReady { it.copy(tmdbLink = TmdbLinkState.Confirmed(title),
+                    tmdbSeasonEntries = tmdbDetails.seasonEntries.filter { season -> season.number > 0 }) }
+                discoverSeriesSeasons(details, tmdbDetails.seasonEntries)
                 maybeRetryAniTubeWithTmdb()
                 return
             }
@@ -283,6 +315,122 @@ class DetailsViewModel(
         }
     }
 
+    private fun discoverSeriesSeasons(
+        root: AnimeDetails,
+        tmdbSeasons: List<ua.any2b.core.tmdb.TmdbSeason>,
+    ) {
+        if (root.format !in setOf("TV", "TV_SHORT") || tmdbSeasons.none { it.number > 0 }) return
+        seriesJob?.cancel()
+        seriesJob = viewModelScope.launch {
+            val relations = root.seasonRelations.toMutableList()
+            val queue = ArrayDeque(relations)
+            val visited = mutableSetOf(root.id)
+            fun publish() {
+                val seasons = root.copy(seasonRelations = relations).numberedSeasons(tmdbSeasons)
+                updateReady { it.copy(seriesSeasons = seasons) }
+            }
+            publish()
+            while (queue.isNotEmpty() && visited.size < 16) {
+                val relation = queue.removeFirst()
+                if (relation.type !in setOf("PREQUEL", "SEQUEL")) continue
+                val card = relation.card
+                if (card.id in visited || card.format !in setOf("TV", "TV_SHORT")) continue
+                val candidate = root.copy(seasonRelations = listOf(relation))
+                    .numberedSeasons(tmdbSeasons)
+                if (candidate.none { it.animeId == card.id }) continue
+                visited.add(card.id)
+                val details = try {
+                    aniListClient.animeDetails(card.id)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    continue
+                }
+                seasonDetails[card.id] = details
+                details.seasonRelations.forEach { next ->
+                    if (relations.none { it.card.id == next.card.id }) relations.add(next)
+                    if (next.card.id !in visited) queue.add(next)
+                }
+                publish()
+            }
+            val seasons = root.copy(seasonRelations = relations).numberedSeasons(tmdbSeasons)
+            val activeSeason = seasons.filter { it.animeId != null }
+                .filter { seasonDetails[it.animeId]?.status == "RELEASING" }
+                .maxByOrNull { it.number }
+                ?: seasons.firstOrNull { it.animeId != null }
+            val defaultSeasonId = activeSeason?.animeId
+            if (!seasonChosenByUser && activeAnimeId == root.id && defaultSeasonId != null &&
+                defaultSeasonId != root.id) {
+                selectSeason(defaultSeasonId, userInitiated = false)
+            }
+            // Resolve each season independently. A missing or ambiguous season remains selectable
+            // for manual AniTube matching and is never replaced by another season's release.
+            seasons.mapNotNull { it.animeId }.distinct().forEach { id ->
+                if (id != activeAnimeId && id != defaultSeasonId)
+                    seasonDetails[id]?.let { prefetchSeasonRelease(it) }
+            }
+        }
+    }
+
+    private suspend fun prefetchSeasonRelease(details: AnimeDetails) {
+        try {
+            if (releaseMappings.get(details.id) != null) return
+            val name = details.title.romaji ?: details.title.english ?: return
+            val initial = anitubeClient.search(name)
+            val choice = TitleMatcher.confidentBest(TitleMatcher.match(details, initial))
+                ?: details.seasonYear?.let { year ->
+                    val refined = anitubeClient.search("$name $year")
+                    TitleMatcher.confidentBest(TitleMatcher.match(details, (initial + refined)
+                        .distinctBy { it.newsId }))
+                }
+            if (choice != null) releaseMappings.put(details.id, choice, ReleaseSelection.AUTOMATIC)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            // Manual release selection remains available for this season.
+        }
+    }
+
+    fun selectSeason(id: Int, userInitiated: Boolean = true) {
+        val current = _state.value as? DetailsState.Ready ?: return
+        if (id == activeAnimeId || current.seriesSeasons.none { it.animeId == id }) return
+        if (userInitiated) seasonChosenByUser = true
+        videoSourceJob?.cancel()
+        seasonSwitchJob?.cancel()
+        seasonSwitchJob = viewModelScope.launch {
+            val details = seasonDetails[id] ?: try {
+                aniListClient.animeDetails(id).also { seasonDetails[id] = it }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                return@launch
+            }
+            val history = try {
+                historyManager.getEntry(id)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                null
+            }
+            activeAnimeId = id
+            updateReady { state ->
+                val link = (state.tmdbLink as? TmdbLinkState.Confirmed)?.let {
+                    TmdbLinkState.Confirmed(TmdbSeasonMatcher.enrich(details,
+                        it.title.copy(matchedSeasonTitle = null, matchedSeasonYear = null),
+                        state.tmdbSeasonEntries))
+                } ?: state.tmdbLink
+                state.copy(details = details, tmdbLink = link,
+                    videoSource = VideoSourceState.Loading,
+                    manualReleaseSearch = ManualReleaseSearchState.Idle,
+                    historyEntry = history, selectedVoiceIndex = 0, selectedEpisodeIndex = 0,
+                    tolokaSearch = TolokaSearchState.Idle,
+                    tolokaTransfer = TolokaTransferState.Idle,
+                    tolokaOpenedFiles = emptySet(), tolokaOpenedTopics = emptySet())
+            }
+            videoSourceJob = viewModelScope.launch { loadVideoSource(details) }
+        }
+    }
+
     private fun maybeRetryAniTubeWithTmdb() {
         val ready = _state.value as? DetailsState.Ready ?: return
         if (retriedAniTubeWithTmdb || ready.tmdbLink.ukrainianTitle == null) return
@@ -296,7 +444,7 @@ class DetailsViewModel(
 
     fun toggleFavorite() {
         val current = _state.value as? DetailsState.Ready ?: return
-        val isFavorite = favoritesManager.toggle(current.details)
+        val isFavorite = favoritesManager.toggle(rootDetails ?: current.details)
         updateReady { it.copy(isFavorite = isFavorite) }
     }
 
@@ -309,7 +457,7 @@ class DetailsViewModel(
 
     private suspend fun loadVideoSource(details: AnimeDetails) {
         val saved = try {
-            releaseMappings.get(animeId)
+            releaseMappings.get(details.id)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -421,17 +569,20 @@ class DetailsViewModel(
         }
     }
 
-    fun searchToloka(query: String) {
+    fun searchToloka(query: String) = searchTolokaInternal(query, null)
+
+    fun searchTolokaAutomatically(query: String, englishTitle: String?) =
+        searchTolokaInternal(query, englishTitle)
+
+    private fun searchTolokaInternal(query: String, englishTitle: String?) {
         val trimmed = query.trim()
         if (trimmed.isBlank()) {
             updateReady { it.copy(tolokaSearch = TolokaSearchState.Error("Введіть назву для пошуку")) }
             return
         }
-        val workerUrl = settingsManager.workerUrl()
-        val key = workerKeyStore.read()
-        if (workerUrl.isBlank() || key.isNullOrBlank()) {
+        if (!TolokaConnections.configured(appContext)) {
             updateReady { it.copy(tolokaSearch = TolokaSearchState.Error(
-                "Налаштуйте URL і ключ Worker у налаштуваннях застосунку",
+                "Налаштуйте Toloka в розділі «Інтеграції»",
             )) }
             return
         }
@@ -443,15 +594,26 @@ class DetailsViewModel(
             tolokaTransfer = TolokaTransferState.Idle, tolokaPlaybackStatus = null) }
         tolokaSearchJob = viewModelScope.launch {
             try {
-                val results = workerClient.search(workerUrl, key, trimmed)
-                updateReady { ready ->
+                fun filterHits(ready: DetailsState.Ready, results: List<ua.any2b.core.toloka.TolokaHit>):
+                    List<ua.any2b.core.toloka.TolokaHit> {
                     val ukrainian = (ready.videoSource as? VideoSourceState.Success)?.release?.title
-                    val hits = TolokaHitFilter.filter(ready.details, ukrainian, results.results,
+                    return TolokaHitFilter.filter(ready.details, ukrainian,
+                        results.filter(ua.any2b.core.toloka.TolokaTmdbRanker::isVideoCandidate),
                         listOfNotNull(ready.tmdbLink.ukrainianTitle))
-                    ready.copy(tolokaSearch = TolokaSearchState.Results(trimmed,
+                }
+                val firstReady = _state.value as? DetailsState.Ready ?: return@launch
+                val (searchedQuery, results) = ua.any2b.core.toloka.searchWithEnglishFallback(
+                    primary = trimmed,
+                    english = englishTitle,
+                    search = { TolokaConnections.search(appContext, it) },
+                    hasMatches = { filterHits(firstReady, it.results).isNotEmpty() },
+                )
+                updateReady { ready ->
+                    val hits = filterHits(ready, results.results)
+                    ready.copy(tolokaSearch = TolokaSearchState.Results(searchedQuery,
                         hits, results.results.size),
                         tolokaOpenedTopics = hits.mapNotNull { hit ->
-                            hit.id.takeIf { tolokaPlaybackStore.hasOpenedFile(animeId, it) }
+                            hit.id.takeIf { tolokaPlaybackStore.hasOpenedFile(activeAnimeId, it) }
                         }.toSet(),
                         tolokaOpenedFiles = emptySet())
                 }
@@ -478,14 +640,12 @@ class DetailsViewModel(
         if (results.hits.none { it.id == topicId }) return
         val serverUrl = settingsManager.torrServerUrl()
         val cached = uploadedTorrent?.takeIf { uploadedTopicId == topicId }
-        val workerUrl = settingsManager.workerUrl()
-        val key = workerKeyStore.read()
         updateReady { it.copy(tolokaSearch = results.copy(selectedId = topicId),
             tolokaPlaybackStatus = null,
-            tolokaOpenedFiles = tolokaPlaybackStore.openedFileIds(animeId, topicId)) }
-        if (serverUrl.isBlank() || (cached == null && (workerUrl.isBlank() || key.isNullOrBlank()))) {
+            tolokaOpenedFiles = tolokaPlaybackStore.openedFileIds(activeAnimeId, topicId)) }
+        if (serverUrl.isBlank() || (cached == null && !TolokaConnections.configured(appContext))) {
             updateReady { it.copy(tolokaTransfer = TolokaTransferState.Error(
-                "Налаштуйте Worker і TorrServer у налаштуваннях застосунку",
+                "Налаштуйте Toloka і TorrServer у розділі «Інтеграції»",
             )) }
             return
         }
@@ -498,8 +658,8 @@ class DetailsViewModel(
             try {
                 val auth = torrServerAuthStore.read()?.let { TorrServerBasicAuth(it.username, it.password) }
                 val torrent = if (cached != null) cached else {
-                    val torrentBytes = workerClient.torrent(workerUrl, key!!, topicId)
-                    lastSuccess = "Torrent отримано з Worker"
+                    val torrentBytes = TolokaConnections.torrent(appContext, topicId)
+                    lastSuccess = "Torrent отримано з Toloka"
                     updateReady { it.copy(tolokaTransfer = TolokaTransferState.Loading(
                         "Передавання torrent у TorrServer", lastSuccess)) }
                     torrServerClient.upload(serverUrl, torrentBytes, auth).also {
@@ -588,10 +748,10 @@ class DetailsViewModel(
             val results = ready.tolokaSearch as? TolokaSearchState.Results ?: return@updateReady ready
             ready.copy(
                 tolokaOpenedTopics = results.hits.mapNotNull { hit ->
-                    hit.id.takeIf { tolokaPlaybackStore.hasOpenedFile(animeId, it) }
+                    hit.id.takeIf { tolokaPlaybackStore.hasOpenedFile(activeAnimeId, it) }
                 }.toSet(),
                 tolokaOpenedFiles = results.selectedId?.let {
-                    tolokaPlaybackStore.openedFileIds(animeId, it)
+                    tolokaPlaybackStore.openedFileIds(activeAnimeId, it)
                 }.orEmpty(),
             )
         }
@@ -632,7 +792,7 @@ class DetailsViewModel(
         }
         if (selection != null) {
             try {
-                releaseMappings.put(animeId, candidate, selection)
+                releaseMappings.put(activeAnimeId, candidate, selection)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -640,7 +800,7 @@ class DetailsViewModel(
             }
         }
         currentCoroutineContext().ensureActive()
-        VoiceCache.put(animeId, voices)
+        VoiceCache.put(activeAnimeId, voices)
         updateReady { current ->
             val history = current.historyEntry.takeIf { restoreHistory }
             val voiceIndex = history?.voiceIndex?.takeIf { it in voices.indices } ?: defaultVoiceIndex(voices)
@@ -664,7 +824,7 @@ class DetailsViewModel(
         videoSourceJob?.cancel()
         videoSourceJob = viewModelScope.launch {
             try {
-                val history = withContext(Dispatchers.IO) { historyManager.getEntry(animeId) }
+                val history = withContext(Dispatchers.IO) { historyManager.getEntry(activeAnimeId) }
                 val voices = playableVoices(
                     anitubeClient.getVoices(release.pageUrl),
                     current.details.format,
@@ -687,7 +847,7 @@ class DetailsViewModel(
                     val episodeIndex = voices[voiceIndex].episodes.indexOfFirst {
                         it.episodeNumber == episodeNumber
                     }.takeIf { it >= 0 } ?: 0
-                    VoiceCache.put(animeId, voices)
+                    VoiceCache.put(activeAnimeId, voices)
                     latest.copy(
                         videoSource = VideoSourceState.Success(release, voices),
                         selectedVoiceIndex = voiceIndex,
@@ -739,7 +899,7 @@ class DetailsViewModel(
             it.episodeNumber == episode.episodeNumber && it.voiceIndex == voiceIndex
         }?.progress ?: 0.0f
         historyManager.saveProgress(currentState.details, episodeIndex, voiceIndex, existingProgress, episode.episodeNumber)
-        val updatedHistory = historyManager.getEntry(animeId)
+        val updatedHistory = historyManager.getEntry(activeAnimeId)
         updateReady { it.copy(resolvingStream = true, historyEntry = updatedHistory) }
 
         viewModelScope.launch {
