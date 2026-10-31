@@ -26,6 +26,7 @@ import ua.any2b.tvplayer.data.FanartKeyStore
 import ua.any2b.tvplayer.data.SettingsManager
 import ua.any2b.tvplayer.data.TorrServerAuthStore
 import ua.any2b.tvplayer.data.TolokaPlaybackStore
+import ua.any2b.tvplayer.data.TmdbWatchHistoryStore
 import ua.any2b.tvplayer.ui.AppTheme
 import ua.any2b.tvplayer.ui.TmdbDetailsScreen
 import ua.any2b.tvplayer.ui.TmdbDetailsViewModel
@@ -53,6 +54,7 @@ class TmdbDetailsActivity : ComponentActivity() {
     private val tolokaViewModel: TolokaSearchViewModel by viewModels()
     private val fanartViewModel: FanartArtworkViewModel by viewModels()
     private var launchingPlayer = false
+    private var openedTopics by mutableStateOf(emptySet<String>())
     private var openedFiles by mutableStateOf(emptySet<Int>())
     private var selectedTopicId: String? = null
     private var tmdbId = -1
@@ -83,7 +85,9 @@ class TmdbDetailsActivity : ComponentActivity() {
                 }
                 val artworkState = fanartViewModel.state.collectAsStateWithLifecycle().value
                 val detailsState = detailsViewModel.state.collectAsStateWithLifecycle().value
+                val tolokaState = tolokaViewModel.state.collectAsStateWithLifecycle().value
                 val readyDetails = (detailsState as? TmdbDetailsState.Ready)?.details
+                LaunchedEffect(tolokaState.search) { refreshPlaybackMarks() }
                 LaunchedEffect(readyDetails?.title?.type, readyDetails?.title?.id,
                     readyDetails?.title?.englishTitle) {
                     val details = readyDetails ?: return@LaunchedEffect
@@ -119,7 +123,8 @@ class TmdbDetailsActivity : ComponentActivity() {
                         (artworkState as? FanartArtworkState.Ready)
                             ?.takeIf { it.key == artworkKey }?.reason?.let { "fanart.tv: $it" }
                         else null,
-                    toloka = tolokaViewModel.state.collectAsStateWithLifecycle().value,
+                    toloka = tolokaState,
+                    openedTopics = openedTopics,
                     openedFiles = openedFiles,
                     onRetryDetails = {
                         detailsViewModel.load(type, id, query, preferredTitle,
@@ -131,8 +136,7 @@ class TmdbDetailsActivity : ComponentActivity() {
                     },
                     onSelectTorrent = { topicId ->
                         selectedTopicId = topicId
-                        openedFiles = TolokaPlaybackStore(this).openedTmdbFileIds(
-                            tmdbType, tmdbId, topicId)
+                        refreshPlaybackMarks()
                         tolokaViewModel.selectHit(topicId)
                     },
                     onRetryMetadata = tolokaViewModel::retryMetadata,
@@ -166,10 +170,19 @@ class TmdbDetailsActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         launchingPlayer = false
-        selectedTopicId?.let { topicId ->
-            openedFiles = TolokaPlaybackStore(this).openedTmdbFileIds(
-                tmdbType, tmdbId, topicId)
-        }
+        refreshPlaybackMarks()
+    }
+
+    private fun refreshPlaybackMarks() {
+        val store = TolokaPlaybackStore(this)
+        val results = tolokaViewModel.state.value.search as? TolokaSearchState.Results
+        openedTopics = (results?.hits.orEmpty() + results?.weakHits.orEmpty())
+            .mapNotNull { hit ->
+                hit.id.takeIf { store.openedTmdbFileIds(tmdbType, tmdbId, it).isNotEmpty() }
+            }.toSet()
+        openedFiles = selectedTopicId?.let {
+            store.openedTmdbFileIds(tmdbType, tmdbId, it)
+        }.orEmpty()
     }
 
     private fun openFile(fileId: Int) {
@@ -182,6 +195,7 @@ class TmdbDetailsActivity : ComponentActivity() {
         }
         launchingPlayer = true
         tolokaViewModel.reportPlaybackStatus("URL потоку сформовано для індексу $fileId. Відкриваємо плеєр…")
+        val title = (detailsViewModel.state.value as? TmdbDetailsState.Ready)?.details?.title
         val selectedPackage = SettingsManager(this).selectedPlayerPackage()
         val serverRequiresAuth = TorrServerAuthStore(this).read() != null
         if (selectedPackage != null && !serverRequiresAuth) {
@@ -189,6 +203,11 @@ class TmdbDetailsActivity : ComponentActivity() {
             if (externalIntent != null) {
                 try {
                     startActivity(externalIntent)
+                    selectedTopicId?.let { topicId ->
+                        TolokaPlaybackStore(this).markTmdbOpened(tmdbType, tmdbId, topicId, fileId)
+                    }
+                    title?.let { TmdbWatchHistoryStore(this).record(it) }
+                    refreshPlaybackMarks()
                     tolokaViewModel.reportPlaybackStatus("URL передано зовнішньому плеєру. Результат відтворення перевіряйте в ньому")
                     return
                 } catch (_: ActivityNotFoundException) {
@@ -203,8 +222,6 @@ class TmdbDetailsActivity : ComponentActivity() {
             Toast.makeText(this, "Захищений TorrServer відкриваємо у вбудованому плеєрі", Toast.LENGTH_LONG).show()
         }
         try {
-            val title = (detailsViewModel.state.value as?
-                ua.any2b.tvplayer.ui.TmdbDetailsState.Ready)?.details?.title
             startActivity(Intent(this, PlayerActivity::class.java).apply {
                 putExtra(PlayerActivity.EXTRA_STREAM_URL, url)
                 putExtra(PlayerActivity.EXTRA_SOURCE_TYPE, PlayerActivity.SOURCE_TOLOKA)
