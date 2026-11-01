@@ -80,6 +80,7 @@ fun TmdbDetailsScreen(
     onSearchTorrent: (String) -> Unit,
     onSelectTorrent: (String) -> Unit,
     onPromoteTorrent: (String) -> Unit,
+    onDiscardTorrent: (String) -> Unit,
     onRejectTorrent: (String) -> Unit,
     onRetryMetadata: () -> Unit,
     onPlayFile: (Int) -> Unit,
@@ -120,6 +121,7 @@ fun TmdbDetailsScreen(
                 onSearchTorrent = onSearchTorrent,
                 onSelectTorrent = onSelectTorrent,
                 onPromoteTorrent = onPromoteTorrent,
+                onDiscardTorrent = onDiscardTorrent,
                 onRejectTorrent = onRejectTorrent,
                 onRetryMetadata = onRetryMetadata,
                 onPlayFile = onPlayFile,
@@ -148,6 +150,7 @@ private fun TmdbDetailsContent(
     onSearchTorrent: (String) -> Unit,
     onSelectTorrent: (String) -> Unit,
     onPromoteTorrent: (String) -> Unit,
+    onDiscardTorrent: (String) -> Unit,
     onRejectTorrent: (String) -> Unit,
     onRetryMetadata: () -> Unit,
     onPlayFile: (Int) -> Unit,
@@ -298,36 +301,14 @@ private fun TmdbDetailsContent(
 
                 if (torrentOpened) {
                     Spacer(Modifier.width(16.dp))
-                    Box(Modifier.weight(1f).background(surfaceColors.card, RoundedCornerShape(8.dp))
-                        .padding(horizontal = 12.dp, vertical = 8.dp)) {
-                        var queryFocused by remember { mutableStateOf(false) }
-                        Text(torrentQuery, color = if (queryFocused) AppColors.NeonCyanLight else surfaceColors.text,
-                            fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.fillMaxWidth()
-                                .onFocusChanged { queryFocused = it.isFocused }
-                                .clickable { showQueryDialog = true }
-                                .semantics { contentDescription = "Вибрати пошуковий запит Toloka: $torrentQuery" })
-                    }
-                    Spacer(Modifier.width(12.dp))
-                    OutlinedButton(
-                        onClick = { onSearchTorrent(torrentQuery) },
-                        enabled = torrentQuery.isNotBlank(),
-                        scale = OutlinedButtonDefaults.scale(scale = 1f, focusedScale = 1f),
-                        shape = OutlinedButtonDefaults.shape(RoundedCornerShape(10.dp)),
-                        border = OutlinedButtonDefaults.border(
-                            border = Border(BorderStroke(1.dp, AppColors.TextMuted)),
-                            focusedBorder = Border(BorderStroke(2.dp, AppColors.NeonCyan))
-                        ),
-                        colors = OutlinedButtonDefaults.colors(
-                            containerColor = surfaceColors.card,
-                            contentColor = surfaceColors.text,
-                            focusedContainerColor = AppColors.NeonCyanLight,
-                            focusedContentColor = AppColors.ButtonDarkText
-                        ),
-                        modifier = Modifier.semantics { contentDescription = "Шукати" }
-                    ) {
-                        FontAwesomeIcon(FaIcons.SEARCH, size = 18.sp)
-                    }
+                    TorrentTitleHeading(
+                        ukrainianTitle = title.matchedSeasonTitle ?: title.ukrainianTitle ?: title.title,
+                        englishTitle = title.englishTitle
+                            ?: title.originalTitle?.takeIf { it != title.ukrainianTitle }
+                            ?: title.title.takeIf { it != title.ukrainianTitle },
+                        modifier = Modifier.weight(1f),
+                        surfaceColors = surfaceColors,
+                    )
                 }
             }
             if (torrentOpened) {
@@ -343,10 +324,13 @@ private fun TmdbDetailsContent(
                         onSearch = { onSearchTorrent(torrentQuery) },
                         onSelect = onSelectTorrent,
                         onPromote = onPromoteTorrent,
+                        onDiscard = onDiscardTorrent,
                         onRejectForever = onRejectTorrent,
                         onRetryMetadata = onRetryMetadata,
                         onPlayFile = onPlayFile,
+                        onEditQuery = { showQueryDialog = true },
                         manualSearch = false,
+                        seasonEntries = details.seasonEntries,
                         surfaceColors = surfaceColors,
                     )
                 }

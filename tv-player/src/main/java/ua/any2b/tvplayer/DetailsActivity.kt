@@ -116,6 +116,7 @@ class DetailsActivity : ComponentActivity() {
                     onAutoTolokaSearch = viewModel::searchTolokaAutomatically,
                     onSelectTolokaHit = viewModel::selectTolokaHit,
                     onPromoteTolokaHit = viewModel::promoteTolokaHit,
+                    onDiscardTolokaHit = viewModel::discardWeakTolokaHit,
                     onRejectTolokaHit = viewModel::rejectTolokaHit,
                     onRetryTolokaMetadata = viewModel::retryTolokaMetadata,
                     onPlayTolokaFile = { fileId -> openTolokaFile(fileId) },

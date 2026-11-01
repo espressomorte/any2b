@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -24,8 +25,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -196,37 +197,48 @@ private fun TmdbSearchActionIcon(icon: String, label: String, enabled: Boolean,
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-internal fun TmdbPosterCard(title: TmdbTitle, query: String = "", onClick: () -> Unit) {
+internal fun TmdbPosterCard(title: TmdbTitle, query: String = "",
+    onClick: () -> Unit, onFocused: (() -> Unit)? = null) {
     var focused by remember { mutableStateOf(false) }
-    Column(Modifier.width(160.dp).padding(4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(Modifier.width(160.dp).padding(4.dp)) {
         Card(
             onClick = onClick,
-            scale = CardDefaults.scale(scale = 1f, focusedScale = 1.05f),
+            scale = CardDefaults.scale(scale = 1f, focusedScale = 1f),
             shape = CardDefaults.shape(RoundedCornerShape(12.dp)),
             modifier = Modifier.fillMaxWidth().aspectRatio(2f / 3f)
-                .onFocusChanged { focused = it.isFocused },
-        ) {
-            Box(Modifier.fillMaxSize().background(AppColors.SurfaceCard)) {
-                AsyncImage(model = title.posterUrl, contentDescription = title.title,
-                    contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-                title.rating?.let { score ->
-                    ReleaseBadge((score * 10).toInt(), Modifier.align(Alignment.TopEnd).padding(8.dp))
-                }
-                if (title.type == TmdbMediaType.TV) {
-                    Box(Modifier.align(Alignment.TopStart).padding(8.dp)
-                        .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(6.dp))
-                        .padding(horizontal = 8.dp, vertical = 4.dp)) {
-                        Text("TV", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                .onFocusChanged {
+                    focused = it.isFocused
+                    if (it.isFocused) {
+                        onFocused?.invoke()
                     }
-                }
-            }
+                },
+        ) { TmdbPosterArt(title, Modifier.fillMaxSize()) }
+        Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 5.dp)) {
+            Text((if (query.isBlank()) listOf(title.title) else title.searchNames(query)).joinToString(" · "),
+                color = if (focused) AppColors.NeonCyan else AppColors.TextLight,
+                maxLines = 2, minLines = 2, overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.labelMedium, modifier = Modifier.heightIn(min = 36.dp))
+            Text(title.year?.toString().orEmpty(),
+                color = if (focused) AppColors.NeonCyan else AppColors.TextSecondary,
+                fontSize = 11.sp)
         }
-        Text((if (query.isBlank()) listOf(title.title) else title.searchNames(query)).joinToString(" · "),
-            color = if (focused) AppColors.NeonCyan else AppColors.TextLight,
-            maxLines = 3, overflow = TextOverflow.Ellipsis,
-            style = MaterialTheme.typography.labelMedium)
-        title.year?.let { year ->
-            Text("$year", color = AppColors.TextSecondary, fontSize = 11.sp)
+    }
+}
+
+@Composable
+private fun TmdbPosterArt(title: TmdbTitle, modifier: Modifier = Modifier) {
+    Box(modifier.background(AppColors.SurfaceCard)) {
+        AsyncImage(model = title.posterUrl, contentDescription = title.title,
+            contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+        title.rating?.let { score ->
+            ReleaseBadge((score * 10).toInt(), Modifier.align(Alignment.TopEnd).padding(8.dp))
+        }
+        if (title.type == TmdbMediaType.TV) {
+            Box(Modifier.align(Alignment.TopStart).padding(8.dp)
+                .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(6.dp))
+                .padding(horizontal = 8.dp, vertical = 4.dp)) {
+                Text("TV", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
         }
     }
 }

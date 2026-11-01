@@ -13,6 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.tv.material3.*
@@ -34,6 +35,7 @@ fun CategoryScreen(
     onFavoriteChanged: () -> Unit = {},
 ) {
     val gridState = rememberLazyGridState()
+    LaunchedEffect(Unit) { gridState.scrollToItem(0) }
     LaunchedEffect(state.sort, state.yearAscending, state.yearRange) {
         gridState.scrollToItem(0)
     }
@@ -48,7 +50,7 @@ fun CategoryScreen(
 
     Column(
         modifier = Modifier.fillMaxSize().background(AppColors.BackgroundDark).padding(32.dp),
-        verticalArrangement = Arrangement.spacedBy(24.dp)
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
             var isBackFocused by remember { mutableStateOf(false) }
@@ -72,12 +74,10 @@ fun CategoryScreen(
         }
         if (state.sortable) {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                listOf(TmdbListSort.POPULARITY to "Популярність",
-                    TmdbListSort.RATING to "Рейтинг").forEach { (sort, label) ->
-                    Button(onClick = { onSort(sort) }, enabled = state.sort != sort) {
-                        Text(label)
-                    }
-                }
+                ListSortButton("Популярність", state.sort == TmdbListSort.POPULARITY,
+                    { onSort(TmdbListSort.POPULARITY) })
+                ListSortButton("Рейтинг", state.sort == TmdbListSort.RATING,
+                    { onSort(TmdbListSort.RATING) })
                 YearSortButton(ascending = state.yearAscending,
                     selected = state.sort == TmdbListSort.YEAR,
                     yearRange = state.yearRange,
@@ -114,8 +114,8 @@ fun CategoryScreen(
             LazyVerticalGrid(
                 columns = GridCells.Fixed(5),
                 state = gridState,
-                modifier = Modifier.weight(1f).graphicsLayer { clip = false },
-                contentPadding = PaddingValues(top = 12.dp, bottom = 32.dp),
+                modifier = Modifier.weight(1f).clipToBounds(),
+                contentPadding = PaddingValues(bottom = 32.dp),
                 horizontalArrangement = Arrangement.spacedBy(20.dp),
                 verticalArrangement = Arrangement.spacedBy(28.dp),
             ) {

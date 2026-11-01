@@ -3,9 +3,11 @@ package ua.any2b.tvplayer.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
@@ -23,6 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.foundation.focusable
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
@@ -32,10 +35,12 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -53,6 +58,7 @@ import ua.any2b.core.anitube.AnitubeEpisode
 import ua.any2b.core.anitube.AnitubeSearchResult
 import ua.any2b.core.anitube.AnitubeVoice
 import ua.any2b.core.toloka.TolokaHit
+import ua.any2b.core.toloka.TolokaReleaseMetadataParser
 import ua.any2b.core.toloka.shortenedSearchNames
 import ua.any2b.core.tmdb.TmdbTitle
 import ua.any2b.core.fanart.FanartArtwork
@@ -75,6 +81,7 @@ fun DetailsScreen(
     onAutoTolokaSearch: (String, String?) -> Unit,
     onSelectTolokaHit: (String) -> Unit,
     onPromoteTolokaHit: (String) -> Unit = {},
+    onDiscardTolokaHit: (String) -> Unit = {},
     onRejectTolokaHit: (String) -> Unit = {},
     onRetryTolokaMetadata: () -> Unit,
     onPlayTolokaFile: (Int) -> Unit,
@@ -149,6 +156,14 @@ fun DetailsScreen(
                 val seriesTitle = (state.tmdbLink as? TmdbLinkState.Confirmed)?.title
                     ?.takeIf { it.type == ua.any2b.core.tmdb.TmdbMediaType.TV }
                     ?.let { it.ukrainianTitle ?: it.title }
+                val torrentTmdbTitle = (state.tmdbLink as? TmdbLinkState.Confirmed)?.title
+                val torrentHeadingUkrainian = torrentTmdbTitle?.matchedSeasonTitle
+                    ?: torrentTmdbTitle?.ukrainianTitle ?: torrentTmdbTitle?.title
+                    ?: state.details.title.native ?: state.details.title.romaji
+                    ?: state.details.title.english
+                val torrentHeadingEnglish = torrentTmdbTitle?.englishTitle
+                    ?: torrentTmdbTitle?.originalTitle?.takeIf { torrentTmdbTitle.originalLanguage == "en" }
+                    ?: state.details.title.english ?: torrentTmdbTitle?.originalTitle
                 val seasonIds = state.seriesSeasons
                     .mapNotNull { it.animeId }.filter { it != state.details.id }.toSet()
                 val relatedOutsideSeries = state.details.related.filterNot { it.id in seasonIds }
@@ -516,19 +531,11 @@ fun DetailsScreen(
                                             surfaceColors = surfaceColors) { tab -> videoTab = tab }
                                     }
                                     if (displayVideoTab == "torrent") {
-                                        var queryFocused by remember { mutableStateOf(false) }
-                                        Text(
-                                            text = tolokaQuery,
-                                            color = if (queryFocused) AppColors.NeonCyanLight else AppColors.TextLight,
-                                            fontSize = 13.sp,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .padding(start = 16.dp)
-                                                .onFocusChanged { queryFocused = it.isFocused }
-                                                .clickable { showTolokaQueryDialog = true }
-                                                .semantics { contentDescription = "Змінити пошуковий запит Toloka: $tolokaQuery" },
+                                        TorrentTitleHeading(
+                                            ukrainianTitle = torrentHeadingUkrainian,
+                                            englishTitle = torrentHeadingEnglish,
+                                            modifier = Modifier.weight(1f).padding(start = 16.dp),
+                                            surfaceColors = surfaceColors,
                                         )
                                     }
                                 }
@@ -784,9 +791,12 @@ fun DetailsScreen(
                                         onSearch = { onTolokaSearch(tolokaQuery) },
                                         onSelect = onSelectTolokaHit,
                                         onPromote = onPromoteTolokaHit,
+                                        onDiscard = onDiscardTolokaHit,
                                         onRejectForever = onRejectTolokaHit,
                                         onRetryMetadata = onRetryTolokaMetadata,
                                         onPlayFile = onPlayTolokaFile,
+                                        onEditQuery = { showTolokaQueryDialog = true },
+                                        seasonEntries = state.tmdbSeasonEntries,
                                         surfaceColors = surfaceColors,
                                     )
                                 }
@@ -1090,16 +1100,56 @@ internal fun TolokaSearchPanel(
     onSearch: () -> Unit,
     onSelect: (String) -> Unit,
     onPromote: (String) -> Unit = {},
+    onDiscard: (String) -> Unit = {},
     onRejectForever: (String) -> Unit = {},
     onRetryMetadata: () -> Unit,
     onPlayFile: (Int) -> Unit,
+    onEditQuery: (() -> Unit)? = null,
     manualSearch: Boolean = false,
+    seasonEntries: List<ua.any2b.core.tmdb.TmdbSeason> = emptyList(),
     surfaceColors: DetailsSurfaceColors = detailsSurfaceColors(null, false),
 ) {
     Column(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        val displayedQuery = (searchState as? TolokaSearchState.Results)?.query ?: query
+        val resultCount = (searchState as? TolokaSearchState.Results)
+            ?.takeIf { it.query == query.trim() }
+            ?.let { "Підхожих роздач: ${it.hits.size} із ${it.totalFound}" }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            resultCount?.let { count ->
+                Text(count, modifier = Modifier.widthIn(max = 240.dp),
+                    color = surfaceColors.mutedText, fontSize = 12.sp, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis)
+            }
+            Text(
+                text = "Запит: $displayedQuery",
+                modifier = Modifier.weight(1f).then(if (onEditQuery != null) Modifier
+                    .clickable(onClick = onEditQuery)
+                    .semantics { contentDescription = "Змінити пошуковий запит Toloka: $displayedQuery" }
+                    else Modifier),
+                color = surfaceColors.mutedText, fontSize = 12.sp, maxLines = 1,
+                textAlign = TextAlign.End,
+                overflow = TextOverflow.Ellipsis,
+            )
+            val searchEnabled = query.isNotBlank() && searchState !is TolokaSearchState.Loading
+            var searchFocused by remember { mutableStateOf(false) }
+            Box(
+                Modifier.size(24.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(if (searchFocused) AppColors.NeonCyan.copy(alpha = 0.22f)
+                        else Color.Transparent)
+                    .onFocusChanged { searchFocused = it.isFocused }
+                    .clickable(enabled = searchEnabled, role = Role.Button, onClick = onSearch)
+                    .semantics { contentDescription = "Шукати за запитом: $displayedQuery" },
+                contentAlignment = Alignment.Center,
+            ) {
+                FontAwesomeIcon(FaIcons.SEARCH, size = 14.sp,
+                    color = if (searchFocused) AppColors.NeonCyan else surfaceColors.mutedText)
+            }
+        }
         when (searchState) {
             TolokaSearchState.Idle -> Text(if (manualSearch) "Введіть назву й натисніть «Шукати»." else "Пошук роздач почнеться автоматично.",
                 color = surfaceColors.mutedText)
@@ -1123,9 +1173,6 @@ internal fun TolokaSearchPanel(
                         else if (manualSearch) "Відеороздач за цим запитом не знайдено."
                         else "Підхожих роздач немає. Знайдено: ${searchState.totalFound}; відсіяно за назвою, роком або сезоном.",
                         color = surfaceColors.text)
-                    if (searchState.hits.isNotEmpty()) Text(
-                        "Підхожих роздач: ${searchState.hits.size} із ${searchState.totalFound}",
-                        color = surfaceColors.mutedText, fontSize = 12.sp)
                     val selectedWeak = searchState.selectedId?.let { id ->
                         searchState.weakHits.any { it.id == id }
                     } == true
@@ -1140,7 +1187,9 @@ internal fun TolokaSearchPanel(
                             enabled = transferState !is TolokaTransferState.Loading,
                             onClick = { onSelect(hit.id) },
                             onPromote = if (canPromote) {{ onPromote(hit.id) }} else null,
+                            onDiscard = if (canPromote) {{ onDiscard(hit.id) }} else null,
                             onRejectForever = { pendingPermanentReject = hit.id },
+                            seasonEntries = seasonEntries,
                             surfaceColors = surfaceColors,
                         )
                         if (hit.id == searchState.selectedId) {
@@ -1169,7 +1218,9 @@ internal fun TolokaSearchPanel(
                                 enabled = transferState !is TolokaTransferState.Loading,
                                 onClick = { onSelect(hit.id) },
                                 onPromote = { onPromote(hit.id) },
+                                onDiscard = null,
                                 onRejectForever = { pendingPermanentReject = hit.id },
+                                seasonEntries = seasonEntries,
                                 surfaceColors = surfaceColors,
                             )
                         }
@@ -1205,6 +1256,25 @@ internal fun TolokaSearchPanel(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+internal fun TorrentTitleHeading(
+    ukrainianTitle: String?,
+    englishTitle: String?,
+    modifier: Modifier = Modifier,
+    surfaceColors: DetailsSurfaceColors,
+) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        ukrainianTitle?.takeIf(String::isNotBlank)?.let { title ->
+            Text(title, color = surfaceColors.text, fontWeight = FontWeight.SemiBold,
+                fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        englishTitle?.takeIf { it.isNotBlank() && it != ukrainianTitle }?.let { title ->
+            Text(title, color = surfaceColors.mutedText, fontSize = 12.sp,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -1438,7 +1508,9 @@ private fun formatFileSize(bytes: Long): String = when {
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun TolokaResultRow(hit: TolokaHit, selected: Boolean, opened: Boolean, enabled: Boolean,
-    onClick: () -> Unit, onPromote: (() -> Unit)?, onRejectForever: () -> Unit,
+    onClick: () -> Unit, onPromote: (() -> Unit)?, onDiscard: (() -> Unit)?,
+    onRejectForever: () -> Unit,
+    seasonEntries: List<ua.any2b.core.tmdb.TmdbSeason>,
     surfaceColors: DetailsSurfaceColors) {
     var focused by remember { mutableStateOf(false) }
     val background = when {
@@ -1447,6 +1519,58 @@ private fun TolokaResultRow(hit: TolokaHit, selected: Boolean, opened: Boolean, 
         else -> surfaceColors.card
     }
     val foreground = if (focused || selected) AppColors.ButtonDarkText else surfaceColors.text
+    val release = remember(hit.title) { TolokaReleaseMetadataParser.parse(hit.title) }
+    val resolution = release.qualityTags.firstOrNull { it.matches(Regex("\\d{3,4}p")) }
+    val source = release.qualityTags.firstOrNull { it in setOf("WEB-DL", "WEBRip", "WEB", "BluRay", "HDTV") }
+    val combinedQuality = listOfNotNull(source, resolution).joinToString(" · ")
+    val otherQuality = release.qualityTags.filterNot { it == resolution || it == source }
+    val absoluteRanges = remember(release, seasonEntries) {
+        TolokaReleaseMetadataParser.mapAbsoluteEpisodes(release, seasonEntries)
+    }
+    val parsedSeasonTags = release.qualityTags.filter { it.startsWith("S") }
+        .map { tag ->
+            when {
+                tag.matches(Regex("S\\d{2}–\\d{2}")) -> {
+                    val range = Regex("S(\\d{2})–(\\d{2})").matchEntire(tag)!!
+                    "Сезони ${range.groupValues[1].toInt()}–${range.groupValues[2].toInt()}"
+                }
+                tag.matches(Regex("S\\d{2}")) -> "Сезон ${tag.drop(1).toIntOrNull() ?: tag.drop(1)}"
+                else -> tag
+            }
+        }
+    val seasonTags = absoluteRanges?.map { "Сезон ${it.seasonNumber}" }?.distinct() ?: parsedSeasonTags
+    val parsedEpisodeTags = release.qualityTags.filter { it.startsWith("E") }.map { tag ->
+        when {
+            tag.matches(Regex("E\\d{2}–\\d{2}")) -> "Серії ${tag.drop(1)}"
+            tag.matches(Regex("E\\d{2}")) -> "Серія ${tag.drop(1)}"
+            else -> tag
+        }
+    }
+    val episodeTags = when {
+        absoluteRanges != null && absoluteRanges.size == 1 -> absoluteRanges.map { range ->
+            "Серії ${range.episodeStart}–${range.episodeEnd}" +
+                (release.episodeTotal?.let { " (із $it)" } ?: "")
+        }
+        absoluteRanges != null -> absoluteRanges.map { range ->
+            "Серії ${range.episodeStart}–${range.episodeEnd}"
+        } + listOfNotNull(release.episodeEnd?.let { end ->
+            release.episodeTotal?.let { "Пакет 1–$end із $it" }
+        })
+        release.isAbsoluteEpisodeRange -> listOfNotNull(release.episodeEnd?.let { end ->
+            "Абсолютні 1–$end" + (release.episodeTotal?.let { " / $it" } ?: "")
+        })
+        else -> parsedEpisodeTags
+    }
+    val displayQuality = listOfNotNull(combinedQuality.takeIf(String::isNotBlank)) +
+        otherQuality.filterNot { it.startsWith("S") || it.startsWith("E") }
+    val releaseChips = buildList {
+        seasonTags.forEach { add(ReleaseTagChip(it, ReleaseTagKind.SEASON)) }
+        episodeTags.forEach { add(ReleaseTagChip(it, ReleaseTagKind.SEASON)) }
+        release.audioTags.forEach { add(ReleaseTagChip(it, ReleaseTagKind.AUDIO)) }
+        release.languageTags.forEach { add(ReleaseTagChip(it, ReleaseTagKind.AUDIO)) }
+        release.subtitleTags.forEach { add(ReleaseTagChip(it, ReleaseTagKind.SUBTITLE)) }
+        displayQuality.forEach { add(ReleaseTagChip(it, ReleaseTagKind.QUALITY)) }
+    }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically) {
     Card(
@@ -1458,37 +1582,107 @@ private fun TolokaResultRow(hit: TolokaHit, selected: Boolean, opened: Boolean, 
         modifier = Modifier.weight(1f).onFocusChanged { focused = it.isFocused }
             .neonGlow(focused = focused, borderRadius = 10.dp),
     ) {
-        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (opened) FontAwesomeIcon(FaIcons.EYE, color = foreground, size = 14.sp)
-                Text(hit.title, color = foreground, fontWeight = FontWeight.Medium)
-            }
-            val details = buildList {
-                if (hit.sizeText.isNotBlank()) add(hit.sizeText)
-                hit.seeders?.let { add("Сіди: $it") }
-                hit.leechers?.let { add("Піри: $it") }
-            }.joinToString(" · ")
-            if (details.isNotBlank() || hit.author != null) {
+        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            Text(
+                text = if (focused) hit.title else release.cleanTitle,
+                modifier = Modifier.fillMaxWidth().then(if (focused) Modifier.basicMarquee(
+                    iterations = Int.MAX_VALUE, initialDelayMillis = 700, velocity = 42.dp)
+                    else Modifier),
+                color = foreground, fontWeight = FontWeight.Medium, fontSize = 13.sp,
+                maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false,
+            )
+            if (releaseChips.isNotEmpty()) ReleaseTagRow(releaseChips, surfaceColors)
+            if (hit.sizeText.isNotBlank() || hit.seeders != null || hit.leechers != null || opened) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    if (details.isNotBlank()) {
-                        Text(details, modifier = Modifier.weight(1f), color = foreground,
-                            fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    } else Spacer(Modifier.weight(1f))
-                    hit.author?.let { author ->
-                        Text(author, modifier = Modifier.widthIn(max = 170.dp), color = foreground,
-                            fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (hit.sizeText.isNotBlank()) Text(hit.sizeText, modifier = Modifier.weight(1f),
+                        color = foreground, fontSize = 12.sp, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis)
+                    if (hit.sizeText.isBlank()) Spacer(Modifier.weight(1f))
+                    hit.author?.takeIf(String::isNotBlank)?.let { author ->
+                        Text(author, modifier = Modifier.widthIn(max = 180.dp),
+                            color = foreground, fontSize = 12.sp, maxLines = 1,
+                            overflow = TextOverflow.Ellipsis)
                     }
+                    hit.seeders?.let { Text("↑ $it", color = Color(0xFF218A58), fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold) }
+                    hit.leechers?.let { Text("↓ $it", color = surfaceColors.mutedText, fontSize = 12.sp) }
+                    if (opened) FontAwesomeIcon(FaIcons.EYE, color = foreground, size = 14.sp)
                 }
             }
         }
     }
     if (onPromote != null) {
-        OutlinedButton(onClick = { if (enabled) onPromote() },
-            modifier = Modifier.size(42.dp), contentPadding = PaddingValues(0.dp),
-            enabled = enabled) { Text("+", fontSize = 22.sp, fontWeight = FontWeight.Bold) }
+        Column(Modifier.width(42.dp), horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            var promoteFocused by remember { mutableStateOf(false) }
+            Box(Modifier.size(24.dp)
+                .background(if (promoteFocused) AppColors.NeonCyanLight else Color.Transparent,
+                    RoundedCornerShape(5.dp))
+                .clickable(enabled = enabled) { onPromote() }
+                .focusable(enabled = enabled)
+                .onFocusChanged { promoteFocused = it.isFocused },
+                contentAlignment = Alignment.Center) {
+                Text("+", color = if (promoteFocused) AppColors.ButtonDarkText
+                    else surfaceColors.mutedText, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            }
+            if (onDiscard != null) {
+                var discardFocused by remember { mutableStateOf(false) }
+                Box(Modifier.size(24.dp)
+                    .background(if (discardFocused) AppColors.NeonCyanLight else Color.Transparent,
+                        RoundedCornerShape(5.dp))
+                    .clickable(enabled = enabled) { onDiscard() }
+                    .focusable(enabled = enabled)
+                    .onFocusChanged { discardFocused = it.isFocused },
+                    contentAlignment = Alignment.Center) {
+                    FontAwesomeIcon(FaIcons.TRASH_O,
+                        color = if (discardFocused) AppColors.ButtonDarkText else surfaceColors.mutedText,
+                        size = 12.sp)
+                }
+            }
+        }
     }
+    }
+}
+
+private enum class ReleaseTagKind { QUALITY, AUDIO, SUBTITLE, SEASON }
+private data class ReleaseTagChip(val label: String, val kind: ReleaseTagKind)
+
+@Composable
+private fun ReleaseTagRow(chips: List<ReleaseTagChip>, surfaceColors: DetailsSurfaceColors) {
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        chips.forEach { chip ->
+            val tag = chip.label
+            val tint = when (chip.kind) {
+                ReleaseTagKind.QUALITY -> Color(0xFF8995A6)
+                ReleaseTagKind.AUDIO, ReleaseTagKind.SUBTITLE -> AppColors.NeonCyan
+                ReleaseTagKind.SEASON -> AppColors.PrimaryPurple
+            }
+            val background = lerp(surfaceColors.card, tint, when (chip.kind) {
+                ReleaseTagKind.QUALITY -> 0.16f
+                ReleaseTagKind.AUDIO -> 0.20f
+                ReleaseTagKind.SUBTITLE -> 0.14f
+                ReleaseTagKind.SEASON -> 0.20f
+            })
+            val foreground = surfaceColors.text
+            Row(Modifier.clip(RoundedCornerShape(6.dp)).background(background)
+                .padding(horizontal = 7.dp, vertical = 3.dp),
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                when (chip.kind) {
+                    ReleaseTagKind.AUDIO -> FontAwesomeIcon(FaIcons.MICROPHONE,
+                        color = foreground, size = 11.sp)
+                    ReleaseTagKind.SUBTITLE -> FontAwesomeIcon(FaIcons.COMMENTING_O,
+                        color = foreground, size = 11.sp)
+                    else -> Unit
+                }
+                Text(tag, color = foreground, fontSize = 10.sp,
+                    fontWeight = FontWeight.Medium, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis)
+            }
+        }
     }
 }
 

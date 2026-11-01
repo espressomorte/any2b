@@ -13,7 +13,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -26,6 +32,7 @@ import androidx.tv.material3.Text
 import ua.any2b.core.tmdb.TmdbMediaType
 import ua.any2b.core.tmdb.TmdbTitle
 import ua.any2b.tvplayer.R
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -38,6 +45,18 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
     onSettings: () -> Unit = {},
     onRetryMal: () -> Unit = {},
 ) {
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    var alignedSection by remember { mutableStateOf<String?>(null) }
+    val alignSection: (String) -> Unit = { key ->
+        if (alignedSection != key) {
+            alignedSection = key
+            scope.launch {
+                listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }
+                    ?.let { listState.animateScrollToItem(it.index) }
+            }
+        }
+    }
     Column(Modifier.fillMaxSize().background(AppColors.BackgroundDark)
         .padding(horizontal = 32.dp, vertical = 24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -54,56 +73,66 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
                 HomeActionButton(FaIcons.COG, "Налаштування", onClick = onSettings)
             } else OutlinedButton(onClick = onBack) { Text("Назад") }
         }
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(24.dp),
+        LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(24.dp),
             contentPadding = PaddingValues(bottom = 32.dp)) {
             if (animationOnly) {
                 state.mainSections.filter { it.enabled }.forEach { section ->
                     when (section.id) {
                         "history" -> if (state.history.isNotEmpty()) item(key = "history") {
                             TmdbLibraryRow(section.title, state.history, onOpen,
-                                onMore = { onMore("history") })
+                                onMore = { onMore("history") },
+                                onSectionFocus = { alignSection("history") })
                         }
                         "favorites" -> if (state.favorites.isNotEmpty()) item(key = "favorites") {
                             TmdbLibraryRow(section.title, state.favorites, onOpen,
-                                onMore = { onMore("favorites") })
+                                onMore = { onMore("favorites") },
+                                onSectionFocus = { alignSection("favorites") })
                         }
                         "recommendations" -> if (state.recommendations.isNotEmpty())
                             item(key = "recommendations") {
                                 TmdbLibraryRow(section.title, state.recommendations, onOpen,
-                                    onMore = { onMore("recommendations") })
+                                    onMore = { onMore("recommendations") },
+                                    onSectionFocus = { alignSection("recommendations") })
                             }
                         "animation_tv" -> item(key = "animation_tv") {
                             TmdbPopularRow(section.title, state.tv, onOpen,
                                 onRetry = { onRetry(TmdbMediaType.TV) },
-                                onMore = { onMore("animation_tv") })
+                                onMore = { onMore("animation_tv") },
+                                onSectionFocus = { alignSection("animation_tv") })
                         }
                         "animation_movie" -> item(key = "animation_movie") {
                             TmdbPopularRow(section.title, state.movies, onOpen,
                                 onRetry = { onRetry(TmdbMediaType.MOVIE) },
-                                onMore = { onMore("animation_movie") })
+                                onMore = { onMore("animation_movie") },
+                                onSectionFocus = { alignSection("animation_movie") })
                         }
                         "mal_top" -> item(key = "mal_top") {
                             MalTopRow(section.title, state.malTop, onOpen,
-                                onMore = { onMore("mal_top") }, onRetry = onRetryMal)
+                                onMore = { onMore("mal_top") }, onRetry = onRetryMal,
+                                onSectionFocus = { alignSection("mal_top") })
                         }
                     }
                 }
             } else {
                 if (state.history.isNotEmpty()) item(key = "history") {
                     TmdbLibraryRow("Історія переглядів", state.history, onOpen,
-                        onMore = { onMore("history") })
+                        onMore = { onMore("history") },
+                        onSectionFocus = { alignSection("history") })
                 }
                 item(key = "tv") {
                     TmdbPopularRow("Популярні серіали", state.tv, onOpen,
-                        onRetry = { onRetry(TmdbMediaType.TV) }, onMore = { onMore("tv") })
+                        onRetry = { onRetry(TmdbMediaType.TV) }, onMore = { onMore("tv") },
+                        onSectionFocus = { alignSection("tv") })
                 }
                 item(key = "movies") {
                     TmdbPopularRow("Популярні фільми", state.movies, onOpen,
-                        onRetry = { onRetry(TmdbMediaType.MOVIE) }, onMore = { onMore("movie") })
+                        onRetry = { onRetry(TmdbMediaType.MOVIE) }, onMore = { onMore("movie") },
+                        onSectionFocus = { alignSection("movies") })
                 }
                 if (state.favorites.isNotEmpty()) item(key = "favorites") {
                     TmdbLibraryRow("Обрані тайтли", state.favorites, onOpen,
-                        onMore = { onMore("favorites") })
+                        onMore = { onMore("favorites") },
+                        onSectionFocus = { alignSection("favorites") })
                 }
             }
         }
@@ -113,7 +142,7 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun MalTopRow(title: String, state: MalTopState, onOpen: (TmdbTitle) -> Unit,
-    onMore: () -> Unit, onRetry: () -> Unit) {
+    onMore: () -> Unit, onRetry: () -> Unit, onSectionFocus: () -> Unit = {}) {
     when (state) {
         MalTopState.Loading -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(title, style = MaterialTheme.typography.titleLarge, color = Color.White)
@@ -126,14 +155,16 @@ private fun MalTopRow(title: String, state: MalTopState, onOpen: (TmdbTitle) -> 
         }
         is MalTopState.Results -> if (state.titles.isNotEmpty())
             TmdbLibraryRow(title, state.titles, onOpen, onMore,
-                showMore = state.hasMore || state.titles.size > 13)
+                showMore = state.hasMore || state.titles.size > 13,
+                onSectionFocus = onSectionFocus)
     }
 }
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun TmdbPopularRow(title: String, state: TmdbPopularState,
-    onOpen: (TmdbTitle) -> Unit, onRetry: () -> Unit, onMore: () -> Unit) {
+    onOpen: (TmdbTitle) -> Unit, onRetry: () -> Unit, onMore: () -> Unit,
+    onSectionFocus: () -> Unit = {}) {
     when (state) {
         TmdbPopularState.Loading -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(title, style = MaterialTheme.typography.titleLarge, color = Color.White)
@@ -145,21 +176,22 @@ private fun TmdbPopularRow(title: String, state: TmdbPopularState,
             Button(onClick = onRetry) { Text("Повторити") }
         }
         is TmdbPopularState.Results -> if (state.titles.isNotEmpty())
-            TmdbLibraryRow(title, state.titles, onOpen, onMore)
+            TmdbLibraryRow(title, state.titles, onOpen, onMore,
+                onSectionFocus = onSectionFocus)
     }
 }
 
 @Composable
 private fun TmdbLibraryRow(title: String, titles: List<TmdbTitle>,
     onOpen: (TmdbTitle) -> Unit, onMore: () -> Unit,
-    showMore: Boolean = titles.size > 13) {
+    showMore: Boolean = titles.size > 13, onSectionFocus: () -> Unit = {}) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(title, style = MaterialTheme.typography.titleLarge, color = Color.White,
             modifier = Modifier.padding(horizontal = 4.dp))
         LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp),
             contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)) {
             items(titles.take(13), key = { "${it.type}:${it.id}" }) { item ->
-                TmdbPosterCard(item, onClick = { onOpen(item) })
+                TmdbPosterCard(item, onClick = { onOpen(item) }, onFocused = onSectionFocus)
             }
             if (showMore) item(key = "more") { MoreCard(onClick = onMore) }
         }

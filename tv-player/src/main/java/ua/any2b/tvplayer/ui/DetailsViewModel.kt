@@ -621,18 +621,13 @@ class DetailsViewModel(
                 updateReady { ready ->
                     val hits = filterHits(ready, results.results)
                     val hitIds = hits.mapTo(HashSet()) { it.id }
-                    val firstHitId = hits.firstOrNull()?.id
                     val updatedReady = ready.copy(tolokaSearch = TolokaSearchState.Results(searchedQuery,
-                        hits, results.results.size, selectedId = firstHitId,
+                        hits, results.results.size,
                         rejectedHits = results.results.filterNot { it.id in hitIds }),
                         tolokaOpenedTopics = hits.mapNotNull { hit ->
                             hit.id.takeIf { tolokaPlaybackStore.hasOpenedFile(activeAnimeId, it) }
                         }.toSet(),
                         tolokaOpenedFiles = emptySet())
-                    if (firstHitId != null) {
-                        // Queue selection / loading of the first hit
-                        viewModelScope.launch { selectTolokaHit(firstHitId) }
-                    }
                     updatedReady
                 }
             } catch (error: CancellationException) {
@@ -664,6 +659,26 @@ class DetailsViewModel(
             weakHits = results.weakHits.filterNot { it.id == topicId },
             rejectedHits = results.rejectedHits.filterNot { it.id == topicId },
         )) }
+    }
+
+    /** Move a weak result to the reversible discarded list, without permanent rejection. */
+    fun discardWeakTolokaHit(topicId: String) {
+        val ready = _state.value as? DetailsState.Ready ?: return
+        val results = ready.tolokaSearch as? TolokaSearchState.Results ?: return
+        val hit = results.weakHits.firstOrNull { it.id == topicId } ?: return
+        val selected = results.selectedId == topicId
+        if (selected) {
+            tolokaTransferJob?.cancel()
+            uploadedTopicId = null
+            uploadedTorrent = null
+        }
+        updateReady { it.copy(tolokaSearch = results.copy(
+            weakHits = results.weakHits.filterNot { it.id == topicId },
+            rejectedHits = (results.rejectedHits + hit).distinctBy { it.id },
+            selectedId = results.selectedId.takeUnless { it == topicId },
+        ), tolokaTransfer = if (selected) TolokaTransferState.Idle else it.tolokaTransfer,
+            tolokaPlaybackStatus = if (selected) null else it.tolokaPlaybackStatus,
+            tolokaOpenedFiles = if (selected) emptySet() else it.tolokaOpenedFiles) }
     }
 
     fun rejectTolokaHit(topicId: String) {

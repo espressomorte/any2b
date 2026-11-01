@@ -27,6 +27,7 @@ class TmdbListActivity : ComponentActivity() {
                     },
                     onSort = viewModel::changeSort,
                     onYearRange = viewModel::changeYearRange,
+                    onMinimumRating = viewModel::changeMinimumRating,
                     onLoadMore = viewModel::loadMore,
                     onBack = ::finish)
             }

@@ -103,6 +103,24 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
         ))
     }
 
+    /** Move a weak candidate into the reversible discarded bucket without blacklisting it. */
+    fun discardWeakHit(topicId: String) {
+        val results = _state.value.search as? TolokaSearchState.Results ?: return
+        val hit = results.weakHits.firstOrNull { it.id == topicId } ?: return
+        if (results.selectedId == topicId) {
+            transferJob?.cancel()
+            uploadedTopicId = null
+            uploadedTorrent = null
+        }
+        _state.value = _state.value.copy(search = results.copy(
+            weakHits = results.weakHits.filterNot { it.id == topicId },
+            rejectedHits = (results.rejectedHits + hit).distinctBy { it.id },
+            selectedId = results.selectedId.takeUnless { it == topicId },
+        ), transfer = if (results.selectedId == topicId) TolokaTransferState.Idle
+            else _state.value.transfer,
+            playbackStatus = if (results.selectedId == topicId) null else _state.value.playbackStatus)
+    }
+
     fun rejectHit(topicId: String) {
         val results = _state.value.search as? TolokaSearchState.Results ?: return
         val hit = (results.hits + results.weakHits + results.rejectedHits)
@@ -177,16 +195,12 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
                     .filterNot { hit -> hits.any { it.id == hit.id } }
                 val rejected = aggregate?.rejected ?: allHits.filterNot(TolokaTmdbRanker::isVideoCandidate)
                 val totalFound = allHits.size
-                val firstHitId = hits.firstOrNull()?.id ?: weak.firstOrNull()?.id
                 _state.value = _state.value.copy(
                     search = TolokaSearchState.Results(searchedQuery, hits,
-                        maxOf(totalFound, hits.size + weak.size + rejected.size), selectedId = firstHitId,
+                        maxOf(totalFound, hits.size + weak.size + rejected.size),
                         weakHits = weak, rejectedHits = rejected.filterNot { hit ->
                             hits.any { it.id == hit.id } || weak.any { it.id == hit.id }
                         }))
-                if (firstHitId != null) {
-                    selectHit(firstHitId)
-                }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: WorkerFailure.RateLimited) {

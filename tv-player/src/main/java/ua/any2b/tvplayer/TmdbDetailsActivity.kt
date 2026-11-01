@@ -144,6 +144,7 @@ class TmdbDetailsActivity : ComponentActivity() {
                         tolokaViewModel.selectHit(topicId)
                     },
                     onPromoteTorrent = tolokaViewModel::promoteHit,
+                    onDiscardTorrent = tolokaViewModel::discardWeakHit,
                     onRejectTorrent = tolokaViewModel::rejectHit,
                     onRetryMetadata = tolokaViewModel::retryMetadata,
                     onPlayFile = ::openFile,
