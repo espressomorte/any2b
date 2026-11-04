@@ -1,31 +1,23 @@
 package ua.any2b.tvplayer.ui
 
 import android.graphics.BlurMaskFilter
-import android.content.Intent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.zIndex
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -35,16 +27,12 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
 import ua.any2b.core.anilist.AnimeCard
-import ua.any2b.core.anilist.HomeRow
-import ua.any2b.core.anilist.hasFullList
-import ua.any2b.core.anilist.previewItems
 import ua.any2b.tvplayer.R
 import ua.any2b.tvplayer.data.FavoritesManager
 
@@ -153,59 +141,6 @@ fun AppTheme(content: @Composable () -> Unit) {
     }
 }
 
-@Composable
-fun HomeScreen(
-    state: HomeState,
-    onRetry: () -> Unit,
-    onOpen: (AnimeCard) -> Unit,
-    onMore: (HomeRow) -> Unit,
-    onFavoriteChanged: () -> Unit,
-) {
-    val context = LocalContext.current
-
-    when (state) {
-        HomeState.Loading -> AnimariumLoadingScreen()
-        is HomeState.Error, is HomeState.Ready -> {
-            Column(modifier = Modifier.fillMaxSize().background(AppColors.BackgroundDark)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 20.dp, end = 48.dp),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    HomeActionButton(FaIcons.SEARCH, "Пошук") {
-                        val intent = Intent(context, ua.any2b.tvplayer.SearchActivity::class.java)
-                        context.startActivity(intent)
-                    }
-                    Spacer(Modifier.width(12.dp))
-                    HomeActionButton(FaIcons.SEARCH_PLUS, "Пошук тайтла для торента через TMDB") {
-                        context.startActivity(Intent(context, ua.any2b.tvplayer.TolokaSearchActivity::class.java))
-                    }
-                    Spacer(Modifier.width(12.dp))
-                    HomeActionButton(null, "TMDB: обране та популярне", vector = R.drawable.fa_rebel) {
-                        context.startActivity(Intent(context, ua.any2b.tvplayer.TmdbLibraryActivity::class.java))
-                    }
-                    Spacer(Modifier.width(12.dp))
-                    HomeActionButton(FaIcons.COG, "Налаштування") {
-                        val intent = Intent(context, ua.any2b.tvplayer.SettingsActivity::class.java)
-                        context.startActivity(intent)
-                    }
-                }
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                ) {
-                    when (state) {
-                        is HomeState.Error -> ErrorBlock(state.message, onRetry)
-                        is HomeState.Ready -> Rows(state.rows, state.catalogError, onRetry, onOpen, onMore, onFavoriteChanged)
-                        else -> {}
-                    }
-                }
-            }
-        }
-    }
-}
-
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 internal fun HomeActionButton(icon: String?, label: String, vector: Int? = null,
@@ -252,78 +187,6 @@ internal fun AnimariumLoadingScreen() {
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize()
         )
-    }
-}
-
-@Composable
-private fun Rows(
-    rows: List<HomeRow>,
-    catalogError: String?,
-    onRetry: () -> Unit,
-    onOpen: (AnimeCard) -> Unit,
-    onMore: (HomeRow) -> Unit,
-    onFavoriteChanged: () -> Unit,
-) {
-    val firstCardId = rows.firstNotNullOfOrNull { it.items.firstOrNull()?.id }
-    val focusRequester = remember { FocusRequester() }
-
-    LaunchedEffect(rows) {
-        try {
-            focusRequester.requestFocus()
-        } catch (_: Exception) {}
-    }
-
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(top = 24.dp, bottom = 48.dp, start = 36.dp, end = 48.dp),
-        verticalArrangement = Arrangement.spacedBy(32.dp),
-    ) {
-        if (rows.isEmpty() && catalogError == null) {
-            item(key = "empty_home") {
-                Text(
-                    "Усі списки приховані. Увімкніть їх у налаштуваннях головної.",
-                    color = AppColors.TextSecondary,
-                    style = MaterialTheme.typography.bodyLarge,
-                )
-            }
-        }
-        if (catalogError != null) {
-            item(key = "catalog_error") {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(catalogError, color = AppColors.ErrorRed)
-                    PrimaryButton(onClick = onRetry, text = "Повторити завантаження каталогу")
-                }
-            }
-        }
-        items(rows, key = { it.id }) { row ->
-            Column {
-                Text(
-                    text = row.title,
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.padding(start = 12.dp, bottom = 14.dp),
-                )
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(20.dp),
-                    modifier = Modifier.graphicsLayer { clip = false }
-                ) {
-                    items(row.previewItems, key = { it.id }) { card ->
-                        val isFirst = card.id == firstCardId
-                        PosterCard(
-                            item = card,
-                            modifier = if (isFirst) Modifier.width(160.dp).focusRequester(focusRequester) else Modifier.width(160.dp),
-                            onClick = { onOpen(card) },
-                            onFavoriteChanged = onFavoriteChanged,
-                        )
-                    }
-                    if (row.hasFullList) {
-                        item(key = "more_${row.id}") {
-                            MoreCard(onClick = { onMore(row) })
-                        }
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -486,39 +349,5 @@ fun PosterCard(
             },
             onDismiss = { showFavoriteMenu = false },
         )
-    }
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun ErrorBlock(message: String, onRetry: () -> Unit) {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Text(message, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
-            PrimaryButton(onClick = onRetry, text = "Повторити")
-        }
-    }
-}
-
-@Composable
-private fun PrimaryButton(onClick: () -> Unit, text: String) {
-    var isFocused by remember { mutableStateOf(false) }
-    Button(
-        onClick = onClick,
-        scale = ButtonDefaults.scale(scale = 1f, focusedScale = 1f),
-        shape = ButtonDefaults.shape(RoundedCornerShape(12.dp)),
-        glow = ButtonDefaults.glow(glow = Glow.None, focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 10.dp)),
-        colors = ButtonDefaults.colors(
-            containerColor = AppColors.PrimaryPurple,
-            contentColor = Color.White,
-            focusedContainerColor = AppColors.PrimaryPurple,
-            focusedContentColor = Color.White
-        ),
-        modifier = Modifier
-            .zIndex(if (isFocused) 1f else 0f)
-            .onFocusChanged { isFocused = it.isFocused }
-            .neonGlow(focused = isFocused, borderRadius = 12.dp)
-    ) {
-        Text(text)
     }
 }

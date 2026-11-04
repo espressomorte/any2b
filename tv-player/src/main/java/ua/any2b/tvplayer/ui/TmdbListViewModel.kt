@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import ua.any2b.core.tmdb.TmdbFailure
+import ua.any2b.core.tmdb.TmdbGeneralCatalog
 import ua.any2b.core.tmdb.TmdbListSort
 import ua.any2b.core.tmdb.TmdbMediaType
 import ua.any2b.core.tmdb.TmdbTitle
@@ -40,9 +41,11 @@ class TmdbListViewModel(application: Application) : AndroidViewModel(application
     private val _state = MutableStateFlow(TmdbListState())
     val state: StateFlow<TmdbListState> = _state
     private var loadJob: Job? = null
+    private var generalCatalog = false
     private val preferences = application.getSharedPreferences("tmdb_list_preferences", 0)
 
-    fun open(category: String) {
+    fun open(category: String, generalCatalog: Boolean = false) {
+        this.generalCatalog = generalCatalog
         val normalized = category.takeIf {
             it == "tv" || it == "movie" || it == "history" ||
                 it == "animation_tv" || it == "animation_movie" ||
@@ -65,7 +68,9 @@ class TmdbListViewModel(application: Application) : AndroidViewModel(application
                 "history" -> history.all()
                 else -> return@launch
             }
-            _state.value = _state.value.copy(titles = titles, page = 1, hasMore = false)
+            _state.value = _state.value.copy(titles = if (generalCatalog)
+                titles.filter { it.genreIds.isNotEmpty() && TmdbGeneralCatalog.accepts(it) }
+                else titles, page = 1, hasMore = false)
         }
     }
 
@@ -141,7 +146,9 @@ class TmdbListViewModel(application: Application) : AndroidViewModel(application
                     ?: throw IllegalStateException("Налаштуйте URL і ключ Worker")
                 val result = connection.client.listPage(type, connection.accessKey, current.sort,
                     nextPage, genreId = if (current.category.startsWith("animation_")) 16 else null,
-                    yearRange = current.yearRange, yearAscending = current.yearAscending)
+                    yearRange = current.yearRange, yearAscending = current.yearAscending,
+                    excludedGenreIds = if (generalCatalog && current.category in setOf("tv", "movie"))
+                        TmdbGeneralCatalog.excludedGenreIds else emptySet())
                 val latest = _state.value
                 _state.value = latest.copy(titles = (latest.titles + result.titles)
                     .distinctBy { it.type to it.id }, page = result.page,

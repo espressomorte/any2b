@@ -13,6 +13,7 @@ import ua.any2b.core.anitube.AnitubeClient
 import ua.any2b.core.anitube.AnitubeSearchResult
 import ua.any2b.core.anitube.AnitubeVoice
 import ua.any2b.core.anitube.playableVoices
+import ua.any2b.core.anitube.sameStudioEpisodeSources
 import ua.any2b.core.extractor.StreamResolver
 import ua.any2b.core.tmdb.TmdbMediaType
 
@@ -35,6 +36,8 @@ sealed interface AnitubeState {
         val candidates: List<AnitubeSearchResult> = emptyList(),
     ) : AnitubeState
 }
+
+data class AnitubeStreamFallback(val embedUrl: String, val voiceIndex: Int, val episodeIndex: Int)
 
 /** Owns AniTube lookup and playback state for a single TMDB title. */
 class AnitubeController(
@@ -144,32 +147,44 @@ class AnitubeController(
 
     fun resolveSelectedStream(
         onError: (String) -> Unit,
-        onSuccess: (String, Int, Int, Int, Float) -> Unit,
+        onSuccess: (String, Int, Int, Int, Float, List<AnitubeStreamFallback>) -> Unit,
     ) {
         val found = _state.value as? AnitubeState.Found ?: return
-        val episode = found.voices.getOrNull(found.selectedVoiceIndex)
-            ?.episodes?.getOrNull(found.selectedEpisodeIndex) ?: run {
+        val sources = sameStudioEpisodeSources(found.voices,
+            found.selectedVoiceIndex, found.selectedEpisodeIndex).map { (voiceIndex, episodeIndex) ->
+            AnitubeStreamFallback(found.voices[voiceIndex].episodes[episodeIndex].fileUrl,
+                voiceIndex, episodeIndex)
+        }
+        if (sources.isEmpty()) {
             onError("Не вибрано озвучення або епізод")
             return
         }
         _state.value = found.copy(resolvingStream = true)
         scope.launch {
-            try {
-                val stream = withContext(Dispatchers.IO) { streamResolver.resolve(episode.fileUrl) }
-                val latest = _state.value as? AnitubeState.Found
-                if (latest?.release?.newsId == found.release.newsId)
-                    _state.value = latest.copy(resolvingStream = false)
-                onSuccess(stream.streamUrl, found.selectedVoiceIndex, found.selectedEpisodeIndex,
-                    episode.episodeNumber, found.resumeProgress)
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                val latest = _state.value as? AnitubeState.Found
-                if (latest?.release?.newsId == found.release.newsId)
-                    _state.value = latest.copy(resolvingStream = false)
-                onError(error.message?.takeIf(String::isNotBlank)
-                    ?: "Не вдалося отримати відеопотік")
+            var lastError: Exception? = null
+            sources.forEachIndexed { sourceIndex, source ->
+                try {
+                    val stream = withContext(Dispatchers.IO) { streamResolver.resolve(source.embedUrl) }
+                    val latest = _state.value as? AnitubeState.Found
+                    if (latest?.release?.newsId == found.release.newsId)
+                        _state.value = latest.copy(resolvingStream = false,
+                            selectedVoiceIndex = source.voiceIndex,
+                            selectedEpisodeIndex = source.episodeIndex)
+                    val episodeNumber = found.voices[source.voiceIndex].episodes[source.episodeIndex].episodeNumber
+                    onSuccess(stream.streamUrl, source.voiceIndex, source.episodeIndex,
+                        episodeNumber, found.resumeProgress, sources.drop(sourceIndex + 1))
+                    return@launch
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    lastError = error
+                }
             }
+            val latest = _state.value as? AnitubeState.Found
+            if (latest?.release?.newsId == found.release.newsId)
+                _state.value = latest.copy(resolvingStream = false)
+            onError(lastError?.message?.takeIf(String::isNotBlank)
+                ?: "Не вдалося отримати відеопотік")
         }
     }
 

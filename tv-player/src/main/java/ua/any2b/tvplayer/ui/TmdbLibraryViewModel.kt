@@ -13,6 +13,7 @@ import kotlinx.coroutines.launch
 import ua.any2b.core.tmdb.TmdbMediaType
 import ua.any2b.core.tmdb.TmdbFailure
 import ua.any2b.core.tmdb.TmdbTitle
+import ua.any2b.core.tmdb.TmdbGeneralCatalog
 import ua.any2b.core.anilist.HOME_FETCH_SIZE
 import ua.any2b.tvplayer.data.AniListTmdbCatalog
 import ua.any2b.tvplayer.data.AniListLocalDataMigrator
@@ -64,10 +65,13 @@ class TmdbLibraryViewModel(application: Application,
     private val localDataMigrator = AniListLocalDataMigrator(application)
     private val settings = SettingsManager(application)
     private val _state = MutableStateFlow(TmdbLibraryState(
-        history = history.all(), favorites = favorites.all(),
+        history = history.all().filter(::visibleInCurrentCatalog),
+        favorites = favorites.all().filter(::visibleInCurrentCatalog),
         mainSections = if (animationOnly) settings.mainHomeSections() else emptyList(),
         initialHomeLoading = animationOnly))
     val state: StateFlow<TmdbLibraryState> = _state
+    private fun visibleInCurrentCatalog(title: TmdbTitle): Boolean = animationOnly ||
+        title.genreIds.isNotEmpty() && TmdbGeneralCatalog.accepts(title)
     private var recommendationSources: List<Pair<TmdbMediaType, Int>>? = null
     private var recommendationsJob: Job? = null
     private var aniListHomeJob: Job? = null
@@ -162,7 +166,9 @@ class TmdbLibraryViewModel(application: Application,
         val sections = if (animationOnly) settings.mainHomeSections() else emptyList()
         val previouslyEnabled = _state.value.mainSections.filter { it.enabled }.map { it.id }.toSet()
         val nowEnabled = sections.filter { it.enabled }.map { it.id }.toSet()
-        _state.value = _state.value.copy(history = watched, favorites = saved,
+        _state.value = _state.value.copy(
+            history = watched.filter(::visibleInCurrentCatalog),
+            favorites = saved.filter(::visibleInCurrentCatalog),
             mainSections = sections)
         if (!animationOnly) return
         if ("animation_tv" in nowEnabled && "animation_tv" !in previouslyEnabled &&
@@ -241,7 +247,9 @@ class TmdbLibraryViewModel(application: Application,
                 val connectionMode = if (settings.isEncryptedConfigEnabled()) "direct_config" else "worker"
                 Log.d(TAG, "TMDB connection ready section=$section mode=$connectionMode")
                 val titles = connection.client.popular(type, connection.accessKey,
-                    genreId = if (animationOnly) 16 else null)
+                    genreId = if (animationOnly) 16 else null,
+                    excludedGenreIds = if (animationOnly) emptySet() else
+                        ua.any2b.core.tmdb.TmdbGeneralCatalog.excludedGenreIds)
                 setRow(type, TmdbPopularState.Results(titles))
                 Log.i(TAG, "Home section load succeeded section=$section count=${titles.size} " +
                     "elapsedMs=${SystemClock.elapsedRealtime() - startedAt}")

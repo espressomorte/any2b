@@ -1,6 +1,5 @@
 package ua.any2b.tvplayer
 
-import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -38,10 +37,7 @@ class CategoryActivity : ComponentActivity() {
                     title = categoryTitle,
                     state = state,
                     onOpen = { title ->
-                        startActivity(Intent(this, TmdbDetailsActivity::class.java).apply {
-                            putExtra(TmdbDetailsActivity.EXTRA_TMDB_ID, title.id)
-                            putExtra(TmdbDetailsActivity.EXTRA_TMDB_TYPE, title.type.path)
-                        })
+                        startActivity(TvNavigation.details(this, title))
                     },
                     onLoadMore = viewModel::loadMore,
                     onSort = viewModel::changeSort,

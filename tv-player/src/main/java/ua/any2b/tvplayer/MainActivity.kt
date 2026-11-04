@@ -30,17 +30,10 @@ class MainActivity : ComponentActivity() {
                 TmdbLibraryScreen(
                     state = viewModel.state.collectAsStateWithLifecycle().value,
                     onOpen = { title ->
-                        startActivity(Intent(this, TmdbDetailsActivity::class.java).apply {
-                            putExtra(TmdbDetailsActivity.EXTRA_TMDB_ID, title.id)
-                            putExtra(TmdbDetailsActivity.EXTRA_TMDB_TYPE, title.type.path)
-                        })
+                        startActivity(TvNavigation.details(this, title))
                     },
                     onOpenFavorite = { title ->
-                        startActivity(Intent(this, TmdbDetailsActivity::class.java).apply {
-                            putExtra(TmdbDetailsActivity.EXTRA_TMDB_ID, title.id)
-                            putExtra(TmdbDetailsActivity.EXTRA_TMDB_TYPE, title.type.path)
-                            putExtra(TmdbDetailsActivity.EXTRA_FAVORITES_LAYOUT, true)
-                        })
+                        startActivity(TvNavigation.details(this, title, favoritesLayout = true))
                     },
                     onRetry = viewModel::refreshPopular,
                     onMore = { category ->

@@ -18,20 +18,14 @@ import kotlinx.coroutines.*
 import okhttp3.OkHttpClient
 import okhttp3.Credentials
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
-import ua.any2b.core.anilist.AniListClient
-import ua.any2b.core.anitube.AnitubeClient
-import ua.any2b.core.anitube.AnitubeVoice
-import ua.any2b.core.anitube.playableVoices
-import ua.any2b.core.extractor.StreamResolver
-import ua.any2b.core.matcher.TitleMatcher
 import ua.any2b.tvplayer.data.SettingsManager
-import ua.any2b.tvplayer.data.VoiceCache
-import ua.any2b.tvplayer.data.WatchHistoryManager
 import ua.any2b.tvplayer.data.TorrServerAuthStore
 import ua.any2b.tvplayer.data.TolokaPlaybackStore
 import ua.any2b.tvplayer.data.TmdbWatchHistoryStore
 import ua.any2b.core.tmdb.TmdbMediaType
 import ua.any2b.core.tmdb.TmdbTitle
+import ua.any2b.core.extractor.StreamResolver
+import ua.any2b.tvplayer.data.AnitubeStreamFallback
 import ua.any2b.tvplayer.databinding.ActivityPlayerBinding
 import java.util.concurrent.TimeUnit
 
@@ -41,11 +35,9 @@ class PlayerActivity : FragmentActivity() {
     companion object {
         private const val TAG = "TvPlayer"
         const val EXTRA_STREAM_URL = "STREAM_URL"
-        const val EXTRA_ANIME_ID = "ANIME_ID"
         const val EXTRA_VOICE_INDEX = "VOICE_INDEX"
         const val EXTRA_EPISODE_INDEX = "EPISODE_INDEX"
         const val EXTRA_EPISODE_NUMBER = "EPISODE_NUMBER"
-        const val EXTRA_IS_MOVIE = "IS_MOVIE"
         const val EXTRA_SOURCE_TYPE = "SOURCE_TYPE"
         const val SOURCE_TOLOKA = "toloka"
         const val SOURCE_ANITUBE_TMDB = "anitube_tmdb"
@@ -58,29 +50,30 @@ class PlayerActivity : FragmentActivity() {
         const val EXTRA_TMDB_YEAR = "TMDB_YEAR"
         const val EXTRA_TMDB_POSTER_URL = "TMDB_POSTER_URL"
         const val EXTRA_TMDB_RATING = "TMDB_RATING"
+        const val EXTRA_TMDB_GENRE_IDS = "TMDB_GENRE_IDS"
         const val EXTRA_TMDB_RESUME_PROGRESS = "TMDB_RESUME_PROGRESS"
+        const val EXTRA_BACKUP_EMBED_URLS = "BACKUP_EMBED_URLS"
+        const val EXTRA_BACKUP_VOICE_INDICES = "BACKUP_VOICE_INDICES"
+        const val EXTRA_BACKUP_EPISODE_INDICES = "BACKUP_EPISODE_INDICES"
     }
 
     private lateinit var binding: ActivityPlayerBinding
     private var player: ExoPlayer? = null
 
-    private var animeId: Int = -1
     private var voiceIndex: Int = 0
     private var episodeIndex: Int = 0
     private var episodeNumber: Int = 1
-    private var isMovie: Boolean = false
     private var isToloka: Boolean = false
     private var isTmdbAnitube: Boolean = false
     private var tmdbAnitubeStarted: Boolean = false
     private var tmdbResumeProgress: Float = 0f
     private var tmdbResumeApplied: Boolean = false
     private var tolokaPlaybackMarked: Boolean = false
+    private val backupSources = ArrayDeque<AnitubeStreamFallback>()
+    private var retryingBackup = false
+    private val streamResolver = StreamResolver()
 
-    private var nextEpisodeUrl: String? = null
-    private var nextEpisodeIndex: Int = -1
-    private var nextEpisodeNumber: Int = -1
     private var progressJob: Job? = null
-    private var prefetchJob: Job? = null
     private val tolokaServerBase by lazy { SettingsManager(this).torrServerUrl().toHttpUrlOrNull() }
     private val tolokaBasicHeader by lazy {
         TorrServerAuthStore(this).read()?.let { Credentials.basic(it.username, it.password) }
@@ -125,14 +118,22 @@ class PlayerActivity : FragmentActivity() {
         setContentView(binding.root)
 
         val url = intent.getStringExtra(EXTRA_STREAM_URL)
-        animeId = intent.getIntExtra(EXTRA_ANIME_ID, -1)
         voiceIndex = intent.getIntExtra(EXTRA_VOICE_INDEX, 0)
         episodeIndex = intent.getIntExtra(EXTRA_EPISODE_INDEX, 0)
         episodeNumber = intent.getIntExtra(EXTRA_EPISODE_NUMBER, episodeIndex + 1)
-        isMovie = intent.getBooleanExtra(EXTRA_IS_MOVIE, false)
         isToloka = intent.getStringExtra(EXTRA_SOURCE_TYPE) == SOURCE_TOLOKA
         isTmdbAnitube = intent.getStringExtra(EXTRA_SOURCE_TYPE) == SOURCE_ANITUBE_TMDB
         tmdbResumeProgress = intent.getFloatExtra(EXTRA_TMDB_RESUME_PROGRESS, 0f)
+        if (isTmdbAnitube) {
+            val urls = intent.getStringArrayListExtra(EXTRA_BACKUP_EMBED_URLS).orEmpty()
+            val voiceIndices = intent.getIntArrayExtra(EXTRA_BACKUP_VOICE_INDICES) ?: intArrayOf()
+            val episodeIndices = intent.getIntArrayExtra(EXTRA_BACKUP_EPISODE_INDICES) ?: intArrayOf()
+            urls.forEachIndexed { index, embedUrl ->
+                if (index in voiceIndices.indices && index in episodeIndices.indices)
+                    backupSources.addLast(AnitubeStreamFallback(embedUrl,
+                        voiceIndices[index], episodeIndices[index]))
+            }
+        }
 
         if (url.isNullOrBlank()) {
             Log.w("NextEp", "finish(): url is null or blank")
@@ -141,15 +142,7 @@ class PlayerActivity : FragmentActivity() {
             return
         }
 
-        binding.btnNextEpisode.setOnClickListener {
-            if (nextEpisodeUrl != null) {
-                playNextEpisodeInstant()
-            } else {
-                playNextEpisodeFallback()
-            }
-        }
-
-        if (isToloka || isTmdbAnitube) binding.btnNextEpisode.visibility = View.GONE
+        binding.btnNextEpisode.visibility = View.GONE
         showStatus("⏳ Підключення до потоку…", if (isToloka) "" else url)
         initPlayer(url)
     }
@@ -177,7 +170,6 @@ class PlayerActivity : FragmentActivity() {
                                     tmdbResumeApplied = true
                                 }
                                 startProgressReporting()
-                                startPreFetchingNextEpisode()
                             }
                         }
                         Player.STATE_BUFFERING -> showStatus("⏳ Буферизація…", if (isToloka) "" else url)
@@ -187,7 +179,7 @@ class PlayerActivity : FragmentActivity() {
                             if (duration > 0 && current >= duration - 3000) {
                                 showStatus("✓ Завершено", if (isToloka) "" else url)
                                 if (isTmdbAnitube) saveTmdbAnitubeProgress(1f)
-                                handlePlaybackEnded()
+                                finish()
                             } else {
                                 Log.w(TAG, "Ignored premature STATE_ENDED at current=$current, duration=$duration")
                             }
@@ -202,6 +194,11 @@ class PlayerActivity : FragmentActivity() {
                         showStatus("✗ Потік TorrServer недоступний (${error.errorCodeName}). Перевірте адресу сервера на цьому пристрої та стан роздачі.", "")
                     } else {
                         Log.e("Player", "ExoPlayer: ${error.errorCodeName} / ${error.message}", error)
+                        if (retryingBackup) return
+                        if (isTmdbAnitube && !tmdbAnitubeStarted && backupSources.isNotEmpty()) {
+                            retryAnitubeBackup()
+                            return
+                        }
                         val msg = "✗ Помилка: ${error.errorCodeName} — ${error.message}"
                         showStatus(msg, url)
                     }
@@ -216,29 +213,26 @@ class PlayerActivity : FragmentActivity() {
                         if (isToloka && !tolokaPlaybackMarked) {
                             val topicId = intent.getStringExtra(EXTRA_TOLOKA_TOPIC_ID)
                             val fileId = intent.getIntExtra(EXTRA_TOLOKA_FILE_ID, -1)
-                            if (animeId > 0 && topicId?.matches(Regex("[0-9]+")) == true && fileId > 0) {
-                                TolokaPlaybackStore(this@PlayerActivity).markOpened(animeId, topicId, fileId)
+                            val type = TmdbMediaType.entries.firstOrNull {
+                                it.path == intent.getStringExtra(EXTRA_TMDB_TYPE)
+                            }
+                            val tmdbId = intent.getIntExtra(EXTRA_TMDB_ID, -1)
+                            val tmdbTitle = intent.getStringExtra(EXTRA_TMDB_TITLE)
+                            if (type != null && tmdbId > 0 && !tmdbTitle.isNullOrBlank() &&
+                                topicId?.matches(Regex("[0-9]+")) == true && fileId > 0) {
+                                TolokaPlaybackStore(this@PlayerActivity)
+                                    .markTmdbOpened(type.path, tmdbId, topicId, fileId)
+                                TmdbWatchHistoryStore(this@PlayerActivity).record(TmdbTitle(
+                                    tmdbId, type, tmdbTitle,
+                                    intent.getStringExtra(EXTRA_TMDB_ORIGINAL_TITLE),
+                                    intent.getIntExtra(EXTRA_TMDB_YEAR, 0).takeIf { it > 0 },
+                                    intent.getStringExtra(EXTRA_TMDB_POSTER_URL), null,
+                                    intent.getDoubleExtra(EXTRA_TMDB_RATING, Double.NaN)
+                                        .takeIf(Double::isFinite),
+                                    genreIds = intent.getIntArrayExtra(EXTRA_TMDB_GENRE_IDS)
+                                        ?.toSet().orEmpty(),
+                                ))
                                 tolokaPlaybackMarked = true
-                            } else {
-                                val type = TmdbMediaType.entries.firstOrNull {
-                                    it.path == intent.getStringExtra(EXTRA_TMDB_TYPE)
-                                }
-                                val tmdbId = intent.getIntExtra(EXTRA_TMDB_ID, -1)
-                                val tmdbTitle = intent.getStringExtra(EXTRA_TMDB_TITLE)
-                                if (type != null && tmdbId > 0 && !tmdbTitle.isNullOrBlank() &&
-                                    topicId?.matches(Regex("[0-9]+")) == true && fileId > 0) {
-                                    TolokaPlaybackStore(this@PlayerActivity)
-                                        .markTmdbOpened(type.path, tmdbId, topicId, fileId)
-                                    TmdbWatchHistoryStore(this@PlayerActivity).record(TmdbTitle(
-                                        tmdbId, type, tmdbTitle,
-                                        intent.getStringExtra(EXTRA_TMDB_ORIGINAL_TITLE),
-                                        intent.getIntExtra(EXTRA_TMDB_YEAR, 0).takeIf { it > 0 },
-                                        intent.getStringExtra(EXTRA_TMDB_POSTER_URL), null,
-                                        intent.getDoubleExtra(EXTRA_TMDB_RATING, Double.NaN)
-                                            .takeIf(Double::isFinite),
-                                    ))
-                                    tolokaPlaybackMarked = true
-                                }
                             }
                         }
                         binding.statusOverlay.postDelayed({
@@ -254,6 +248,37 @@ class PlayerActivity : FragmentActivity() {
         }
     }
 
+    private fun retryAnitubeBackup() {
+        if (retryingBackup) return
+        retryingBackup = true
+        lifecycleScope.launch {
+            while (backupSources.isNotEmpty()) {
+                val source = backupSources.removeFirst()
+                showStatus("⏳ Пробую резервний варіант озвучення…", "")
+                try {
+                    val stream = withContext(Dispatchers.IO) {
+                        streamResolver.resolve(source.embedUrl)
+                    }
+                    progressJob?.cancel()
+                    player?.release()
+                    player = null
+                    voiceIndex = source.voiceIndex
+                    episodeIndex = source.episodeIndex
+                    tmdbResumeApplied = false
+                    retryingBackup = false
+                    initPlayer(stream.streamUrl)
+                    return@launch
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    Log.w(TAG, "AniTube backup failed", error)
+                }
+            }
+            retryingBackup = false
+            showStatus("✗ Жоден варіант цієї студії не запустився", "")
+        }
+    }
+
     private fun startProgressReporting() {
         progressJob?.cancel()
         progressJob = lifecycleScope.launch(Dispatchers.Main) {
@@ -262,20 +287,9 @@ class PlayerActivity : FragmentActivity() {
                 val exo = player ?: continue
                 val current = exo.currentPosition
                 val duration = exo.duration
-                if (duration > 0 && (animeId > 0 || isTmdbAnitube)) {
+                if (isTmdbAnitube && duration > 0) {
                     val progress = (current.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
-                    if (isTmdbAnitube) {
-                        saveTmdbAnitubeProgress(progress)
-                    } else {
-                        withContext(Dispatchers.IO) {
-                            try {
-                                val aniListClient = AniListClient()
-                                val details = aniListClient.animeDetails(animeId)
-                                val historyManager = WatchHistoryManager(this@PlayerActivity)
-                                historyManager.saveProgress(details, episodeIndex, voiceIndex, progress, episodeNumber)
-                            } catch (_: Exception) {}
-                        }
-                    }
+                    saveTmdbAnitubeProgress(progress)
                 }
             }
         }
@@ -294,207 +308,11 @@ class PlayerActivity : FragmentActivity() {
                 intent.getIntExtra(EXTRA_TMDB_YEAR, 0).takeIf { it > 0 },
                 intent.getStringExtra(EXTRA_TMDB_POSTER_URL), null,
                 intent.getDoubleExtra(EXTRA_TMDB_RATING, Double.NaN).takeIf(Double::isFinite),
+                genreIds = intent.getIntArrayExtra(EXTRA_TMDB_GENRE_IDS)
+                    ?.toSet().orEmpty(),
             ),
             voiceIndex, episodeIndex, episodeNumber, progress,
         )
-    }
-
-    private suspend fun getCachedOrFetchVoices(): List<AnitubeVoice>? {
-        if (animeId <= 0) return null
-        VoiceCache.get(animeId)?.let { return it }
-
-        try {
-            val aniListClient = AniListClient()
-            val anitubeClient = AnitubeClient()
-            val details = aniListClient.animeDetails(animeId)
-            val query = details.title.romaji ?: details.title.english ?: ""
-            val searchResults = anitubeClient.search(query)
-            val best = TitleMatcher.confidentBest(TitleMatcher.match(details, searchResults))
-                ?: return null
-            val voices = playableVoices(anitubeClient.getVoices(best.pageUrl), details.format)
-            VoiceCache.put(animeId, voices)
-            return voices
-        } catch (_: Exception) {
-            return null
-        }
-    }
-
-    private fun startPreFetchingNextEpisode() {
-        if (animeId <= 0 || isMovie) return
-        prefetchJob?.cancel()
-        prefetchJob = lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                val voices = getCachedOrFetchVoices() ?: return@launch
-                val voice = voices.getOrNull(voiceIndex) ?: voices.firstOrNull() ?: return@launch
-                val targetNextIndex = episodeIndex + 1
-                val nextEp = voice.episodes.getOrNull(targetNextIndex) ?: return@launch
-
-                val streamResolver = StreamResolver()
-                val extracted = streamResolver.resolve(nextEp.fileUrl)
-                nextEpisodeUrl = extracted.streamUrl
-                nextEpisodeIndex = targetNextIndex
-                nextEpisodeNumber = nextEp.episodeNumber
-
-                withContext(Dispatchers.Main) {
-                    binding.btnNextEpisode.visibility = View.VISIBLE
-                }
-            } catch (_: Exception) {}
-        }
-    }
-
-    private fun playNextEpisodeInstant() {
-        val url = nextEpisodeUrl
-        val nextIdx = nextEpisodeIndex
-        val nextNumber = nextEpisodeNumber
-        if (url.isNullOrBlank() || nextIdx < 0 || nextNumber < 1 || animeId <= 0) {
-            playNextEpisodeFallback()
-            return
-        }
-
-        binding.btnNextEpisode.visibility = View.GONE
-        showStatus("▶ Запуск серії $nextNumber…", url)
-
-        lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                val aniListClient = AniListClient()
-                val details = aniListClient.animeDetails(animeId)
-                val historyManager = WatchHistoryManager(this@PlayerActivity)
-                historyManager.saveProgress(details, nextIdx, voiceIndex, 0.0f, nextNumber)
-
-                withContext(Dispatchers.Main) {
-                    episodeIndex = nextIdx
-                    episodeNumber = nextNumber
-                    intent.putExtra(EXTRA_EPISODE_INDEX, episodeIndex)
-                    intent.putExtra(EXTRA_EPISODE_NUMBER, episodeNumber)
-
-                    val dataSourceFactory = OkHttpDataSource.Factory(okHttpClient)
-                    val hlsMediaSource = HlsMediaSource.Factory(dataSourceFactory)
-                        .createMediaSource(MediaItem.fromUri(url))
-
-                    player?.apply {
-                        setMediaSource(hlsMediaSource)
-                        prepare()
-                        playWhenReady = true
-                    }
-
-                    nextEpisodeUrl = null
-                    nextEpisodeIndex = -1
-                    nextEpisodeNumber = -1
-                    startPreFetchingNextEpisode()
-                }
-            } catch (e: Exception) {
-                Log.e("NextEp", "finish(): виняток у ланцюжку (instant)", e)
-                withContext(Dispatchers.Main) {
-                    showStatus("⚠ Не вдалося запустити наступну серію", "")
-                    binding.statusOverlay.postDelayed({
-                        binding.statusOverlay.visibility = View.GONE
-                    }, 3000)
-                }
-            }
-        }
-    }
-
-    private fun playNextEpisodeFallback() {
-        if (animeId <= 0) {
-            Log.w("NextEp", "finish(): animeId<=0")
-            showStatus("✓ Більше немає серій", "")
-            binding.statusOverlay.postDelayed({
-                finish()
-            }, 2000)
-            return
-        }
-
-        binding.btnNextEpisode.visibility = View.GONE
-        showStatus("⏳ Завантаження наступної серії…", "")
-
-        lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                val voices = getCachedOrFetchVoices()
-                val voice = voices?.getOrNull(voiceIndex) ?: voices?.firstOrNull()
-                val targetNextIndex = episodeIndex + 1
-                val nextEp = voice?.episodes?.getOrNull(targetNextIndex)
-
-                if (nextEp != null) {
-                    val streamResolver = StreamResolver()
-                    val extracted = streamResolver.resolve(nextEp.fileUrl)
-                    val historyManager = WatchHistoryManager(this@PlayerActivity)
-                    val aniListClient = AniListClient()
-                    val details = aniListClient.animeDetails(animeId)
-                    historyManager.saveProgress(details, targetNextIndex, voiceIndex, 0.0f, nextEp.episodeNumber)
-
-                    withContext(Dispatchers.Main) {
-                        episodeIndex = targetNextIndex
-                        episodeNumber = nextEp.episodeNumber
-                        intent.putExtra(EXTRA_EPISODE_INDEX, episodeIndex)
-                        intent.putExtra(EXTRA_EPISODE_NUMBER, episodeNumber)
-
-                        val dataSourceFactory = OkHttpDataSource.Factory(okHttpClient)
-                        val hlsMediaSource = HlsMediaSource.Factory(dataSourceFactory)
-                            .createMediaSource(MediaItem.fromUri(extracted.streamUrl))
-
-                        player?.apply {
-                            setMediaSource(hlsMediaSource)
-                            prepare()
-                            playWhenReady = true
-                        }
-                        showStatus("▶ Серія $episodeNumber", extracted.streamUrl)
-
-                        nextEpisodeUrl = null
-                        nextEpisodeIndex = -1
-                        nextEpisodeNumber = -1
-                        startPreFetchingNextEpisode()
-                    }
-                } else {
-                    Log.w("NextEp", "finish(): наступну серію не знайдено, episodeIndex=$episodeIndex voiceIndex=$voiceIndex")
-                    withContext(Dispatchers.Main) {
-                        showStatus("✓ Більше немає серій", "")
-                        binding.statusOverlay.postDelayed({
-                            finish()
-                        }, 2000)
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e("NextEp", "finish(): виняток у ланцюжку", e)
-                withContext(Dispatchers.Main) {
-                    showStatus("⚠ Не вдалося завантажити наступну серію", "")
-                    binding.statusOverlay.postDelayed({
-                        binding.statusOverlay.visibility = View.GONE
-                    }, 3000)
-                }
-            }
-        }
-    }
-
-    private fun handlePlaybackEnded() {
-        if (isToloka) {
-            finish()
-            return
-        }
-        lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                if (animeId > 0) {
-                    val aniListClient = AniListClient()
-                    val details = aniListClient.animeDetails(animeId)
-                    val historyManager = WatchHistoryManager(this@PlayerActivity)
-                    historyManager.saveProgress(details, episodeIndex, voiceIndex, 1.0f, episodeNumber)
-                }
-            } catch (_: Exception) {}
-        }
-
-        if (isMovie) {
-            finish()
-            return
-        }
-        val settingsManager = SettingsManager(this)
-        val autoPlay = settingsManager.isAutoPlayNextEnabled()
-
-        if (nextEpisodeUrl != null && nextEpisodeIndex >= 0) {
-            playNextEpisodeInstant()
-        } else if (autoPlay) {
-            playNextEpisodeFallback()
-        } else {
-            finish()
-        }
     }
 
     private fun showStatus(status: String, url: String) {

@@ -113,12 +113,10 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private var checkingTorrServer = false
     private var checkingFanart = false
 
-    private val _autoPlayNext = MutableStateFlow(settingsManager.isAutoPlayNextEnabled())
-    val autoPlayNext: StateFlow<Boolean> = _autoPlayNext
     private val _experimentalAppearance = MutableStateFlow(settingsManager.isExperimentalAppearanceEnabled())
     val experimentalAppearance: StateFlow<Boolean> = _experimentalAppearance
-    private val _homeSections = MutableStateFlow(settingsManager.homeSections())
-    val homeSections: StateFlow<List<HomeSectionSetting>> = _homeSections
+    private val _dynamicLogo = MutableStateFlow(settingsManager.isDynamicLogoEnabled())
+    val dynamicLogo: StateFlow<Boolean> = _dynamicLogo
     private val _mainHomeSections = MutableStateFlow(settingsManager.mainHomeSections())
     val mainHomeSections: StateFlow<List<HomeSectionSetting>> = _mainHomeSections
     private val _availablePlayers = MutableStateFlow<List<ExternalVideoPlayer>>(emptyList())
@@ -144,14 +142,14 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun setAutoPlayNext(enabled: Boolean) {
-        settingsManager.setAutoPlayNextEnabled(enabled)
-        _autoPlayNext.value = enabled
-    }
-
     fun setExperimentalAppearance(enabled: Boolean) {
         settingsManager.setExperimentalAppearanceEnabled(enabled)
         _experimentalAppearance.value = enabled
+    }
+
+    fun setDynamicLogo(enabled: Boolean) {
+        settingsManager.setDynamicLogoEnabled(enabled)
+        _dynamicLogo.value = enabled
     }
 
     fun setEncryptedConfigEnabled(enabled: Boolean) {
@@ -378,14 +376,6 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun setHomeSectionEnabled(id: String, enabled: Boolean) {
-        _homeSections.value = settingsManager.setHomeSectionEnabled(id, enabled)
-    }
-
-    fun moveHomeSection(id: String, offset: Int) {
-        _homeSections.value = settingsManager.moveHomeSection(id, offset)
-    }
-
     fun setMainHomeSectionEnabled(id: String, enabled: Boolean) {
         _mainHomeSections.value = settingsManager.setMainHomeSectionEnabled(id, enabled)
     }
@@ -507,8 +497,6 @@ class SettingsActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             AppTheme {
-                val autoPlay = viewModel.autoPlayNext.collectAsStateWithLifecycle().value
-                val homeSections = viewModel.homeSections.collectAsStateWithLifecycle().value
                 val mainHomeSections = viewModel.mainHomeSections.collectAsStateWithLifecycle().value
                 val availablePlayers = viewModel.availablePlayers.collectAsStateWithLifecycle().value
                 val selectedPlayerPackage = viewModel.selectedPlayerPackage.collectAsStateWithLifecycle().value
@@ -527,11 +515,10 @@ class SettingsActivity : ComponentActivity() {
                 val encryptedConfigStatus = viewModel.encryptedConfigStatus.collectAsStateWithLifecycle().value
                 val encryptedConfigUrl = viewModel.encryptedConfigUrl.collectAsStateWithLifecycle().value
                 val experimentalAppearance = viewModel.experimentalAppearance.collectAsStateWithLifecycle().value
+                val dynamicLogo = viewModel.dynamicLogo.collectAsStateWithLifecycle().value
                 val workerCheck = viewModel.workerCheck.collectAsStateWithLifecycle().value
                 val torrServerCheck = viewModel.torrServerCheck.collectAsStateWithLifecycle().value
                 SettingsScreen(
-                    autoPlayNext = autoPlay,
-                    homeSections = homeSections,
                     mainHomeSections = mainHomeSections,
                     availablePlayers = availablePlayers,
                     selectedPlayerPackage = selectedPlayerPackage,
@@ -551,6 +538,7 @@ class SettingsActivity : ComponentActivity() {
                     encryptedConfigStatus = encryptedConfigStatus,
                     encryptedConfigUrl = encryptedConfigUrl,
                     experimentalAppearance = experimentalAppearance,
+                    dynamicLogo = dynamicLogo,
                     workerCheck = workerCheck,
                     torrServerCheck = torrServerCheck,
                     onWorkerUrlChanged = viewModel::setWorkerUrl,
@@ -559,8 +547,8 @@ class SettingsActivity : ComponentActivity() {
                     onTorrServerAuthChanged = viewModel::setTorrServerAuth,
                     onCheckWorker = viewModel::checkWorker,
                     onCheckTorrServer = viewModel::checkTorrServer,
-                    onAutoPlayChanged = viewModel::setAutoPlayNext,
                     onExperimentalAppearanceChanged = viewModel::setExperimentalAppearance,
+                    onDynamicLogoChanged = viewModel::setDynamicLogo,
                     onFanartKeyChanged = viewModel::setFanartKey,
                     onTmdbTokenChanged = viewModel::setTmdbToken,
                     onMalClientIdChanged = viewModel::setMalClientId,
@@ -568,8 +556,6 @@ class SettingsActivity : ComponentActivity() {
                     onEncryptedConfigChanged = viewModel::setEncryptedConfigEnabled,
                     onApplyEncryptedConfig = viewModel::applyEncryptedConfig,
                     onEncryptedConfigUrlChanged = viewModel::setEncryptedConfigUrl,
-                    onHomeSectionEnabled = viewModel::setHomeSectionEnabled,
-                    onMoveHomeSection = viewModel::moveHomeSection,
                     onMainHomeSectionEnabled = viewModel::setMainHomeSectionEnabled,
                     onMoveMainHomeSection = viewModel::moveMainHomeSection,
                     onPlayerSelected = viewModel::setSelectedPlayer,

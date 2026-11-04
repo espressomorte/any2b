@@ -3,11 +3,15 @@ package ua.any2b.tvplayer.ui
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.background
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -24,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.window.Dialog
 import androidx.tv.material3.Button
@@ -38,6 +43,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import ua.any2b.core.anitube.AnitubeEpisode
 import ua.any2b.core.anitube.AnitubeVoice
+import ua.any2b.core.anitube.groupedVoices
 
 internal data class AnitubeSeasonOption(val id: Int, val label: String)
 
@@ -80,11 +86,13 @@ internal fun AnitubePlaybackControls(
             if (voices.isNotEmpty()) {
                 val selectedVoice = voices.getOrNull(selectedVoiceIndex) ?: voices.first()
                 val subtitle = selectedVoice.category.equals("СУБТИТРИ", ignoreCase = true)
-                val options = voices.withIndex().sortedBy {
-                    it.value.category.equals("СУБТИТРИ", ignoreCase = true)
-                }.map { it.index to voiceButtonLabel(it.value) }
+                val groups = groupedVoices(voices)
+                val selectedGroup = groups.firstOrNull { group ->
+                    group.variants.any { it.index == selectedVoiceIndex }
+                }
+                val options = groups.map { it.primaryIndex to it.name }
                 AnitubeOptionButton(
-                    label = voiceButtonLabel(selectedVoice),
+                    label = selectedGroup?.name ?: voiceButtonLabel(selectedVoice),
                     icon = if (subtitle) FaIcons.COMMENTING_O else FaIcons.MICROPHONE,
                     selected = true,
                     options = options,
@@ -92,6 +100,7 @@ internal fun AnitubePlaybackControls(
                         FaIcons.COMMENTING_O else FaIcons.MICROPHONE },
                     surfaceColors = surfaceColors,
                     modifier = Modifier.widthIn(max = 210.dp),
+                    centerLabel = true,
                     onSelect = onSelectVoice,
                 )
             }
@@ -149,6 +158,7 @@ private fun AnitubeOptionButton(
     options: List<Pair<Int, String>>,
     surfaceColors: DetailsSurfaceColors,
     modifier: Modifier = Modifier,
+    centerLabel: Boolean = false,
     optionIcon: (Int) -> String? = { null },
     onSelect: (Int) -> Unit,
 ) {
@@ -174,10 +184,23 @@ private fun AnitubeOptionButton(
         Row(Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically) {
-            if (icon != null) FontAwesomeIcon(icon, color = foreground, size = 13.sp)
-            Text(label, color = foreground, fontSize = 11.sp, maxLines = 1,
-                overflow = TextOverflow.Ellipsis)
-            FontAwesomeIcon(FaIcons.ANGLE_DOWN, color = foreground, size = 10.sp)
+            if (centerLabel) {
+                Box(Modifier.width(13.dp).height(22.dp), contentAlignment = Alignment.CenterStart) {
+                    if (icon != null) FontAwesomeIcon(icon, color = foreground, size = 13.sp)
+                }
+                Box(Modifier.height(22.dp), contentAlignment = Alignment.Center) {
+                    Text(label, color = foreground, fontSize = 11.sp, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+                }
+                Box(Modifier.width(13.dp).height(22.dp), contentAlignment = Alignment.CenterEnd) {
+                    FontAwesomeIcon(FaIcons.ANGLE_DOWN, color = foreground, size = 10.sp)
+                }
+            } else {
+                if (icon != null) FontAwesomeIcon(icon, color = foreground, size = 13.sp)
+                Text(label, color = foreground, fontSize = 11.sp, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis)
+                FontAwesomeIcon(FaIcons.ANGLE_DOWN, color = foreground, size = 10.sp)
+            }
         }
     }
     if (expanded) Dialog(onDismissRequest = { expanded = false }) {
@@ -188,7 +211,10 @@ private fun AnitubeOptionButton(
                 itemsIndexed(options, key = { _, option -> option.first }) { _, option ->
                     Button(onClick = { expanded = false; onSelect(option.first) },
                         modifier = Modifier.fillMaxWidth()) {
-                        optionIcon(option.first)?.let { FontAwesomeIcon(it, size = 13.sp) }
+                        optionIcon(option.first)?.let {
+                            FontAwesomeIcon(it, size = 13.sp)
+                            Spacer(Modifier.width(8.dp))
+                        }
                         Text(option.second, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }

@@ -47,8 +47,10 @@ class SettingsManager(context: Context) {
         prefs.edit().putBoolean("experimental_appearance", enabled).apply()
     }
 
-    fun homeSections(): List<HomeSectionSetting> = synchronized(homeSectionsLock) {
-        readHomeSections("home_sections", HomeSections.defaults)
+    fun isDynamicLogoEnabled(): Boolean = prefs.getBoolean("dynamic_logo", false)
+
+    fun setDynamicLogoEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("dynamic_logo", enabled).apply()
     }
 
     fun mainHomeSections(): List<HomeSectionSetting> = synchronized(homeSectionsLock) {
@@ -80,27 +82,6 @@ class SettingsManager(context: Context) {
         return result + defaults.filterNot { default -> result.any { it.id == default.id } }
     }
 
-    fun setHomeSectionEnabled(id: String, enabled: Boolean): List<HomeSectionSetting> =
-        synchronized(homeSectionsLock) {
-            val updated = homeSections().map { section ->
-                if (section.id == id) section.copy(enabled = enabled) else section
-            }
-            saveHomeSections("home_sections", updated)
-            updated
-        }
-
-    fun moveHomeSection(id: String, offset: Int): List<HomeSectionSetting> =
-        synchronized(homeSectionsLock) {
-            val updated = homeSections().toMutableList()
-            val index = updated.indexOfFirst { it.id == id }
-            val target = index + offset
-            if (index >= 0 && target in updated.indices) {
-                java.util.Collections.swap(updated, index, target)
-                saveHomeSections("home_sections", updated)
-            }
-            updated
-        }
-
     fun setMainHomeSectionEnabled(id: String, enabled: Boolean): List<HomeSectionSetting> =
         synchronized(homeSectionsLock) {
             val updated = mainHomeSections().map { section ->
@@ -128,14 +109,6 @@ class SettingsManager(context: Context) {
             array.put(JSONObject().put("id", section.id).put("enabled", section.enabled))
         }
         prefs.edit().putString(key, array.toString()).apply()
-    }
-
-    fun isAutoPlayNextEnabled(): Boolean {
-        return prefs.getBoolean("auto_play_next", false)
-    }
-
-    fun setAutoPlayNextEnabled(enabled: Boolean) {
-        prefs.edit().putBoolean("auto_play_next", enabled).apply()
     }
 
     fun selectedPlayerPackage(): String? = prefs.getString("player_package", null)

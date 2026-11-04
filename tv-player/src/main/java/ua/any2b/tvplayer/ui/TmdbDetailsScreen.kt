@@ -74,6 +74,7 @@ import java.util.Locale
 fun TmdbDetailsScreen(
     state: TmdbDetailsState,
     favoritesLayout: Boolean = false,
+    torrentsOnly: Boolean = false,
     experimentalArtwork: FanartArtwork? = null,
     experimentalPalette: FanartPalette? = null,
     fanartNotice: String? = null,
@@ -121,6 +122,7 @@ fun TmdbDetailsScreen(
                 details = state.details,
                 activePanel = state.activePanel,
                 favoritesLayout = favoritesLayout,
+                torrentsOnly = torrentsOnly,
                 experimentalArtwork = experimentalArtwork,
                 experimentalPalette = experimentalPalette,
                 fanartNotice = fanartNotice,
@@ -161,6 +163,7 @@ private fun TmdbDetailsContent(
     details: TmdbDetails,
     activePanel: Panel,
     favoritesLayout: Boolean,
+    torrentsOnly: Boolean,
     experimentalArtwork: FanartArtwork?,
     experimentalPalette: FanartPalette?,
     fanartNotice: String?,
@@ -201,7 +204,7 @@ private fun TmdbDetailsContent(
                 .getDisplayCountry(Locale.forLanguageTag("uk"))
         }?.takeIf(String::isNotBlank)
     }
-    val torrentOpened = activePanel == Panel.TORRENT
+    val torrentOpened = torrentsOnly || activePanel == Panel.TORRENT
     val customTorrentQueries = remember(title.type, title.id) { mutableStateListOf<String>() }
     val torrentOptions = (customTorrentQueries.map { "Власний" to it } +
         tmdbTorrentQueryOptions(details)).distinctBy { it.second.lowercase() }
@@ -213,7 +216,7 @@ private fun TmdbDetailsContent(
     val torrentFocus = remember(title.type, title.id) { FocusRequester() }
     var showRelated by rememberSaveable(title.type, title.id) { mutableStateOf(false) }
     var infoDialog by rememberSaveable(title.type, title.id) { mutableStateOf<String?>(null) }
-    LaunchedEffect(title.type, title.id) { torrentFocus.requestFocus() }
+    if (!torrentsOnly) LaunchedEffect(title.type, title.id) { torrentFocus.requestFocus() }
     LaunchedEffect(title.englishTitle, details.alternativeTitles) {
         if (!torrentQueryCustomized && torrentOptions.isNotEmpty()) {
             torrentQuery = torrentOptions.first().second
@@ -359,7 +362,7 @@ private fun TmdbDetailsContent(
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                OutlinedButton(
+                if (!torrentsOnly) OutlinedButton(
                     onClick = { onPanelSelected(if (torrentOpened) Panel.ONLINE else Panel.TORRENT) },
                     enabled = aniListAvailability != AniListAvailability.CHECKING &&
                         aniListAvailability != AniListAvailability.MISSING,
@@ -380,7 +383,7 @@ private fun TmdbDetailsContent(
                 ) { FontAwesomeIcon(FaIcons.ASTERISK, size = 18.sp) }
 
                 if (torrentOpened) {
-                    Spacer(Modifier.width(16.dp))
+                    if (!torrentsOnly) Spacer(Modifier.width(16.dp))
                     TorrentTitleHeading(
                         ukrainianTitle = title.matchedSeasonTitle ?: title.ukrainianTitle ?: title.title,
                         englishTitle = title.englishTitle

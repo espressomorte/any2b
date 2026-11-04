@@ -16,6 +16,8 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
 import kotlinx.coroutines.delay
@@ -23,6 +25,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
@@ -328,46 +332,58 @@ internal fun EpisodeWindowPicker(
 ) {
     if (episodes.isEmpty()) return
     val selected = selectedEpisodeIndex.coerceIn(0, episodes.lastIndex)
-    val windowStart = (selected - 1).coerceAtLeast(0)
-    val windowEnd = (windowStart + 3).coerceAtMost(episodes.size)
+    val window = episodeWindowItems(episodes.size, selected)
+    val listState = rememberLazyListState()
+    val previousGapFocus = remember { FocusRequester() }
+    val nextGapFocus = remember { FocusRequester() }
+    val episodeFocus = remember { mutableMapOf<Int, FocusRequester>() }
+    var pendingGap by remember { mutableStateOf<EpisodeWindowItem.Gap?>(null) }
+    LaunchedEffect(selected, window, pendingGap) {
+        val pending = pendingGap ?: return@LaunchedEffect
+        if (selected != pending.jumpTo) return@LaunchedEffect
+        val gapPosition = window.indexOfFirst {
+            it is EpisodeWindowItem.Gap && it.side == pending.side
+        }
+        val targetPosition = if (gapPosition >= 0) gapPosition else window.indexOfFirst {
+            it is EpisodeWindowItem.Episode && it.index == pending.jumpTo
+        }
+        if (targetPosition >= 0) {
+            listState.scrollToItem(targetPosition)
+            withFrameNanos { }
+            val requester = if (gapPosition >= 0) {
+                if (pending.side == EpisodeWindowItem.Side.PREVIOUS) previousGapFocus else nextGapFocus
+            } else episodeFocus[pending.jumpTo]
+            requester?.requestFocus()
+        }
+        pendingGap = null
+    }
     LazyRow(
         modifier = modifier.fillMaxWidth().graphicsLayer { clip = false },
+        state = listState,
         contentPadding = PaddingValues(horizontal = 2.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (windowStart > 0) item(key = "episode_start") {
-            EpisodeWindowText("${episodes.first().episodeNumber}", 14,
-                surfaceColors = surfaceColors, onClick = { onEpisode(0) })
-            if (windowStart > 1) EpisodeWindowText("…", 18, surfaceColors = surfaceColors,
-                onClick = { onEpisode((selected - 3).coerceAtLeast(0)) }, repeatOnHold = true)
-        } else if (windowStart == 0 && selected > 0) {
-            item(key = "episode_previous") {
-                EpisodeWindowText("…", 18, surfaceColors = surfaceColors,
-                    onClick = { onEpisode((selected - 3).coerceAtLeast(0)) }, repeatOnHold = true)
-            }
-        }
-        itemsIndexed(episodes.subList(windowStart, windowEnd),
-            key = { index, episode -> "episode:${windowStart + index}:${episode.id}" }) { localIndex, episode ->
-            val index = windowStart + localIndex
-            EpisodeWindowText(
-                text = "${episode.episodeNumber}",
-                fontSize = if (index == selected) 28 else 17,
-                selected = index == selected,
-                surfaceColors = surfaceColors,
-                onClick = { onEpisode(index) },
-            )
-        }
-        if (windowEnd < episodes.size) item(key = "episode_end") {
-            if (episodes.lastIndex - windowEnd > 0) EpisodeWindowText("…", 18,
-                surfaceColors = surfaceColors,
-                onClick = { onEpisode((selected + 3).coerceAtMost(episodes.lastIndex)) }, repeatOnHold = true)
-            EpisodeWindowText("${episodes.last().episodeNumber}", 14,
-                surfaceColors = surfaceColors, onClick = { onEpisode(episodes.lastIndex) })
-        } else if (windowEnd == episodes.size && selected < episodes.lastIndex) {
-            item(key = "episode_next") {
-                EpisodeWindowText("…", 18, surfaceColors = surfaceColors,
-                    onClick = { onEpisode((selected + 3).coerceAtMost(episodes.lastIndex)) }, repeatOnHold = true)
+        items(window, key = { item -> when (item) {
+            is EpisodeWindowItem.Episode -> "episode:${item.index}"
+            is EpisodeWindowItem.Gap -> "gap:${item.side}"
+        } }) { item ->
+            when (item) {
+                is EpisodeWindowItem.Episode -> EpisodeWindowText(
+                    text = "${episodes[item.index].episodeNumber}",
+                    fontSize = if (item.index == selected) 28 else 17,
+                    selected = item.index == selected,
+                    surfaceColors = surfaceColors,
+                    onClick = { onEpisode(item.index) },
+                    modifier = Modifier.focusRequester(
+                        episodeFocus.getOrPut(item.index) { FocusRequester() }),
+                )
+                is EpisodeWindowItem.Gap -> EpisodeWindowText("…", 18,
+                    surfaceColors = surfaceColors,
+                    onClick = { pendingGap = item; onEpisode(item.jumpTo) },
+                    repeatOnHold = true,
+                    modifier = Modifier.focusRequester(
+                        if (item.side == EpisodeWindowItem.Side.PREVIOUS) previousGapFocus else nextGapFocus))
             }
         }
     }

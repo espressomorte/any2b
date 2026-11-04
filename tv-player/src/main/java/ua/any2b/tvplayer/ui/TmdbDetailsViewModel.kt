@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import ua.any2b.core.tmdb.TmdbDetails
 import ua.any2b.core.tmdb.TmdbFailure
+import ua.any2b.core.tmdb.TmdbGeneralCatalog
 import ua.any2b.core.tmdb.TmdbMediaType
 import ua.any2b.core.tmdb.TmdbTitle
 import ua.any2b.tvplayer.data.TmdbSearchHistoryStore
@@ -48,6 +49,7 @@ class TmdbDetailsViewModel(application: Application) : AndroidViewModel(applicat
     val anitubeState = anitubeController.state
     val aniListAvailability = anitubeController.aniListAvailability
     private var loadedKey: Pair<TmdbMediaType, Int>? = null
+    private var torrentsOnly = false
     private var loadJob: Job? = null
     private var relatedJob: Job? = null
     private var englishTitleJob: Job? = null
@@ -82,6 +84,7 @@ class TmdbDetailsViewModel(application: Application) : AndroidViewModel(applicat
             val connection = workerTmdbConnection(getApplication())
                 ?: throw TmdbFailure.MissingToken()
             val titles = connection.client.related(title.type, title.id, connection.accessKey)
+                .let { if (torrentsOnly) it.filter(TmdbGeneralCatalog::accepts) else it }
             val ready = _state.value as? TmdbDetailsState.Ready ?: return
             if (ready.details.title.id == title.id && ready.details.title.type == title.type)
                 _state.value = ready.copy(related = TmdbRelatedState.Results(titles))
@@ -99,25 +102,28 @@ class TmdbDetailsViewModel(application: Application) : AndroidViewModel(applicat
 
     fun load(
         type: TmdbMediaType, id: Int, query: String, preferredTitle: String?,
-        originalLanguage: String?, originalTitle: String?, force: Boolean = false,
+        originalLanguage: String?, originalTitle: String?, torrentsOnly: Boolean = false,
+        force: Boolean = false,
     ) {
         val key = type to id
         if (!force && loadedKey == key) return
         loadedKey = key
+        this.torrentsOnly = torrentsOnly
         loadJob?.cancel()
         relatedJob?.cancel()
         englishTitleJob?.cancel()
         _state.value = TmdbDetailsState.Loading
-        anitubeController.start(type, id, season = null,
-            names = listOfNotNull(preferredTitle, query, originalTitle),
-            format = if (type == TmdbMediaType.MOVIE) "MOVIE" else "TV",
-            resumeProgress = watchHistory.episodeProgress(type, id))
+        if (torrentsOnly) anitubeController.cancel() else
+            anitubeController.start(type, id, season = null,
+                names = listOfNotNull(preferredTitle, query, originalTitle),
+                format = if (type == TmdbMediaType.MOVIE) "MOVIE" else "TV",
+                resumeProgress = watchHistory.episodeProgress(type, id))
         loadJob = viewModelScope.launch {
             try {
                 val connection = workerTmdbConnection(getApplication())
                     ?: throw TmdbFailure.MissingToken()
                 val details = connection.client.details(type, id, connection.accessKey)
-                anitubeController.addNames(listOfNotNull(details.title.ukrainianTitle,
+                if (!torrentsOnly) anitubeController.addNames(listOfNotNull(details.title.ukrainianTitle,
                     details.title.title, details.title.englishTitle, details.title.originalTitle) +
                     details.alternativeTitles)
                 val preferredLocale = when {
@@ -154,7 +160,7 @@ class TmdbDetailsViewModel(application: Application) : AndroidViewModel(applicat
                                     english.alternativeTitles).distinctBy { it.lowercase() },
                             )
                             _state.value = ready.copy(details = enriched)
-                            anitubeController.addNames(listOfNotNull(enriched.title.ukrainianTitle,
+                            if (!torrentsOnly) anitubeController.addNames(listOfNotNull(enriched.title.ukrainianTitle,
                                 enriched.title.title, enriched.title.englishTitle,
                                 enriched.title.originalTitle) + enriched.alternativeTitles)
                         }
@@ -175,6 +181,7 @@ class TmdbDetailsViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun setPanel(panel: Panel) {
+        if (torrentsOnly && panel == Panel.ONLINE) return
         val ready = _state.value as? TmdbDetailsState.Ready ?: return
         if (panel == Panel.ONLINE && anitubeController.aniListAvailability.value in
             setOf(AniListAvailability.CHECKING, AniListAvailability.MISSING)) return
@@ -197,7 +204,8 @@ class TmdbDetailsViewModel(application: Application) : AndroidViewModel(applicat
 
     fun playAnitube(
         onError: (String) -> Unit,
-        onSuccess: (String, Int, Int, Int, Float) -> Unit,
+        onSuccess: (String, Int, Int, Int, Float,
+            List<ua.any2b.tvplayer.data.AnitubeStreamFallback>) -> Unit,
     ) = anitubeController.resolveSelectedStream(onError, onSuccess)
 
     override fun onCleared() {

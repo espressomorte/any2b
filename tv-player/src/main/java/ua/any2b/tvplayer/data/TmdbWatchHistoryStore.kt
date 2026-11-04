@@ -34,6 +34,7 @@ class TmdbWatchHistoryStore(context: Context) {
                     put("year", item.year)
                     put("posterUrl", item.posterUrl)
                     put("rating", item.rating)
+                    put("genreIds", JSONArray(item.genreIds.sorted()))
                 })
             }
         }.toString()).apply()
@@ -91,7 +92,10 @@ class TmdbWatchHistoryStore(context: Context) {
                 item.optInt("year").takeIf { it > 0 },
                 item.optString("posterUrl").takeUnless { it.isBlank() || it == "null" },
                 null,
-                item.optDouble("rating", Double.NaN).takeIf(Double::isFinite))
+                item.optDouble("rating", Double.NaN).takeIf(Double::isFinite),
+                genreIds = item.optJSONArray("genreIds")?.let { genres ->
+                    (0 until genres.length()).map { genres.optInt(it) }.filter { it > 0 }.toSet()
+                }.orEmpty())
         }
     } catch (_: Exception) {
         emptyList()

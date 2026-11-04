@@ -1,6 +1,5 @@
 package ua.any2b.tvplayer
 
-import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -15,17 +14,15 @@ class TmdbListActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        viewModel.open(intent.getStringExtra(EXTRA_CATEGORY).orEmpty())
+        val generalCatalog = intent.getBooleanExtra(EXTRA_GENERAL_CATALOG, false)
+        viewModel.open(intent.getStringExtra(EXTRA_CATEGORY).orEmpty(), generalCatalog)
         setContent {
             AppTheme {
                 TmdbListScreen(viewModel.state.collectAsStateWithLifecycle().value,
                     onOpen = { title ->
-                        startActivity(Intent(this, TmdbDetailsActivity::class.java).apply {
-                            putExtra(TmdbDetailsActivity.EXTRA_TMDB_ID, title.id)
-                            putExtra(TmdbDetailsActivity.EXTRA_TMDB_TYPE, title.type.path)
-                            if (intent.getStringExtra(EXTRA_CATEGORY) == "favorites")
-                                putExtra(TmdbDetailsActivity.EXTRA_FAVORITES_LAYOUT, true)
-                        })
+                        startActivity(TvNavigation.details(this, title,
+                            favoritesLayout = intent.getStringExtra(EXTRA_CATEGORY) == "favorites",
+                            torrentsOnly = generalCatalog))
                     },
                     onSort = viewModel::changeSort,
                     onYearRange = viewModel::changeYearRange,
@@ -41,5 +38,8 @@ class TmdbListActivity : ComponentActivity() {
         viewModel.refreshPersonalList()
     }
 
-    companion object { const val EXTRA_CATEGORY = "category" }
+    companion object {
+        const val EXTRA_CATEGORY = "category"
+        const val EXTRA_GENERAL_CATALOG = "general_catalog"
+    }
 }

@@ -72,7 +72,13 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
                     onClick = onOpenAllTmdb)
                 Spacer(Modifier.width(12.dp))
                 HomeActionButton(FaIcons.COG, "Налаштування", onClick = onSettings)
-            } else OutlinedButton(onClick = onBack) { Text("Назад") }
+            } else {
+                HomeActionButton(FaIcons.SEARCH_PLUS, "Пошук тайтла через TMDB", onClick = onSearchTitle)
+                Spacer(Modifier.width(12.dp))
+                HomeActionButton(FaIcons.COG, "Налаштування", onClick = onSettings)
+                Spacer(Modifier.width(12.dp))
+                OutlinedButton(onClick = onBack) { Text("Назад") }
+            }
         }
         LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(24.dp),
             contentPadding = PaddingValues(bottom = 32.dp)) {

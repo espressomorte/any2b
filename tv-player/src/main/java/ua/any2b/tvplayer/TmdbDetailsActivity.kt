@@ -42,6 +42,7 @@ class TmdbDetailsActivity : ComponentActivity() {
         const val EXTRA_ORIGINAL_LANGUAGE = "ORIGINAL_LANGUAGE"
         const val EXTRA_ORIGINAL_TITLE = "ORIGINAL_TITLE"
         const val EXTRA_FAVORITES_LAYOUT = "FAVORITES_LAYOUT"
+        const val EXTRA_TORRENTS_ONLY = "TORRENTS_ONLY"
     }
 
     private val detailsViewModel: TmdbDetailsViewModel by viewModels()
@@ -70,8 +71,10 @@ class TmdbDetailsActivity : ComponentActivity() {
         val originalLanguage = intent.getStringExtra(EXTRA_ORIGINAL_LANGUAGE)
         val originalTitle = intent.getStringExtra(EXTRA_ORIGINAL_TITLE)
         val favoritesLayout = intent.getBooleanExtra(EXTRA_FAVORITES_LAYOUT, false)
+        val torrentsOnly = intent.getBooleanExtra(EXTRA_TORRENTS_ONLY, false)
         val experimental = SettingsManager(this).isExperimentalAppearanceEnabled()
-        detailsViewModel.load(type, id, query, preferredTitle, originalLanguage, originalTitle)
+        detailsViewModel.load(type, id, query, preferredTitle, originalLanguage, originalTitle,
+            torrentsOnly = torrentsOnly)
         setContent {
             AppTheme {
                 val artworkState = artworkViewModel.state.collectAsStateWithLifecycle().value
@@ -115,6 +118,7 @@ class TmdbDetailsActivity : ComponentActivity() {
                 TmdbDetailsScreen(
                     state = detailsState,
                     favoritesLayout = favoritesLayout,
+                    torrentsOnly = torrentsOnly,
                     experimentalPalette = activePalette,
                     experimentalArtwork = if (experimental) tmdbArtwork else null,
                     fanartNotice = null,
@@ -125,7 +129,7 @@ class TmdbDetailsActivity : ComponentActivity() {
                     openedFiles = openedFiles,
                     onRetryDetails = {
                         detailsViewModel.load(type, id, query, preferredTitle,
-                            originalLanguage, originalTitle, force = true)
+                            originalLanguage, originalTitle, torrentsOnly = torrentsOnly, force = true)
                     },
                     onSearchTorrent = { query ->
                         val details = (detailsViewModel.state.value as? TmdbDetailsState.Ready)?.details
@@ -162,10 +166,7 @@ class TmdbDetailsActivity : ComponentActivity() {
                     },
                     onRetryRelated = detailsViewModel::retryRelated,
                     onOpenRelated = { related ->
-                        startActivity(Intent(this, TmdbDetailsActivity::class.java).apply {
-                            putExtra(EXTRA_TMDB_ID, related.id)
-                            putExtra(EXTRA_TMDB_TYPE, related.type.path)
-                        })
+                        startActivity(TvNavigation.details(this, related, torrentsOnly = torrentsOnly))
                     },
                     onBack = ::finish,
                 )
@@ -250,6 +251,7 @@ class TmdbDetailsActivity : ComponentActivity() {
                     putExtra(PlayerActivity.EXTRA_TMDB_YEAR, it.year ?: 0)
                     putExtra(PlayerActivity.EXTRA_TMDB_POSTER_URL, it.posterUrl)
                     putExtra(PlayerActivity.EXTRA_TMDB_RATING, it.rating ?: Double.NaN)
+                    putExtra(PlayerActivity.EXTRA_TMDB_GENRE_IDS, it.genreIds.toIntArray())
                 }
             })
             tolokaViewModel.reportPlaybackStatus("URL передано вбудованому плеєру")
@@ -265,7 +267,7 @@ class TmdbDetailsActivity : ComponentActivity() {
             ?: return
         detailsViewModel.playAnitube(
             onError = { message -> Toast.makeText(this, message, Toast.LENGTH_LONG).show() },
-            onSuccess = { url, voiceIndex, episodeIndex, episodeNumber, resumeProgress ->
+            onSuccess = { url, voiceIndex, episodeIndex, episodeNumber, resumeProgress, backups ->
                 returningFromAnitubePlayer = true
                 startActivity(Intent(this, PlayerActivity::class.java).apply {
                     putExtra(PlayerActivity.EXTRA_STREAM_URL, url)
@@ -273,7 +275,6 @@ class TmdbDetailsActivity : ComponentActivity() {
                     putExtra(PlayerActivity.EXTRA_VOICE_INDEX, voiceIndex)
                     putExtra(PlayerActivity.EXTRA_EPISODE_INDEX, episodeIndex)
                     putExtra(PlayerActivity.EXTRA_EPISODE_NUMBER, episodeNumber)
-                    putExtra(PlayerActivity.EXTRA_IS_MOVIE, title.type == TmdbMediaType.MOVIE)
                     putExtra(PlayerActivity.EXTRA_TMDB_ID, title.id)
                     putExtra(PlayerActivity.EXTRA_TMDB_TYPE, title.type.path)
                     putExtra(PlayerActivity.EXTRA_TMDB_TITLE, title.title)
@@ -281,7 +282,14 @@ class TmdbDetailsActivity : ComponentActivity() {
                     putExtra(PlayerActivity.EXTRA_TMDB_YEAR, title.year ?: 0)
                     putExtra(PlayerActivity.EXTRA_TMDB_POSTER_URL, title.posterUrl)
                     putExtra(PlayerActivity.EXTRA_TMDB_RATING, title.rating ?: Double.NaN)
+                    putExtra(PlayerActivity.EXTRA_TMDB_GENRE_IDS, title.genreIds.toIntArray())
                     putExtra(PlayerActivity.EXTRA_TMDB_RESUME_PROGRESS, resumeProgress)
+                    putStringArrayListExtra(PlayerActivity.EXTRA_BACKUP_EMBED_URLS,
+                        ArrayList(backups.map { it.embedUrl }))
+                    putExtra(PlayerActivity.EXTRA_BACKUP_VOICE_INDICES,
+                        backups.map { it.voiceIndex }.toIntArray())
+                    putExtra(PlayerActivity.EXTRA_BACKUP_EPISODE_INDICES,
+                        backups.map { it.episodeIndex }.toIntArray())
                 })
             },
         )
