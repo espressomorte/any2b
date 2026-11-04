@@ -87,6 +87,25 @@ class TmdbClientTest {
     }
 
     @Test
+    fun generalCatalogExcludesGenresInDiscoverAndResults() = runBlocking {
+        val requests = mutableListOf<Request>()
+        val client = client { request ->
+            requests += request
+            fixture(request, 200, """{"page":1,"total_pages":2,"results":[
+                {"id":1,"name":"Драма","genre_ids":[18]},
+                {"id":2,"name":"Анімація","genre_ids":[16]},
+                {"id":3,"name":"Документальний","genre_ids":[99]},
+                {"id":4,"name":"Ток шоу","genre_ids":[10767]}]}""")
+        }
+        val page = client.listPage(TmdbMediaType.TV, "key", TmdbListSort.POPULARITY, 1,
+            excludedGenreIds = TmdbGeneralCatalog.excludedGenreIds)
+        assertEquals("/3/discover/tv", requests.single().url.encodedPath)
+        assertEquals("16|99|10767", requests.single().url.queryParameter("without_genres"))
+        assertEquals(listOf(1), page.titles.map { it.id })
+        assertTrue(page.hasMore)
+    }
+
+    @Test
     fun listPagesUseServerSideSortAndPreservePagination() = runBlocking {
         val requests = mutableListOf<Request>()
         val client = client { request ->
@@ -200,13 +219,13 @@ class TmdbClientTest {
                     "first_air_date":"2013-04-07","overview":"Український опис",
                     "origin_country":["JP","US","JP"],
                     "alternative_titles":{"results":[{"title":"Синонім серіалу"}]},
-                    "genres":[{"name":"Драма"}],"number_of_seasons":4,"number_of_episodes":87,
+                    "genres":[{"id":18,"name":"Драма"}],"number_of_seasons":4,"number_of_episodes":87,
                     "episode_run_time":[24],"seasons":[
                       {"season_number":1,"name":"Сезон 1","air_date":"2013-04-07"},
                       {"season_number":2,"name":"Сезон 2","air_date":"2017-04-01"}]}"""
             } else {
                 """{"id":157336,"title":"Інтерстеллар","release_date":"2014-11-04",
-                    "runtime":169,"genres":[{"name":"Пригоди"}],
+                    "runtime":169,"genres":[{"id":12,"name":"Пригоди"}],
                     "production_countries":[{"iso_3166_1":"US"},{"iso_3166_1":"GB"},
                         {"iso_3166_1":"US"}],
                     "alternative_titles":{"titles":[{"title":"Інша назва"},
@@ -227,6 +246,8 @@ class TmdbClientTest {
         assertEquals("https://image.tmdb.org/t/p/w500/ja-logo.png", series.logoUrl)
         assertEquals("https://image.tmdb.org/t/p/w780/en-movie.jpg", movie.title.posterUrl)
         assertEquals("Український опис", series.title.overview)
+        assertEquals(setOf(18), series.title.genreIds)
+        assertEquals(setOf(12), movie.title.genreIds)
         assertEquals(4, series.seasons)
         assertEquals(87, series.episodes)
         assertEquals(24, series.runtimeMinutes)

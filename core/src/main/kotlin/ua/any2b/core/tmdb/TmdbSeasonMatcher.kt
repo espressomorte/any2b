@@ -1,14 +1,15 @@
 package ua.any2b.core.tmdb
 
 import ua.any2b.core.anilist.AnimeDetails
+import ua.any2b.core.matcher.TitleNormalization
 
 /** TMDB may store an AniList sequel as a later season of a series with an older start year. */
 object TmdbSeasonMatcher {
     fun shouldInspect(anime: AnimeDetails, candidate: TmdbTitle): Boolean {
         if (candidate.type != TmdbMediaType.TV || candidate.year == anime.seasonYear) return false
         val animeTitle = anime.title.english ?: anime.title.romaji ?: return false
-        val base = normalize(animeTitle.replace(sequelNumber, ""))
-        val candidateTitle = normalize(candidate.englishTitle ?: candidate.title)
+        val base = TitleNormalization.unicodeWords(animeTitle.replace(sequelNumber, ""))
+        val candidateTitle = TitleNormalization.unicodeWords(candidate.englishTitle ?: candidate.title)
         return base.length >= 5 && base == candidateTitle
     }
 
@@ -26,6 +27,4 @@ object TmdbSeasonMatcher {
     }
 
     private val sequelNumber = Regex("(?i)(?:season\\s*)?(\\d{1,2})\\s*$")
-    private fun normalize(value: String): String = value.lowercase()
-        .replace(Regex("[^\\p{L}\\p{N}]+"), " ").trim()
 }

@@ -1,7 +1,8 @@
 package ua.any2b.core.tmdb
 
-import kotlin.math.abs
 import ua.any2b.core.anilist.AnimeDetails
+import ua.any2b.core.matcher.MetadataDistance
+import ua.any2b.core.matcher.TitleNormalization
 
 data class TmdbMatch(val title: TmdbTitle, val score: Double, val titleSimilarity: Double)
 
@@ -11,7 +12,7 @@ object AniListTmdbMatcher {
         val expectedType = if (anime.format.equals("MOVIE", ignoreCase = true))
             TmdbMediaType.MOVIE else TmdbMediaType.TV
         val names = (listOf(anime.title.english, anime.title.romaji, anime.title.native) +
-            anime.synonyms).filterNotNull().map(::normalize).filter(String::isNotBlank)
+            anime.synonyms).filterNotNull().map(TitleNormalization::latinCyrillic).filter(String::isNotBlank)
         return results.asSequence()
             .filter { it.type == expectedType }
             .map { candidate ->
@@ -19,12 +20,14 @@ object AniListTmdbMatcher {
                     candidate.ukrainianTitle, candidate.originalTitle,
                     candidate.matchedSeasonTitle).filterNotNull()
                 val similarity = names.maxOfOrNull { source ->
-                    candidateNames.maxOfOrNull { name -> similar(source, normalize(name)) } ?: 0.0
+                    candidateNames.maxOfOrNull { name ->
+                        similar(source, TitleNormalization.latinCyrillic(name))
+                    } ?: 0.0
                 } ?: 0.0
                 var score = similarity * 4 + 2 // Matching TV/movie type.
                 val effectiveYear = candidate.matchedSeasonYear ?: candidate.year
                 if (anime.seasonYear != null && effectiveYear != null) {
-                    score += when (abs(anime.seasonYear - effectiveYear)) {
+                    score += when (MetadataDistance.between(anime.seasonYear, effectiveYear)) {
                         0 -> 3.0
                         1 -> 1.0
                         else -> -3.0
@@ -48,10 +51,6 @@ object AniListTmdbMatcher {
         if (matches.getOrNull(1)?.let { first.score - it.score < 2 } == true) return null
         return first.title
     }
-
-    private fun normalize(text: String): String = text.lowercase()
-        .replace(Regex("[^a-z0-9а-яіїєґ ]"), " ")
-        .replace(Regex("\\s+"), " ").trim()
 
     private fun similar(first: String, second: String): Double {
         if (first.isBlank() || second.isBlank()) return 0.0

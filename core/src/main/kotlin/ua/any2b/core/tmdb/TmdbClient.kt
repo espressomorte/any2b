@@ -105,20 +105,24 @@ class TmdbClient(
         .build(),
     private val baseUrl: HttpUrl = "https://api.themoviedb.org/3/".toHttpUrl(),
 ) {
-    suspend fun popular(type: TmdbMediaType, token: String, genreId: Int? = null): List<TmdbTitle> =
-        listPage(type, token, TmdbListSort.POPULARITY, 1, genreId).titles
+    suspend fun popular(type: TmdbMediaType, token: String, genreId: Int? = null,
+        excludedGenreIds: Set<Int> = emptySet()): List<TmdbTitle> =
+        listPage(type, token, TmdbListSort.POPULARITY, 1, genreId,
+            excludedGenreIds = excludedGenreIds).titles
 
     suspend fun listPage(type: TmdbMediaType, token: String, sort: TmdbListSort, page: Int,
         genreId: Int? = null, yearRange: IntRange? = null,
-        yearAscending: Boolean = false): TmdbPage {
+        yearAscending: Boolean = false, excludedGenreIds: Set<Int> = emptySet()): TmdbPage {
         require(page in 1..500)
         require(genreId == null || genreId > 0)
+        require(excludedGenreIds.all { it > 0 })
         val currentDate = java.util.Calendar.getInstance()
         val currentYear = currentDate.get(java.util.Calendar.YEAR)
         require(yearRange == null || yearRange.first in 1920..currentYear &&
             yearRange.last in yearRange.first..currentYear)
         val years = yearRange ?: if (sort == TmdbListSort.YEAR) 1920..currentYear else null
-        val json = if (sort == TmdbListSort.POPULARITY && genreId == null && years == null) {
+        val json = if (sort == TmdbListSort.POPULARITY && genreId == null && years == null &&
+            excludedGenreIds.isEmpty()) {
             request(listOf(type.path, "popular"), token, "uk-UA", "page" to page.toString())
         } else {
             val sortBy = when (sort) {
@@ -133,6 +137,8 @@ class TmdbClient(
                 add("sort_by" to sortBy)
                 if (sort == TmdbListSort.RATING) add("vote_count.gte" to "100")
                 genreId?.let { add("with_genres" to it.toString()) }
+                if (excludedGenreIds.isNotEmpty()) add("without_genres" to
+                    excludedGenreIds.sorted().joinToString("|"))
                 if (genreId != null && type == TmdbMediaType.MOVIE)
                     add("with_runtime.gte" to "60")
                 years?.let { range ->
@@ -150,7 +156,8 @@ class TmdbClient(
             request(listOf("discover", type.path), token, "uk-UA", *parameters.toTypedArray())
         }
         return TmdbPage(parseList(json, type, "uk-UA")
-            .filter { genreId == null || genreId in it.genreIds }, page,
+            .filter { (genreId == null || genreId in it.genreIds) &&
+                it.genreIds.none { genre -> genre in excludedGenreIds } }, page,
             json.optInt("total_pages", page).coerceIn(page, 500))
     }
 
@@ -373,7 +380,10 @@ private fun JSONObject.toTitle(type: TmdbMediaType, language: String): TmdbTitle
         originalLanguage = optionalString("original_language"),
         genreIds = optJSONArray("genre_ids")?.let { array ->
             (0 until array.length()).map { array.optInt(it) }.filter { it > 0 }.toSet()
-        }.orEmpty(),
+        } ?: optJSONArray("genres")?.let { array ->
+            (0 until array.length()).map { array.optJSONObject(it)?.optInt("id") ?: 0 }
+                .filter { it > 0 }.toSet()
+        } ?: emptySet(),
         originCountries = optJSONArray("origin_country")?.let { array ->
             (0 until array.length()).mapNotNull { array.optString(it).takeIf(String::isNotBlank) }.toSet()
         }.orEmpty(),

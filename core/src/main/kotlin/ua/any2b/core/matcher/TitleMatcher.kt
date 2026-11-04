@@ -3,7 +3,6 @@ package ua.any2b.core.matcher
 import ua.any2b.core.anilist.AnimeDetails
 import ua.any2b.core.anilist.Title
 import ua.any2b.core.anitube.AnitubeSearchResult
-import kotlin.math.abs
 import kotlin.math.max
 
 data class MatchResult(
@@ -54,17 +53,21 @@ object TitleMatcher {
         }.filter { it.second.isNotBlank() }
 
         return candidates.map { candidate ->
-            val normalizedCandidate = normalize(candidate.title)
+            val normalizedCandidate = TitleNormalization.latinCyrillic(candidate.title,
+                removeBracketedContent = true)
             val bestTitle = searchNames.maxByOrNull { (_, name) ->
-                calculateSimilarity(normalize(name), normalizedCandidate)
+                calculateSimilarity(TitleNormalization.latinCyrillic(name,
+                    removeBracketedContent = true), normalizedCandidate)
             }
-            val titleSimilarity = bestTitle?.let { calculateSimilarity(normalize(it.second), normalizedCandidate) } ?: 0.0
+            val titleSimilarity = bestTitle?.let { calculateSimilarity(
+                TitleNormalization.latinCyrillic(it.second, removeBracketedContent = true), normalizedCandidate
+            ) } ?: 0.0
             var score = titleSimilarity * 4.0
             var metadataMatches = 0
             var conflictingMetadata = false
 
             if (year != null && candidate.year != null) {
-                when (abs(year - candidate.year)) {
+                when (MetadataDistance.between(year, candidate.year)) {
                     0 -> { score += 3.0; metadataMatches++ }
                     1 -> { score += 1.0; metadataMatches++ }
                     else -> conflictingMetadata = true
@@ -72,7 +75,7 @@ object TitleMatcher {
             }
 
             if (durationMinutes != null && candidate.durationMinutes != null) {
-                val difference = abs(durationMinutes - candidate.durationMinutes)
+                val difference = MetadataDistance.between(durationMinutes, candidate.durationMinutes)
                 when {
                     difference <= 5 -> { score += 2.0; metadataMatches++ }
                     difference >= max(10, durationMinutes / 2) -> {
@@ -109,14 +112,6 @@ object TitleMatcher {
                 titleSimilarity, metadataMatches, conflictingMetadata)
         }.sortedWith(compareByDescending<MatchResult> { it.score }.thenBy { it.result.newsId })
     }
-
-    private fun normalize(value: String): String =
-        value.lowercase()
-            .replace(Regex("""\(.*?\)"""), " ")
-            .replace(Regex("""\[.*?\]"""), " ")
-            .replace(Regex("""[^a-z0-9а-яіїєґ ]"""), " ")
-            .replace(Regex("""\s+"""), " ")
-            .trim()
 
     private fun calculateSimilarity(first: String, second: String): Double {
         if (first.isEmpty() || second.isEmpty()) return 0.0

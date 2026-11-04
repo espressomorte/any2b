@@ -12,7 +12,6 @@ import ua.any2b.core.anitube.AnitubeClient
 import ua.any2b.core.anitube.AnitubeSearchResult
 import ua.any2b.core.extractor.StreamResolver
 import ua.any2b.core.matcher.TitleMatcher
-import ua.any2b.core.matcher.SeriesTitleSearch
 import ua.any2b.core.tmdb.FribbMappings
 import ua.any2b.core.tmdb.TmdbClient
 import ua.any2b.core.tmdb.TmdbTitle
@@ -24,11 +23,12 @@ import java.nio.file.Path
 import java.nio.charset.StandardCharsets
 import java.nio.file.StandardCopyOption
 import java.util.Properties
-import kotlin.random.Random
 import java.util.concurrent.TimeUnit
 
-fun main(args: Array<String>) = runBlocking {
-    val command = args.firstOrNull()?.lowercase() ?: "menu"
+fun main(rawArgs: Array<String>) = runBlocking {
+    val parsed = CliArguments.parse(rawArgs)
+    val command = parsed.command
+    val args = listOf(command) + parsed.values
 
     when (command) {
         "tmdb-movie" -> {
@@ -116,120 +116,15 @@ fun main(args: Array<String>) = runBlocking {
         }
 
         "map-anitube" -> {
-            val input = Path.of(args.getOrNull(1)?.takeIf(String::isNotBlank) ?: "../parseSearchResults.json")
-            val output = Path.of(args.getOrNull(2)?.takeIf(String::isNotBlank) ?: "../anilistTmbdbAnitube.json")
-            val limit = args.getOrNull(3)?.toIntOrNull() ?: 0
-            val seed = args.getOrNull(4)?.toLongOrNull() ?: 20261103L
-            require(limit >= 0) { "Ліміт має бути нульовим (весь каталог) або додатним" }
-            val catalog = readCatalog(input)
-            require(catalog.isNotEmpty()) { "Каталог не знайдений або порожній: ${input.toAbsolutePath()}" }
-            val sample = if (limit == 0 || limit >= catalog.size) catalog else
-                catalog.shuffled(Random(seed)).take(limit)
-            val token = System.getenv("TMDB_TOKEN")?.trim()?.takeIf(String::isNotBlank)
-                ?: localTmdbToken()
-                ?: error("Вкажіть tmdb.token у local.properties або TMDB_TOKEN у середовищі")
-            val outputFile = output.toAbsolutePath()
-            val priorItems = if (limit == 0) readMappingItems(outputFile) else emptyList()
-            val json = AniTubeMappingGenerator(token).generate(
-                sample, sourceCount = catalog.size, sampleSeed = seed.takeIf { sample.size < catalog.size },
-                existingItems = priorItems,
-                onCheckpoint = { checkpoint -> writeJsonAtomically(outputFile, checkpoint.toString(2) + "\n") },
-            )
-            writeJsonAtomically(outputFile, json.toString(2) + "\n")
-            println("Збережено ${json.getJSONArray("items").length()} записів у $outputFile")
+            AniTubeMappingCommands.generate(args)
         }
 
         "reanalyze-anitube" -> {
-            val catalogFile = Path.of(args.getOrNull(1)?.takeIf(String::isNotBlank) ?: "parseSearchResults.json").toAbsolutePath()
-            val reviewedFile = Path.of(args.getOrNull(2)?.takeIf(String::isNotBlank)
-                ?: "anilistTmbdbAnitube-reviewed.json").toAbsolutePath()
-            val outputFile = Path.of(args.getOrNull(3)?.takeIf(String::isNotBlank)
-                ?: "anilistTmbdbAnitube-reworked.json").toAbsolutePath()
-            require(outputFile != reviewedFile && outputFile != catalogFile) {
-                "Файл результату має відрізнятися від вхідного каталогу та експорту перевірки"
-            }
-            val catalog = readCatalog(catalogFile).associateBy { it.newsId }
-            require(catalog.isNotEmpty()) { "Каталог не знайдений або порожній: $catalogFile" }
-            val reviewedJson = JSONObject(Files.readString(reviewedFile, StandardCharsets.UTF_8))
-            val reviewedRows = reviewedJson.optJSONArray("items")
-                ?: error("У файлі перевірки немає масиву items: $reviewedFile")
-            val originalItems = (0 until reviewedRows.length()).mapNotNull { reviewedRows.optJSONObject(it) }
-            val rowsToReanalyze = originalItems.filter { row ->
-                val review = row.optJSONObject("userReview")
-                review?.optString("comment")?.isNotBlank() == true ||
-                    confirmedSnapshots(review).isNotEmpty()
-            }
-            require(rowsToReanalyze.isNotEmpty()) {
-                "Не знайдено записів із коментарями або ручним підтвердженням у $reviewedFile"
-            }
-            val sourcesToReanalyze = rowsToReanalyze.mapNotNull { row -> catalog[row.optInt("newsId")] }
-            require(sourcesToReanalyze.isNotEmpty()) {
-                "У вихідному каталозі немає записів для коментарів із $reviewedFile"
-            }
-            val reviewHints = rowsToReanalyze.associate { row ->
-                val review = row.getJSONObject("userReview")
-                val comment = review.optString("comment")
-                val confirmedLinks = confirmedSnapshots(review).mapNotNull { it.optInt("anilistId").takeIf { id -> id > 0 } }
-                    .distinct().joinToString(" ") { "https://anilist.co/anime/$it/" }
-                val hint = comment.takeIf(String::isNotBlank)
-                    ?: confirmedLinks
-                row.optInt("newsId") to hint
-            }
-            val token = System.getenv("TMDB_TOKEN")?.trim()?.takeIf(String::isNotBlank)
-                ?: localTmdbToken()
-                ?: error("Вкажіть tmdb.token у local.properties або TMDB_TOKEN у середовищі")
-            val originalById = originalItems.associateBy { it.optInt("newsId") }
-            val reanalyzedIds = sourcesToReanalyze.mapTo(mutableSetOf()) { it.newsId }
-            println("Повторно аналізую ${sourcesToReanalyze.size} записів із коментарями або ручним підтвердженням")
-            val generator = AniTubeMappingGenerator(token)
-            val json = generator.generate(
-                sourcesToReanalyze,
-                sourceCount = sourcesToReanalyze.size,
-                sampleSeed = null,
-                reviewHints = reviewHints,
-                onCheckpoint = { checkpoint ->
-                    writeReanalysisOutput(outputFile, reviewedJson, originalItems, originalById,
-                        reanalyzedIds, checkpoint)
-                },
-            )
-            writeReanalysisOutput(outputFile, reviewedJson, originalItems, originalById,
-                reanalyzedIds, json)
-            println("Збережено результат у $outputFile")
+            AniTubeMappingCommands.reanalyze(args)
         }
 
         "fuzzy-anitube" -> {
-            val script = listOf(Path.of("scripts/fuzzy_tmdb.py"), Path.of("cli/scripts/fuzzy_tmdb.py"))
-                .firstOrNull(Files::isRegularFile)?.toAbsolutePath()
-                ?: error("Не знайдений Python скрипт cli/scripts/fuzzy_tmdb.py")
-            val repoRoot = script.parent.parent.parent
-            val input = Path.of(args.getOrNull(1)?.takeIf(String::isNotBlank)
-                ?: repoRoot.resolve("anilistTmbdbAnitube-reworked.json").toString()).toAbsolutePath()
-            val output = Path.of(args.getOrNull(2)?.takeIf(String::isNotBlank)
-                ?: repoRoot.resolve("anilistTmbdbAnitube-fuzzy.json").toString()).toAbsolutePath()
-            val statuses = args.getOrNull(3)?.takeIf(String::isNotBlank) ?: "not_found,needs_review"
-            val limit = args.getOrNull(4)?.toIntOrNull() ?: 100
-            val minScore = args.getOrNull(5)?.takeIf(String::isNotBlank) ?: "42"
-            val python = args.getOrNull(6)?.takeIf(String::isNotBlank) ?: "python3"
-            require(limit >= 0) { "Ліміт має бути 0 (усі записи) або додатним" }
-            val token = System.getenv("TMDB_TOKEN")?.trim()?.takeIf(String::isNotBlank)
-                ?: localTmdbToken()
-                ?: error("Вкажіть tmdb.token у local.properties або TMDB_TOKEN у середовищі")
-            val openAiKey = System.getenv("OPENAI_API_KEY")?.trim()?.takeIf(String::isNotBlank)
-                ?: localOpenAiKey()
-            val cache = repoRoot.resolve("total-matcher/data/fuzzy-tmdb-cache.json")
-            val translationCache = repoRoot.resolve("total-matcher/data/fuzzy-title-cache.json")
-            val process = ProcessBuilder(
-                python, script.toString(),
-                "--input", input.toString(), "--output", output.toString(),
-                "--statuses", statuses, "--limit", limit.toString(),
-                "--min-score", minScore, "--cache", cache.toString(),
-                "--translation-cache", translationCache.toString(),
-            ).inheritIO().apply {
-                environment()["TMDB_TOKEN"] = token
-                openAiKey?.let { environment()["OPENAI_API_KEY"] = it }
-            }.start()
-            val exitCode = process.waitFor()
-            check(exitCode == 0) { "Fuzzy TMDB скрипт завершився з кодом $exitCode" }
+            AniTubeMappingCommands.fuzzy(args)
         }
 
         "match" -> {
@@ -322,6 +217,8 @@ fun main(args: Array<String>) = runBlocking {
                   update-anitube [json] [delayMs] - додати новини з початку каталогу
                   audit-tmdb-anilist [json] [n] [seed] - перевірити назви AniTube через TMDB і Fribb/AniList
                   map-anitube [catalog.json] [output.json] [limit] [seed] - зіставити каталог через TMDB, AniBridge і AniList
+                  reanalyze-anitube [catalog.json] [reviewed.json] [output.json] - повторний аналіз ручних перевірок
+                  fuzzy-anitube [input.json] [output.json] [statuses] [limit] [minScore] [python] - пошук TMDB з LLM назвами
                   match <romaji>       - тест зіставлення назв (TitleMatcher)
                   flow [query]         - перевірка ланцюжка для ВСІХ студій через StreamResolver
                   resolve <embedUrl>   - витягнути HLS з конкретного URL плеєра (Ashdi/Fenix)
@@ -430,7 +327,7 @@ private fun writeCatalog(file: Path, results: List<AnitubeSearchResult>) {
     }
 }
 
-private fun writeJsonAtomically(file: Path, json: String) {
+internal fun writeJsonAtomically(file: Path, json: String) {
     file.parent?.let(Files::createDirectories)
     val temp = Files.createTempFile(file.parent, "anitube-mapping-", ".json.tmp")
     try {
@@ -445,7 +342,7 @@ private fun writeJsonAtomically(file: Path, json: String) {
     }
 }
 
-private fun readCatalog(file: Path): List<AnitubeSearchResult> {
+internal fun readCatalog(file: Path): List<AnitubeSearchResult> {
     if (!Files.exists(file)) return emptyList()
     val json = JSONArray(Files.readString(file, StandardCharsets.UTF_8))
     return (0 until json.length()).mapNotNull { index ->
@@ -464,7 +361,7 @@ private fun readCatalog(file: Path): List<AnitubeSearchResult> {
     }
 }
 
-private fun readMappingItems(file: Path): List<JSONObject> {
+internal fun readMappingItems(file: Path): List<JSONObject> {
     if (!Files.isRegularFile(file)) return emptyList()
     return try {
         val rows = JSONObject(Files.readString(file, StandardCharsets.UTF_8)).optJSONArray("items")
@@ -475,7 +372,7 @@ private fun readMappingItems(file: Path): List<JSONObject> {
     }
 }
 
-private fun confirmedSnapshots(review: JSONObject?): List<JSONObject> {
+internal fun confirmedSnapshots(review: JSONObject?): List<JSONObject> {
     if (review == null) return emptyList()
     val multiple = review.optJSONArray("confirmedCandidates")
     val values = if (multiple != null) {
@@ -487,7 +384,7 @@ private fun confirmedSnapshots(review: JSONObject?): List<JSONObject> {
     }
 }
 
-private fun writeReanalysisOutput(
+internal fun writeReanalysisOutput(
     outputFile: Path,
     reviewedJson: JSONObject,
     originalItems: List<JSONObject>,
@@ -599,12 +496,6 @@ private fun sameCandidate(candidate: JSONObject, anilistId: Int?, tmdbId: Int?):
     return true
 }
 
-private data class RankedAniListCandidate(
-    val anime: ua.any2b.core.anilist.AniListAnimeLookup,
-    val titleSimilarity: Double,
-    val score: Double,
-)
-
 private suspend fun auditTmdbAniList(input: Path, sampleSize: Int, seed: Long) {
     val catalog = readCatalog(input)
     require(catalog.isNotEmpty()) { "Каталог не знайдений або порожній: ${input.toAbsolutePath()}" }
@@ -624,17 +515,17 @@ private suspend fun auditTmdbAniList(input: Path, sampleSize: Int, seed: Long) {
     var anilistClear = 0
     var complete = 0
     sample.forEachIndexed { i, item ->
-        val query = cleanAniTubeTitle(item.title)
+        val query = AniListAuditRanker.cleanAniTubeTitle(item.title)
         val candidates = aniList.searchAnimeLookups(query, 20)
-            .map { anime -> rankAniList(item, anime) }
+            .map { anime -> AniListAuditRanker.rank(item, anime) }
             .filter { it.titleSimilarity >= 0.30 }
             .sortedByDescending { it.score }
         val best = candidates.firstOrNull()
         val second = candidates.getOrNull(1)
         val uniqueAniList = best != null && best.titleSimilarity >= 0.45 &&
             (second == null || best.score - second.score >= 1.5) &&
-            withinOrUnknown(item.year, best.anime.seasonYear, 1) &&
-            withinOrUnknown(item.totalEpisodes, best.anime.episodes, 1)
+            AniListAuditRanker.withinOrUnknown(item.year, best.anime.seasonYear, 1) &&
+            AniListAuditRanker.withinOrUnknown(item.totalEpisodes, best.anime.episodes, 1)
         println("${i + 1}. AniTube #${item.newsId}: ${item.title} (${item.year ?: "рік?"}, ${item.totalEpisodes ?: "серії?"} еп.)")
         if (candidates.isEmpty()) {
             println("   AniList: кандидатів за назвою немає")
@@ -676,45 +567,6 @@ private suspend fun auditTmdbAniList(input: Path, sampleSize: Int, seed: Long) {
     println("\nAniList однозначно: $anilistClear/$sampleSize; повний TMDB+Season: $complete/$sampleSize; seed=$seed")
 }
 
-private fun cleanAniTubeTitle(value: String): String = value
-    .replace(Regex("(?i)\\s*[\\[(][^\\])]*(?:сезон|season|сез|ова|ova|фільм|movie|film)[^\\])]*[\\])]"), " ")
-    .let(SeriesTitleSearch::clean).trim()
-
-private fun rankAniList(item: AnitubeSearchResult,
-    anime: ua.any2b.core.anilist.AniListAnimeLookup): RankedAniListCandidate {
-    val names = listOf(anime.title.romaji, anime.title.english, anime.title.native) + anime.synonyms
-    val similarity = names.filterNotNull().maxOfOrNull { stringSimilarity(item.title, it) } ?: 0.0
-    var score = similarity * 4.0
-    item.year?.let { sourceYear -> anime.seasonYear?.let { actualYear ->
-        score += when (kotlin.math.abs(sourceYear - actualYear)) { 0 -> 3.0; 1 -> 1.0; else -> -3.0 }
-    } }
-    item.totalEpisodes?.let { sourceEpisodes -> anime.episodes?.let { actualEpisodes ->
-        score += when (kotlin.math.abs(sourceEpisodes - actualEpisodes)) { 0 -> 2.0; 1 -> 1.0; in 2..3 -> 0.0; else -> -2.0 }
-    } }
-    val expectsMovie = Regex("(?i)\\b(?:фільм|movie|film)\\b").containsMatchIn(item.title)
-    if (expectsMovie && anime.format == "MOVIE") score += 2.0
-    if (!expectsMovie && anime.format in setOf("TV", "TV_SHORT")) score += 0.5
-    return RankedAniListCandidate(anime, similarity, score)
-}
-
-private fun stringSimilarity(first: String, second: String): Double {
-    fun normalize(value: String) = value.lowercase()
-        .replace(Regex("\\([^)]*\\)|\\[[^]]*]"), " ")
-        .replace(Regex("[^a-z0-9а-яіїєґ ]"), " ")
-        .replace(Regex("\\s+"), " ").trim()
-    val a = normalize(first)
-    val b = normalize(second)
-    if (a.isBlank() || b.isBlank()) return 0.0
-    if (a == b) return 1.0
-    if (a in b || b in a) return 0.85
-    val at = a.split(' ').filter(String::isNotBlank).toSet()
-    val bt = b.split(' ').filter(String::isNotBlank).toSet()
-    return at.intersect(bt).size.toDouble() / at.union(bt).size
-}
-
-private fun withinOrUnknown(first: Int?, second: Int?, tolerance: Int): Boolean =
-    first == null || second == null || kotlin.math.abs(first - second) <= tolerance
-
 private fun tmdbExternalLink(link: ua.any2b.core.anilist.AniListExternalLink): Pair<TmdbMediaType, Int>? {
     val match = Regex("(?i)themoviedb\\.org/(tv|movie)/(\\d+)").find(link.url) ?: return null
     val type = if (match.groupValues[1].equals("tv", true)) TmdbMediaType.TV else TmdbMediaType.MOVIE
@@ -733,10 +585,10 @@ private suspend fun resolveTmdbByAniListName(
     val candidates = names.flatMap { tmdb.search(it, token) }
         .filter { it.type == expectedType }
         .distinctBy { it.id }
-        .map { it to maxOf(stringSimilarity(anime.title.english.orEmpty(), it.title),
-            stringSimilarity(anime.title.romaji.orEmpty(), it.title),
-            stringSimilarity(anime.title.english.orEmpty(), it.originalTitle.orEmpty()),
-            stringSimilarity(anime.title.romaji.orEmpty(), it.originalTitle.orEmpty())) }
+        .map { it to maxOf(AniListAuditRanker.stringSimilarity(anime.title.english.orEmpty(), it.title),
+            AniListAuditRanker.stringSimilarity(anime.title.romaji.orEmpty(), it.title),
+            AniListAuditRanker.stringSimilarity(anime.title.english.orEmpty(), it.originalTitle.orEmpty()),
+            AniListAuditRanker.stringSimilarity(anime.title.romaji.orEmpty(), it.originalTitle.orEmpty())) }
         .sortedByDescending { it.second }
     val top = candidates.firstOrNull()?.takeIf { it.second >= 0.65 } ?: return null
     if (candidates.getOrNull(1)?.let { top.second - it.second < 0.15 } == true) return null
@@ -807,7 +659,7 @@ private fun fetchTmdbJson(path: String, language: String): JSONObject {
     }
 }
 
-private fun localTmdbToken(): String? {
+internal fun localTmdbToken(): String? {
     val file = listOf(Path.of("local.properties"), Path.of("..", "local.properties"))
         .firstOrNull { Files.isRegularFile(it) } ?: return null
     val properties = Properties()
@@ -815,7 +667,7 @@ private fun localTmdbToken(): String? {
     return properties.getProperty("tmdb.token")?.trim()?.takeIf(String::isNotBlank)
 }
 
-private fun localOpenAiKey(): String? {
+internal fun localOpenAiKey(): String? {
     val file = listOf(Path.of("local.properties"), Path.of("..", "local.properties"))
         .firstOrNull { Files.isRegularFile(it) } ?: return null
     val properties = Properties()
