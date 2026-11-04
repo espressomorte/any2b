@@ -17,7 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -26,6 +26,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -72,15 +73,20 @@ fun TmdbSearchScreen(
 ) {
     val inputFocus = remember { FocusRequester() }
     val searchFocus = remember { FocusRequester() }
+    val firstResultFocus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
     val finishInput = { keyboard?.hide(); focusManager.clearFocus(force = true) }
-    var focusSearchAfterHistory by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { inputFocus.requestFocus() }
-    LaunchedEffect(focusSearchAfterHistory, state.query, state.showRecentTitles) {
-        if (focusSearchAfterHistory && state.query.isNotBlank() && !state.showRecentTitles) {
-            searchFocus.requestFocus()
-            focusSearchAfterHistory = false
+    LaunchedEffect(state.showRecentTitles, state.loading, state.searched, state.results) {
+        if (!state.showRecentTitles && (state.loading || state.searched)) {
+            finishInput()
+            if (state.searched) {
+                withFrameNanos { }
+                if (state.results.isNotEmpty()) firstResultFocus.requestFocus()
+                else searchFocus.requestFocus()
+                keyboard?.hide()
+            }
         }
     }
 
@@ -135,7 +141,6 @@ fun TmdbSearchScreen(
                             .onFocusChanged { focused = it.isFocused }
                             .clickable {
                                 finishInput()
-                                focusSearchAfterHistory = true
                                 onSelectRecentTitle(title)
                             },
                     )
@@ -160,8 +165,9 @@ fun TmdbSearchScreen(
                         horizontalArrangement = Arrangement.spacedBy(20.dp),
                         modifier = Modifier.fillMaxWidth().graphicsLayer { clip = false },
                     ) {
-                        items(state.results, key = { "${it.type}:${it.id}" }) { title ->
-                            TmdbPosterCard(title, state.query, onClick = { onOpen(title) })
+                        itemsIndexed(state.results, key = { _, title -> "${title.type}:${title.id}" }) { index, title ->
+                            TmdbPosterCard(title, state.query, onClick = { onOpen(title) },
+                                focusRequester = if (index == 0) firstResultFocus else null)
                         }
                     }
                 }
@@ -198,7 +204,8 @@ private fun TmdbSearchActionIcon(icon: String, label: String, enabled: Boolean,
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 internal fun TmdbPosterCard(title: TmdbTitle, query: String = "",
-    onClick: () -> Unit, onFocused: (() -> Unit)? = null) {
+    onClick: () -> Unit, onFocused: (() -> Unit)? = null,
+    focusRequester: FocusRequester? = null) {
     var focused by remember { mutableStateOf(false) }
     Column(Modifier.width(160.dp).padding(4.dp)) {
         Card(
@@ -206,6 +213,7 @@ internal fun TmdbPosterCard(title: TmdbTitle, query: String = "",
             scale = CardDefaults.scale(scale = 1f, focusedScale = 1f),
             shape = CardDefaults.shape(RoundedCornerShape(12.dp)),
             modifier = Modifier.fillMaxWidth().aspectRatio(2f / 3f)
+                .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
                 .onFocusChanged {
                     focused = it.isFocused
                     if (it.isFocused) {
@@ -218,9 +226,13 @@ internal fun TmdbPosterCard(title: TmdbTitle, query: String = "",
                 color = if (focused) AppColors.NeonCyan else AppColors.TextLight,
                 maxLines = 2, minLines = 2, overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.labelMedium, modifier = Modifier.heightIn(min = 36.dp))
-            Text(title.year?.toString().orEmpty(),
-                color = if (focused) AppColors.NeonCyan else AppColors.TextSecondary,
-                fontSize = 11.sp)
+            title.year?.let { year ->
+                Spacer(Modifier.height(2.dp))
+                Text(year.toString(), style = MaterialTheme.typography.labelMedium,
+                    color = if (focused) AppColors.NeonCyan else AppColors.TextLight,
+                    fontSize = 10.sp,
+                    fontWeight = if (focused) FontWeight.Bold else FontWeight.Normal)
+            }
         }
     }
 }

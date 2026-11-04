@@ -32,10 +32,10 @@ internal data class DetailsSurfaceColors(
 internal fun detailsSurfaceColors(palette: FanartPalette?, experimental: Boolean): DetailsSurfaceColors {
     if (!experimental || palette == null) return DetailsSurfaceColors(
         AppColors.SurfaceDark, AppColors.SurfaceCard, Color.White, AppColors.TextSecondary)
-    val tint = if (palette.light) Color.Black else Color.White
+    val tint = Color.White
     return DetailsSurfaceColors(
-        panel = lerp(palette.background, tint, 0.16f),
-        card = lerp(palette.background, tint, 0.20f),
+        panel = lerp(palette.background, tint, if (palette.light) 0.04f else 0.16f),
+        card = lerp(palette.background, tint, if (palette.light) 0.08f else 0.20f),
         text = if (palette.light) Color(0xFF182330) else Color.White,
         mutedText = if (palette.light) Color(0xFF415164) else AppColors.TextSecondary,
     )
@@ -57,6 +57,7 @@ fun FanartPoster(artwork: FanartArtwork, contentDescription: String,
             AsyncImage(model = artwork.posterUrl, contentDescription = contentDescription,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize())
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.16f)))
             val fade = 56.dp
             Box(Modifier.align(Alignment.TopCenter).fillMaxWidth().height(fade)
                 .background(Brush.verticalGradient(listOf(backgroundColor, Color.Transparent))))

@@ -180,6 +180,25 @@ private fun capSaturation(color: Color, maxSaturation: Float = 0.30f): Color {
     return Color(android.graphics.Color.HSVToColor(hsv))
 }
 
+/** Keeps artwork tint but prevents bright posters and white fallbacks from lighting the TV screen. */
+internal fun boundedFanartPalette(color: Color, preferLight: Boolean): FanartPalette {
+    val toned = capSaturation(color)
+    val maximumLuminance = if (preferLight) 0.26f else 0.16f
+    if (toned.luminance() <= maximumLuminance) return FanartPalette(toned, preferLight)
+    var low = 0f
+    var high = 1f
+    repeat(12) {
+        val middle = (low + high) / 2f
+        if (lerp(toned, Color.Black, middle).luminance() > maximumLuminance)
+            low = middle else high = middle
+    }
+    val background = lerp(toned, Color.Black, high)
+    val darkText = Color(0xFF182330)
+    val light = preferLight &&
+        contrastRatio(background, darkText) >= contrastRatio(background, Color.White)
+    return FanartPalette(background, light)
+}
+
 private fun paletteFromPoster(result: SuccessResult?): FanartPalette {
     val bitmap = (result?.drawable as? BitmapDrawable)?.bitmap
         ?: return FanartPalette(AppColors.BackgroundDark, false)
@@ -205,8 +224,7 @@ private fun paletteFromPoster(result: SuccessResult?): FanartPalette {
     val rawBackground = Color(
         android.graphics.Color.rgb((r * 0.55 + 255 * 0.45).toInt(),
             (g * 0.55 + 255 * 0.45).toInt(), (b * 0.55 + 255 * 0.45).toInt()))
-    val background = capSaturation(rawBackground, 0.30f)
-    return FanartPalette(background, true)
+    return boundedFanartPalette(rawBackground, true)
 }
 
 private fun paletteFromArtwork(poster: SuccessResult, logo: SuccessResult): FanartPalette {
@@ -220,7 +238,7 @@ private fun paletteFromArtwork(poster: SuccessResult, logo: SuccessResult): Fana
             it.count >= max(2, largestBin / 6) && contrastRatio(it.color, edgeColor) >= 3.0
         }) {
         // Keep the poster's dark frame continuous with the page, with a slight separation.
-        return FanartPalette(capSaturation(lerp(edgeColor, Color.White, 0.06f)), false)
+        return boundedFanartPalette(lerp(edgeColor, Color.White, 0.06f), false)
     }
     val logoColor = logoColors.filter { it.count >= max(2, largestBin / 6) }
         .minByOrNull { it.color.luminance() }?.color ?: return palette
@@ -243,9 +261,9 @@ private fun paletteFromArtwork(poster: SuccessResult, logo: SuccessResult): Fana
             !isDarkNeutral(it) && contrastRatio(it, logoColor) >= 4.5 &&
                 max(contrastRatio(it, Color.White), contrastRatio(it, darkText)) >= 4.5
         } ?: fallback
-    val background = capSaturation(rawBackground, 0.30f)
-    val light = contrastRatio(background, darkText) >= contrastRatio(background, Color.White)
-    return palette.copy(background = background, light = light)
+    val light = contrastRatio(rawBackground, darkText) >=
+        contrastRatio(rawBackground, Color.White)
+    return boundedFanartPalette(rawBackground, light)
 }
 
 /** Returns the edge color only when most sampled points form a dark frame. */
