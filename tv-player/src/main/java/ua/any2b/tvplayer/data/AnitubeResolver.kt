@@ -7,6 +7,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withTimeoutOrNull
 import ua.any2b.core.anilist.AniListAnimeLookup
 import ua.any2b.core.anilist.AniListClient
 import ua.any2b.core.anilist.AnimeDetails
@@ -100,8 +101,19 @@ class AnitubeResolver(
         tmdbNames: List<String>,
         onAniListAvailability: (AniListAvailability) -> Unit = {},
     ): AnitubeResolution {
-        val index = FribbMappingRepository.get(appContext)
-        val mapped = index.anilistFor(type, tmdbId)
+        val bridge = try {
+            withTimeoutOrNull(8000) { AniBridgeMappingRepository.get(appContext) }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            null
+        }
+        val bridgeMatches = bridge?.anilistFor(type, tmdbId, tmdbSeason).orEmpty()
+        val mapped = if (bridgeMatches.isNotEmpty()) bridgeMatches.map {
+            FribbAnimeEntry(it.aniListId, it.season)
+        } else {
+            FribbMappingRepository.get(appContext).anilistFor(type, tmdbId)
+        }
         if (mapped.isEmpty()) {
             onAniListAvailability(AniListAvailability.MISSING)
             return AnitubeResolution(emptyList(), emptyList(), emptyList(),

@@ -6,6 +6,8 @@ import android.os.SystemClock
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.withTimeoutOrNull
 import ua.any2b.core.mal.MalAnime
 import ua.any2b.core.mal.MalClient
 import ua.any2b.core.tmdb.FribbMappings
@@ -104,28 +106,39 @@ class MalTmdbCatalog(private val context: Context) {
             ?: throw IllegalStateException("Налаштуйте MyAnimeList Client ID у розділі «Інтеграції»")
 
     private suspend fun mapTitles(items: List<MalAnime>): List<TmdbTitle> {
-        val index = try {
-            FribbMappingRepository.get(context)
-        } catch (error: Exception) {
-            Log.e(TAG, "Fribb index load failed for MAL batch size=${items.size}", error)
+        val bridge = try {
+            withTimeoutOrNull(8000) { AniBridgeMappingRepository.get(context) }
+        } catch (error: CancellationException) {
             throw error
+        } catch (error: Exception) {
+            Log.w(TAG, "AniBridge unavailable for MAL batch", error)
+            null
         }
-        val mappings = index.byMal
+        val needsFribb = items.any { bridge?.preferredForMal(it.id, it.mediaType) == null }
+        val fribb = if (!needsFribb) null else try {
+            FribbMappingRepository.get(context)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            Log.w(TAG, "Fribb unavailable for MAL batch", error)
+            null
+        }
         val mapped = items.mapNotNull { anime ->
-            val candidates = mappings[anime.id].orEmpty()
-            val preferredType = if (anime.mediaType.equals("movie", ignoreCase = true)) "movie" else "tv"
-            val mapping = FribbMappings.preferred(candidates, anime.mediaType)
-            Log.d(TAG, "MAL source id=${anime.id} title=${anime.title} mediaType=${anime.mediaType} " +
-                "year=${anime.year}; Fribb candidates=${candidates.joinToString { "${it.type.path}:${it.id}" }}")
-            if (mapping == null) {
-                Log.w(TAG, "MAL mapping missing id=${anime.id} title=${anime.title} " +
-                    "expectedType=$preferredType; no Fribb byMal entry")
+            val bridgeTarget = bridge?.preferredForMal(anime.id, anime.mediaType)
+            val fribbTarget = if (bridgeTarget == null)
+                FribbMappings.preferred(fribb?.byMal?.get(anime.id).orEmpty(), anime.mediaType)
+            else null
+            val type = bridgeTarget?.type ?: fribbTarget?.type
+            val id = bridgeTarget?.id ?: fribbTarget?.id
+            val season = bridgeTarget?.season ?: fribbTarget?.season
+            if (type == null || id == null) {
+                Log.w(TAG, "MAL mapping missing id=${anime.id} title=${anime.title}")
                 return@mapNotNull null
             }
-            Log.d(TAG, "MAL mapping selected malId=${anime.id} -> ${mapping.type.path}:${mapping.id} " +
-                "candidates=${candidates.size}")
+            Log.d(TAG, "MAL mapping selected malId=${anime.id} -> ${type.path}:$id " +
+                "season=$season source=${if (bridgeTarget != null) "AniBridge" else "Fribb"}")
             TmdbTitle(
-                id = mapping.id, type = mapping.type,
+                id = id, type = type,
                 title = anime.englishTitle ?: anime.title,
                 originalTitle = anime.title,
                 year = anime.year,
@@ -133,6 +146,7 @@ class MalTmdbCatalog(private val context: Context) {
                 overview = null,
                 rating = anime.score,
                 englishTitle = anime.englishTitle,
+                matchedSeasonNumber = season,
             )
         }
         val selectedByTmdb = mutableMapOf<Pair<String, Int>, TmdbTitle>()

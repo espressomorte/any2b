@@ -50,6 +50,15 @@ class TolokaTmdbRankerTest {
         assertEquals(setOf("remake", "collection"), ranked.weak.map { it.id }.toSet())
     }
 
+    @Test
+    fun confirmedRomajiAliasMakesAnotherReleaseVisible() {
+        val anime = details("Темний заклинач", "I'm Dating a Dark Summoner", 2026)
+        val candidate = hit("romaji", "Yami no Shoukanshi (2026) 1080p")
+        assertEquals(listOf("romaji"), TolokaTmdbRanker.rank(anime, listOf(candidate)).weak.map { it.id })
+        assertEquals(listOf("romaji"), TolokaTmdbRanker.rank(anime, listOf(candidate),
+            additionalNames = listOf("Yami no Shoukanshi")).visible.map { it.id })
+    }
+
     private fun details(uk: String, en: String, year: Int) = TmdbDetails(
         title = TmdbTitle(1, TmdbMediaType.MOVIE, uk, en, year, null, null, null,
             ukrainianTitle = uk, englishTitle = en, originalLanguage = "en"),

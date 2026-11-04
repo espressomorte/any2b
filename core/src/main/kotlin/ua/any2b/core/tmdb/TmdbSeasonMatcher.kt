@@ -23,7 +23,8 @@ object TmdbSeasonMatcher {
             it.year == anime.seasonYear && it.number > 0 &&
                 (animeSeason == null || it.number == animeSeason)
         } ?: return title
-        return title.copy(matchedSeasonTitle = season.name, matchedSeasonYear = season.year)
+        return title.copy(matchedSeasonTitle = season.name, matchedSeasonYear = season.year,
+            matchedSeasonNumber = season.number)
     }
 
     private val sequelNumber = Regex("(?i)(?:season\\s*)?(\\d{1,2})\\s*$")

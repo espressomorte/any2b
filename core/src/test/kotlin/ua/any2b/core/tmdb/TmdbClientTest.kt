@@ -87,6 +87,28 @@ class TmdbClientTest {
     }
 
     @Test
+    fun movieCollectionContainsOnlyItsPartsAndExcludesAdultTitles() = runBlocking {
+        val paths = mutableListOf<String>()
+        val client = client { request ->
+            paths += request.url.encodedPath
+            fixture(request, 200, when (request.url.encodedPath) {
+                "/3/movie/10" -> """{"id":10,"title":"Частина 1",
+                    "belongs_to_collection":{"id":77,"name":"Сага"}}"""
+                "/3/collection/77" -> """{"id":77,"parts":[
+                    {"id":10,"title":"Частина 1"},
+                    {"id":11,"title":"Частина 2","release_date":"2025-01-01"},
+                    {"id":12,"title":"18+","adult":true}]}"""
+                else -> """{"posters":[],"logos":[]}"""
+            })
+        }
+        val details = client.details(TmdbMediaType.MOVIE, 10, "key")
+        assertEquals(77, details.collectionId)
+        assertEquals(listOf(10, 11), client.collectionParts(77, "key").map { it.id })
+        assertTrue("/3/collection/77" in paths)
+        assertTrue(paths.none { it.contains("recommendations") })
+    }
+
+    @Test
     fun generalCatalogExcludesGenresInDiscoverAndResults() = runBlocking {
         val requests = mutableListOf<Request>()
         val client = client { request ->
@@ -273,6 +295,44 @@ class TmdbClientTest {
         assertFailsWith<TmdbFailure.MissingToken> { client.search("Anime", "") }
         assertFailsWith<TmdbFailure.Unauthorized> { client.search("Anime", "bad") }
         Unit
+    }
+
+    @Test
+    fun trailerSelectionRejectsMislabeledEventAndKeepsOfficialAlternative() = runBlocking {
+        val requested = mutableListOf<String>()
+        val client = client { request ->
+            requested += request.url.encodedPath
+            assertEquals("uk,en,null", request.url.queryParameter("include_video_language"))
+            fixture(request, 200, """{"results":[
+              {"site":"YouTube","type":"Trailer","official":false,
+               "name":"Fan meeting","key":"aaaaaaaaaaa"},
+              {"site":"YouTube","type":"Trailer","official":true,
+               "name":"Official Trailer","key":"bbbbbbbbbbb","iso_639_1":"en"},
+              {"site":"YouTube","type":"Trailer","official":true,
+               "name":"Official Trailer #2","key":"ccccccccccc","iso_639_1":"en"},
+              {"site":"YouTube","type":"Teaser","official":true,
+               "name":"Official Trailer","key":"ddddddddddd"}
+            ]}""")
+        }
+        val videos = client.trailers(TmdbMediaType.MOVIE, 42, "token")
+        assertEquals(listOf("bbbbbbbbbbb", "ccccccccccc"), videos.map { it.videoId })
+        assertEquals("https://www.youtube.com/watch?v=bbbbbbbbbbb", videos.first().youtubeUrl)
+        assertEquals(listOf("/3/movie/42/videos"), requested)
+    }
+
+    @Test
+    fun seasonTrailerFallsBackToSeriesWhenSeasonHasNone() = runBlocking {
+        val requested = mutableListOf<String>()
+        val client = client { request ->
+            requested += request.url.encodedPath
+            fixture(request, 200, if (request.url.encodedPath.contains("/season/"))
+                """{"results":[]}""" else """{"results":[
+                  {"site":"YouTube","type":"Trailer","official":true,
+                   "name":"Series Trailer","key":"eeeeeeeeeee"}]}""")
+        }
+        assertEquals("eeeeeeeeeee", client.trailers(TmdbMediaType.TV, 42, "token", 2)
+            .single().videoId)
+        assertEquals(listOf("/3/tv/42/season/2/videos", "/3/tv/42/videos"), requested)
     }
 
     private fun client(reply: (Request) -> Response): TmdbClient = TmdbClient(

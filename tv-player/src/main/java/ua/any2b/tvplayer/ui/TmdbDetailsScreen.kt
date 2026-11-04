@@ -47,6 +47,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.ClickableSurfaceDefaults
@@ -207,7 +208,8 @@ private fun TmdbDetailsContent(
     val torrentOpened = torrentsOnly || activePanel == Panel.TORRENT
     val customTorrentQueries = remember(title.type, title.id) { mutableStateListOf<String>() }
     val torrentOptions = (customTorrentQueries.map { "Власний" to it } +
-        tmdbTorrentQueryOptions(details)).distinctBy { it.second.lowercase() }
+        toloka.queryOptions + tmdbTorrentQueryOptions(details))
+        .distinctBy { it.second.lowercase() }
     var torrentQuery by rememberSaveable(title.type, title.id) {
         mutableStateOf(torrentOptions.firstOrNull()?.second ?: title.title)
     }
@@ -612,8 +614,9 @@ private fun TmdbDetailAction(icon: String, label: String, selected: Boolean = fa
 @Composable
 private fun TmdbRelatedDialog(state: TmdbRelatedState, onRetry: () -> Unit,
     onDismiss: () -> Unit, onOpen: (TmdbTitle) -> Unit) {
-    Dialog(onDismissRequest = onDismiss) {
-        Column(Modifier.fillMaxWidth(0.85f)
+    Dialog(onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Column(Modifier.fillMaxWidth(0.82f).widthIn(max = 1100.dp)
             .clip(RoundedCornerShape(16.dp)).background(AppColors.SurfaceDark).padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Text("Пов’язані тайтли", style = MaterialTheme.typography.titleLarge,
@@ -629,7 +632,8 @@ private fun TmdbRelatedDialog(state: TmdbRelatedState, onRetry: () -> Unit,
                 } else {
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp),
                         contentPadding = PaddingValues(8.dp)) {
-                        items(state.titles, key = { "${it.type}:${it.id}" }) { item ->
+                        items(state.titles,
+                            key = { "${it.type}:${it.id}:${it.matchedSeasonNumber}" }) { item ->
                             TmdbPosterCard(item, onClick = { onOpen(item) })
                         }
                     }

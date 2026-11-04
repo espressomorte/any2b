@@ -44,6 +44,7 @@ data class TmdbTitle(
     val originCountries: Set<String> = emptySet(),
     val matchedSeasonTitle: String? = null,
     val matchedSeasonYear: Int? = null,
+    val matchedSeasonNumber: Int? = null,
 ) {
     fun searchNames(query: String): List<String> {
         val original = originalTitle?.takeIf { originalLanguage != "en" && originalLanguage != "uk" }
@@ -74,6 +75,7 @@ data class TmdbDetails(
     val alternativeTitles: List<String> = emptyList(),
     val tvdbId: Int? = null,
     val logoUrl: String? = null,
+    val collectionId: Int? = null,
 )
 
 fun TmdbDetails.trailerSearchUrl(): String {
@@ -83,6 +85,37 @@ fun TmdbDetails.trailerSearchUrl(): String {
 }
 
 data class TmdbSeason(val number: Int, val name: String?, val year: Int?, val episodeCount: Int? = null)
+
+data class TmdbTrailer(val videoId: String, val name: String, val language: String?) {
+    val youtubeUrl: String get() = "https://www.youtube.com/watch?v=$videoId"
+}
+
+/** TMDB labels alone are not enough: a mislabeled interview can have type Trailer. */
+object TmdbTrailerSelector {
+    private val videoId = Regex("^[A-Za-z0-9_-]{11}$")
+    private val trailerName = Regex("(?i)\\btrailer\\b|трейлер|予告")
+    private val unrelated = Regex(
+        "(?i)interview|fan[ -]?meet|meet[ -]?(?:the[ -]?)?fans|presentation|panel|" +
+            "premiere|press[ -]conference|behind[ -]the[ -]scenes|featurette|reaction|q\\s*&\\s*a")
+
+    fun select(videos: JSONArray): List<TmdbTrailer> = (0 until videos.length())
+        .mapNotNull { videos.optJSONObject(it) }
+        .filter { video ->
+            video.optString("site").equals("YouTube", ignoreCase = true) &&
+                video.optString("type").equals("Trailer", ignoreCase = true) &&
+                video.optBoolean("official") && video.optString("key").matches(videoId) &&
+                trailerName.containsMatchIn(video.optString("name")) &&
+                !unrelated.containsMatchIn(video.optString("name"))
+        }
+        .sortedWith(compareBy<JSONObject> {
+            when (it.optString("iso_639_1")) { "uk" -> 0; "en" -> 1; else -> 2 }
+        }.thenBy { !it.optString("name").equals("Official Trailer", ignoreCase = true) }
+            .thenBy { Regex("#\\s*\\d+|(?i)\\bpart\\s+\\d+").containsMatchIn(it.optString("name")) }
+            .thenByDescending { it.optString("published_at") })
+        .map { TmdbTrailer(it.optString("key"), it.optString("name"),
+            it.optionalString("iso_639_1")) }
+        .distinctBy(TmdbTrailer::videoId)
+}
 
 sealed class TmdbFailure(message: String) : IOException(message) {
     class MissingToken : TmdbFailure("Ключ доступу не налаштовано")
@@ -105,6 +138,22 @@ class TmdbClient(
         .build(),
     private val baseUrl: HttpUrl = "https://api.themoviedb.org/3/".toHttpUrl(),
 ) {
+    suspend fun trailers(type: TmdbMediaType, id: Int, token: String,
+        season: Int? = null): List<TmdbTrailer> {
+        require(id > 0)
+        if (type == TmdbMediaType.TV && season != null && season >= 0) {
+            val seasonVideos = try {
+                request(listOf("tv", id.toString(), "season", season.toString(), "videos"), token,
+                    "en-US", "include_video_language" to "uk,en,null")
+            } catch (_: TmdbFailure.Http) { null }
+            seasonVideos?.optJSONArray("results")?.let(TmdbTrailerSelector::select)
+                ?.takeIf(List<TmdbTrailer>::isNotEmpty)?.let { return it }
+        }
+        val videos = request(listOf(type.path, id.toString(), "videos"), token,
+            "en-US", "include_video_language" to "uk,en,null")
+        return videos.optJSONArray("results")?.let(TmdbTrailerSelector::select).orEmpty()
+    }
+
     suspend fun popular(type: TmdbMediaType, token: String, genreId: Int? = null,
         excludedGenreIds: Set<Int> = emptySet()): List<TmdbTitle> =
         listPage(type, token, TmdbListSort.POPULARITY, 1, genreId,
@@ -166,6 +215,17 @@ class TmdbClient(
         val json = request(listOf(type.path, id.toString(), "recommendations"),
             token, "uk-UA", "page" to "1")
         return parseList(json, type, "uk-UA").filterNot { it.id == id }
+    }
+
+    /** Explicit movie franchise membership; unlike recommendations these share a TMDB collection. */
+    suspend fun collectionParts(collectionId: Int, token: String): List<TmdbTitle> {
+        require(collectionId > 0)
+        val json = request(listOf("collection", collectionId.toString()), token, "uk-UA")
+        val parts = json.optJSONArray("parts") ?: throw TmdbFailure.InvalidResponse()
+        return (0 until parts.length()).mapNotNull { index ->
+            parts.optJSONObject(index)?.takeUnless { it.optBoolean("adult") }
+                ?.toTitle(TmdbMediaType.MOVIE, "uk-UA")
+        }.distinctBy(TmdbTitle::id)
     }
 
     private fun parseList(json: JSONObject, type: TmdbMediaType, language: String): List<TmdbTitle> {
@@ -283,6 +343,9 @@ class TmdbClient(
             episodes = json.optInt("number_of_episodes").takeIf { type == TmdbMediaType.TV && it > 0 },
             collectionName = if (type == TmdbMediaType.MOVIE)
                 json.optJSONObject("belongs_to_collection")?.optionalString("name") else null,
+            collectionId = if (type == TmdbMediaType.MOVIE)
+                json.optJSONObject("belongs_to_collection")?.optInt("id")?.takeIf { it > 0 }
+            else null,
             seasonEntries = if (type == TmdbMediaType.TV) json.optJSONArray("seasons")?.let { array ->
                 (0 until array.length()).mapNotNull { index ->
                     val season = array.optJSONObject(index) ?: return@mapNotNull null

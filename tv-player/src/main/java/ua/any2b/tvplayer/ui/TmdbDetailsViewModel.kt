@@ -21,6 +21,7 @@ import ua.any2b.tvplayer.data.AniListAvailability
 import ua.any2b.tvplayer.data.TmdbEpisodeProgress
 import ua.any2b.core.anitube.AnitubeSearchResult
 import ua.any2b.tvplayer.data.workerTmdbConnection
+import ua.any2b.tvplayer.data.ExplicitRelatedCatalog
 
 sealed interface TmdbDetailsState {
     data object Loading : TmdbDetailsState
@@ -43,6 +44,7 @@ class TmdbDetailsViewModel(application: Application) : AndroidViewModel(applicat
     private val history = TmdbSearchHistoryStore(application)
     private val watchHistory = TmdbWatchHistoryStore(application)
     private val favorites = TmdbFavoritesStore(application)
+    private val explicitRelated = ExplicitRelatedCatalog(application)
     private val _state = MutableStateFlow<TmdbDetailsState>(TmdbDetailsState.Loading)
     val state: StateFlow<TmdbDetailsState> = _state
     private val anitubeController = AnitubeController(application, viewModelScope)
@@ -76,15 +78,24 @@ class TmdbDetailsViewModel(application: Application) : AndroidViewModel(applicat
         val ready = _state.value as? TmdbDetailsState.Ready ?: return
         relatedJob?.cancel()
         _state.value = ready.copy(related = TmdbRelatedState.Loading)
-        relatedJob = viewModelScope.launch { loadRelated(ready.details.title) }
+        relatedJob = viewModelScope.launch { loadRelated(ready.details) }
     }
 
-    private suspend fun loadRelated(title: TmdbTitle) {
+    private suspend fun loadRelated(details: TmdbDetails) {
+        val title = details.title
+        val collectionId = details.collectionId
         try {
-            val connection = workerTmdbConnection(getApplication())
-                ?: throw TmdbFailure.MissingToken()
-            val titles = connection.client.related(title.type, title.id, connection.accessKey)
-                .let { if (torrentsOnly) it.filter(TmdbGeneralCatalog::accepts) else it }
+            val titles = when {
+                title.type == TmdbMediaType.MOVIE && collectionId != null -> {
+                    val connection = workerTmdbConnection(getApplication())
+                        ?: throw TmdbFailure.MissingToken()
+                    connection.client.collectionParts(collectionId, connection.accessKey)
+                        .filterNot { it.id == title.id }
+                }
+                !torrentsOnly && 16 in title.genreIds ->
+                    explicitRelated.animeRelations(title)
+                else -> emptyList()
+            }.let { if (torrentsOnly) it.filter(TmdbGeneralCatalog::accepts) else it }
             val ready = _state.value as? TmdbDetailsState.Ready ?: return
             if (ready.details.title.id == title.id && ready.details.title.type == title.type)
                 _state.value = ready.copy(related = TmdbRelatedState.Results(titles))
@@ -103,7 +114,7 @@ class TmdbDetailsViewModel(application: Application) : AndroidViewModel(applicat
     fun load(
         type: TmdbMediaType, id: Int, query: String, preferredTitle: String?,
         originalLanguage: String?, originalTitle: String?, torrentsOnly: Boolean = false,
-        force: Boolean = false,
+        seasonNumber: Int? = null, force: Boolean = false,
     ) {
         val key = type to id
         if (!force && loadedKey == key) return
@@ -114,7 +125,7 @@ class TmdbDetailsViewModel(application: Application) : AndroidViewModel(applicat
         englishTitleJob?.cancel()
         _state.value = TmdbDetailsState.Loading
         if (torrentsOnly) anitubeController.cancel() else
-            anitubeController.start(type, id, season = null,
+            anitubeController.start(type, id, season = seasonNumber,
                 names = listOfNotNull(preferredTitle, query, originalTitle),
                 format = if (type == TmdbMediaType.MOVIE) "MOVIE" else "TV",
                 resumeProgress = watchHistory.episodeProgress(type, id))
@@ -122,7 +133,14 @@ class TmdbDetailsViewModel(application: Application) : AndroidViewModel(applicat
             try {
                 val connection = workerTmdbConnection(getApplication())
                     ?: throw TmdbFailure.MissingToken()
-                val details = connection.client.details(type, id, connection.accessKey)
+                val fetched = connection.client.details(type, id, connection.accessKey)
+                val selectedSeason = fetched.seasonEntries.firstOrNull {
+                    it.number == seasonNumber
+                }
+                val details = if (selectedSeason == null) fetched else fetched.copy(
+                    title = fetched.title.copy(matchedSeasonNumber = seasonNumber,
+                        matchedSeasonTitle = selectedSeason.name,
+                        matchedSeasonYear = selectedSeason.year))
                 if (!torrentsOnly) anitubeController.addNames(listOfNotNull(details.title.ukrainianTitle,
                     details.title.title, details.title.englishTitle, details.title.originalTitle) +
                     details.alternativeTitles)
@@ -148,7 +166,7 @@ class TmdbDetailsViewModel(application: Application) : AndroidViewModel(applicat
                     localizedCollection ?: details.collectionName ?: preferredTitle ?: details.title.title)
                 _state.value = TmdbDetailsState.Ready(details,
                     favorites.contains(type, id))
-                relatedJob = viewModelScope.launch { loadRelated(details.title) }
+                relatedJob = viewModelScope.launch { loadRelated(details) }
                 englishTitleJob = viewModelScope.launch {
                     try {
                         val english = connection.client.details(type, id, connection.accessKey, "en-US")

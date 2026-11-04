@@ -16,17 +16,20 @@ import ua.any2b.core.toloka.TorrServerTorrent
 import ua.any2b.core.toloka.WorkerFailure
 import ua.any2b.core.toloka.TolokaTmdbRanker
 import ua.any2b.core.toloka.TolokaHit
-import ua.any2b.core.toloka.shortenedSearchNames
+import ua.any2b.core.toloka.TolokaSearchPlan
 import ua.any2b.core.tmdb.TmdbDetails
 import ua.any2b.tvplayer.data.SettingsManager
 import ua.any2b.tvplayer.data.TorrServerAuthStore
 import ua.any2b.tvplayer.data.TolokaConnections
 import ua.any2b.tvplayer.data.TolokaRelevanceStore
+import ua.any2b.tvplayer.data.TolokaTmdbMappingStore
+import ua.any2b.tvplayer.data.AniListRomajiResolver
 
 data class FreeTolokaState(
     val search: TolokaSearchState = TolokaSearchState.Idle,
     val transfer: TolokaTransferState = TolokaTransferState.Idle,
     val playbackStatus: String? = null,
+    val queryOptions: List<Pair<String, String>> = emptyList(),
 )
 
 /** Manual Toloka search: no AniList match or release mapping is involved. */
@@ -34,11 +37,15 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
     private val settings = SettingsManager(application)
     private val serverAuth = TorrServerAuthStore(application)
     private val relevance = TolokaRelevanceStore(application)
+    private val mappings = TolokaTmdbMappingStore(application)
+    private val romajiResolver = AniListRomajiResolver(application)
     private val server = TorrServerClient()
     private val _state = MutableStateFlow(FreeTolokaState())
     val state: StateFlow<FreeTolokaState> = _state
 
     private var searchJob: Job? = null
+    private var preparationJob: Job? = null
+    private var aniListRomaji: String? = null
     private var activeSearchQuery: String? = null
     private var automaticQuery: String? = null
     private var automaticEnglishTitle: String? = null
@@ -49,12 +56,14 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
     private var uploadedTorrent: TorrServerTorrent? = null
 
     fun search(query: String) {
+        preparationJob?.cancel()
         clearAutomaticSearch()
         currentDetails = null
         searchInternal(query, null, null)
     }
 
     fun searchForTmdb(details: TmdbDetails, query: String) {
+        preparationJob?.cancel()
         clearAutomaticSearch()
         currentDetails = details
         searchInternal(query, null, details)
@@ -62,10 +71,21 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
 
     fun searchAutomatically(details: TmdbDetails, query: String, englishTitle: String?) {
         currentDetails = details
-        automaticQuery = query.trim()
         automaticEnglishTitle = englishTitle
         automaticDetails = details
-        searchInternal(query, englishTitle, details)
+        preparationJob?.cancel()
+        _state.value = _state.value.copy(search = TolokaSearchState.Loading)
+        preparationJob = viewModelScope.launch {
+            aniListRomaji = romajiResolver.resolve(details)
+            val saved = mappings.aliases(details.title.type, details.title.id)
+            val primary = TolokaSearchPlan.primary(aniListRomaji, saved,
+                details.title.ukrainianTitle, englishTitle, query)
+            automaticQuery = primary.trim()
+            _state.value = _state.value.copy(queryOptions =
+                listOfNotNull(aniListRomaji?.let { "AniList · ромадзі" to it }) +
+                    saved.map { "Підтверджений синонім" to it })
+            searchInternal(primary, automaticEnglishTitle, details)
+        }
     }
 
     fun updateAutomaticDetails(details: TmdbDetails) {
@@ -95,7 +115,18 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
         val hit = results.rejectedHits.firstOrNull { it.id == topicId }
             ?: results.weakHits.firstOrNull { it.id == topicId } ?: return
         val details = currentDetails ?: automaticDetails ?: return
-        relevance.approve(details.title.type, details.title.id, hit.title)
+        try {
+            mappings.approve(details.title.type, details.title.id, hit.id, hit.title,
+                aniListRomaji)
+            relevance.approve(details.title.type, details.title.id, hit.title)
+        } catch (_: Exception) {
+            _state.value = _state.value.copy(playbackStatus =
+                "Не вдалося зберегти відповідник. Повторіть підтвердження")
+            return
+        }
+        _state.value = _state.value.copy(queryOptions = _state.value.queryOptions +
+            mappings.aliases(details.title.type, details.title.id)
+                .map { "Підтверджений синонім" to it })
         _state.value = _state.value.copy(search = results.copy(
             hits = (results.hits + hit).distinctBy { it.id },
             weakHits = results.weakHits.filterNot { it.id == topicId },
@@ -126,7 +157,18 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
         val hit = (results.hits + results.weakHits + results.rejectedHits)
             .firstOrNull { it.id == topicId } ?: return
         val details = currentDetails ?: automaticDetails ?: return
-        relevance.reject(details.title.type, details.title.id, hit.title)
+        try {
+            mappings.reject(details.title.type, details.title.id, hit.id)
+            relevance.reject(details.title.type, details.title.id, hit.title)
+        } catch (_: Exception) {
+            _state.value = _state.value.copy(playbackStatus =
+                "Не вдалося прибрати відповідник. Повторіть дію")
+            return
+        }
+        _state.value = _state.value.copy(queryOptions =
+            listOfNotNull(aniListRomaji?.let { "AniList · ромадзі" to it }) +
+                mappings.aliases(details.title.type, details.title.id)
+                    .map { "Підтверджений синонім" to it })
         transferJob?.cancel()
         if (uploadedTopicId == topicId) {
             uploadedTopicId = null
@@ -158,7 +200,8 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
         uploadedTopicId = null
         uploadedTorrent = null
         activeSearchQuery = trimmed
-        _state.value = FreeTolokaState(search = TolokaSearchState.Loading)
+        _state.value = _state.value.copy(search = TolokaSearchState.Loading,
+            transfer = TolokaTransferState.Idle, playbackStatus = null)
         searchJob = viewModelScope.launch {
             try {
                 val first = TolokaConnections.search(getApplication(), trimmed)
@@ -170,14 +213,17 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
                 val ignored = firstDetails?.let {
                     relevance.rejectedTitles(it.title.type, it.title.id)
                 }.orEmpty()
-                var ranked = firstDetails?.let { TolokaTmdbRanker.rank(it, first.results, learned, ignored) }
+                val aliases = firstDetails?.let {
+                    mappings.aliases(it.title.type, it.title.id)
+                }.orEmpty()
+                val additionalNames = listOfNotNull(aniListRomaji) + aliases
+                var ranked = firstDetails?.let { TolokaTmdbRanker.rank(it, first.results,
+                    learned, ignored, additionalNames) }
                 val availableEnglish = if (automaticQuery == trimmed)
                     automaticEnglishTitle ?: englishTitle else englishTitle
                 var searchedQuery = trimmed
-                val fallbackQueries = availableEnglish?.trim()?.takeIf(String::isNotBlank)
-                    ?.let { listOf(it) + shortenedSearchNames(it) }.orEmpty()
-                    .distinctBy { it.lowercase() }
-                    .filterNot { it.equals(trimmed, ignoreCase = true) }
+                val fallbackQueries = TolokaSearchPlan.fallbacks(trimmed, aniListRomaji,
+                    aliases, firstDetails?.title?.ukrainianTitle, availableEnglish)
                 for (fallback in fallbackQueries) {
                     if (ranked?.visible?.isNotEmpty() == true) break
                     val response = TolokaConnections.search(getApplication(), fallback)
@@ -185,11 +231,13 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
                     searchedQuery = fallback
                     val currentDetails = if (automaticQuery == trimmed)
                         automaticDetails ?: details else details
-                    ranked = currentDetails?.let { TolokaTmdbRanker.rank(it, response.results, learned, ignored) }
+                    ranked = currentDetails?.let { TolokaTmdbRanker.rank(it, response.results,
+                        learned, ignored, additionalNames) }
                 }
                 val latestDetails = if (automaticQuery == trimmed) automaticDetails ?: details else details
                 val allHits = attempts.flatMap { it.results }.distinctBy { it.id }
-                val aggregate = latestDetails?.let { TolokaTmdbRanker.rank(it, allHits, learned, ignored) }
+                val aggregate = latestDetails?.let { TolokaTmdbRanker.rank(it, allHits,
+                    learned, ignored, additionalNames) }
                 val hits = aggregate?.visible ?: allHits.filter(TolokaTmdbRanker::isVideoCandidate)
                 val weak = (retainedWeak + aggregate?.weak.orEmpty()).distinctBy { it.id }
                     .filterNot { hit -> hits.any { it.id == hit.id } }

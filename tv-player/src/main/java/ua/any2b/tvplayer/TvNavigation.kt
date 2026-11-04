@@ -18,6 +18,7 @@ object TvNavigation {
     ): Intent = Intent(context, TmdbDetailsActivity::class.java).apply {
         putExtra(TmdbDetailsActivity.EXTRA_TMDB_ID, title.id)
         putExtra(TmdbDetailsActivity.EXTRA_TMDB_TYPE, title.type.path)
+        title.matchedSeasonNumber?.let { putExtra(TmdbDetailsActivity.EXTRA_TMDB_SEASON, it) }
         searchQuery?.let { putExtra(TmdbDetailsActivity.EXTRA_SEARCH_QUERY, it) }
         preferredTitle?.let { putExtra(TmdbDetailsActivity.EXTRA_PREFERRED_TITLE, it) }
         originalLanguage?.let { putExtra(TmdbDetailsActivity.EXTRA_ORIGINAL_LANGUAGE, it) }

@@ -8,6 +8,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withTimeoutOrNull
 import ua.any2b.core.anilist.AniListClient
 import ua.any2b.core.anilist.AnimeCard
 import ua.any2b.core.anilist.AnimeDetails
@@ -60,22 +61,38 @@ class AniListTmdbCatalog(context: Context) {
         } catch (_: Exception) {
             emptyMap()
         }
-        val index = try {
+        val bridge = try {
+            withTimeoutOrNull(8000) { AniBridgeMappingRepository.get(appContext) }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            null
+        }
+        val needsFribb = cards.any { card -> saved[card.id] == null &&
+            bridge?.preferredFor(card.id, card.format) == null }
+        val index = if (!needsFribb) null else try {
             FribbMappingRepository.get(appContext)
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
             null
         }
-        if (index == null) return fallbackSearch(cards, saved)
         val mapped = mutableListOf<TmdbTitle>()
         val unresolved = mutableListOf<AnimeCard>()
         cards.distinctBy { it.id }.forEach { card ->
-            val mapping = saved[card.id]?.let { it.type to it.id }
-                ?: FribbMappings.preferred(index.byAniList[card.id].orEmpty(), card.format)
-                    ?.let { it.type to it.id }
-            if (mapping == null) unresolved += card
-            else mapped += card.tmdbTitle(mapping.first, mapping.second)
+            val manual = saved[card.id]
+            val bridgeTarget = bridge?.preferredFor(card.id, card.format)
+            val fribbTarget = FribbMappings.preferred(index?.byAniList?.get(card.id).orEmpty(),
+                card.format)
+            val target = when {
+                manual != null -> card.tmdbTitle(manual.type, manual.id)
+                bridgeTarget != null -> card.tmdbTitle(bridgeTarget.type, bridgeTarget.id,
+                    bridgeTarget.season)
+                fribbTarget != null -> card.tmdbTitle(fribbTarget.type, fribbTarget.id,
+                    fribbTarget.season)
+                else -> null
+            }
+            if (target == null) unresolved += card else mapped += target
         }
         return (mapped + fallbackSearch(unresolved, saved)).distinctBy { it.type to it.id }
     }
@@ -119,11 +136,12 @@ class AniListTmdbCatalog(context: Context) {
 data class AniListTmdbPage(val titles: List<TmdbTitle>, val hasMore: Boolean)
 
 private fun AnimeCard.tmdbTitle(type: ua.any2b.core.tmdb.TmdbMediaType,
-    tmdbId: Int): TmdbTitle = TmdbTitle(
+    tmdbId: Int, season: Int? = null): TmdbTitle = TmdbTitle(
     id = tmdbId, type = type, title = title.display,
     originalTitle = title.romaji ?: title.native,
     year = seasonYear, posterUrl = cover, overview = null,
     rating = score?.div(10.0), englishTitle = title.english,
+    matchedSeasonNumber = season,
 )
 
 internal suspend fun match(card: AnimeCard,

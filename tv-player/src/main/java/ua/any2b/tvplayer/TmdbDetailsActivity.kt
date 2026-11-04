@@ -2,7 +2,6 @@ package ua.any2b.tvplayer
 
 import android.content.ActivityNotFoundException
 import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -14,7 +13,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ua.any2b.core.tmdb.TmdbMediaType
-import ua.any2b.core.tmdb.trailerSearchUrl
 import ua.any2b.tvplayer.data.ExternalVideoPlayers
 import ua.any2b.tvplayer.data.SettingsManager
 import ua.any2b.tvplayer.data.TorrServerAuthStore
@@ -37,6 +35,7 @@ class TmdbDetailsActivity : ComponentActivity() {
     companion object {
         const val EXTRA_TMDB_ID = "TMDB_ID"
         const val EXTRA_TMDB_TYPE = "TMDB_TYPE"
+        const val EXTRA_TMDB_SEASON = "TMDB_SEASON"
         const val EXTRA_SEARCH_QUERY = "SEARCH_QUERY"
         const val EXTRA_PREFERRED_TITLE = "PREFERRED_TITLE"
         const val EXTRA_ORIGINAL_LANGUAGE = "ORIGINAL_LANGUAGE"
@@ -70,11 +69,12 @@ class TmdbDetailsActivity : ComponentActivity() {
         val preferredTitle = intent.getStringExtra(EXTRA_PREFERRED_TITLE)
         val originalLanguage = intent.getStringExtra(EXTRA_ORIGINAL_LANGUAGE)
         val originalTitle = intent.getStringExtra(EXTRA_ORIGINAL_TITLE)
+        val seasonNumber = intent.getIntExtra(EXTRA_TMDB_SEASON, -1).takeIf { it >= 0 }
         val favoritesLayout = intent.getBooleanExtra(EXTRA_FAVORITES_LAYOUT, false)
         val torrentsOnly = intent.getBooleanExtra(EXTRA_TORRENTS_ONLY, false)
         val experimental = SettingsManager(this).isExperimentalAppearanceEnabled()
         detailsViewModel.load(type, id, query, preferredTitle, originalLanguage, originalTitle,
-            torrentsOnly = torrentsOnly)
+            torrentsOnly = torrentsOnly, seasonNumber = seasonNumber)
         setContent {
             AppTheme {
                 val artworkState = artworkViewModel.state.collectAsStateWithLifecycle().value
@@ -129,7 +129,8 @@ class TmdbDetailsActivity : ComponentActivity() {
                     openedFiles = openedFiles,
                     onRetryDetails = {
                         detailsViewModel.load(type, id, query, preferredTitle,
-                            originalLanguage, originalTitle, torrentsOnly = torrentsOnly, force = true)
+                            originalLanguage, originalTitle, torrentsOnly = torrentsOnly,
+                            seasonNumber = seasonNumber, force = true)
                     },
                     onSearchTorrent = { query ->
                         val details = (detailsViewModel.state.value as? TmdbDetailsState.Ready)?.details
@@ -156,12 +157,17 @@ class TmdbDetailsActivity : ComponentActivity() {
                     onTrailer = {
                         val details = (detailsViewModel.state.value as?
                             ua.any2b.tvplayer.ui.TmdbDetailsState.Ready)?.details
-                        if (details != null) try {
-                            startActivity(Intent(Intent.ACTION_VIEW,
-                                Uri.parse(details.trailerSearchUrl())))
-                        } catch (_: ActivityNotFoundException) {
-                            Toast.makeText(this, "Немає застосунку для відкриття трейлера",
-                                Toast.LENGTH_LONG).show()
+                        if (details != null) {
+                            startActivity(Intent(this, TrailerActivity::class.java).apply {
+                                putExtra(TrailerActivity.EXTRA_TYPE, details.title.type.path)
+                                putExtra(TrailerActivity.EXTRA_ID, details.title.id)
+                                putExtra(TrailerActivity.EXTRA_TITLE, details.title.originalTitle
+                                    ?: details.title.title)
+                                putExtra(TrailerActivity.EXTRA_YEAR, details.title.year ?: 0)
+                                details.title.matchedSeasonNumber?.let {
+                                    putExtra(TrailerActivity.EXTRA_SEASON, it)
+                                }
+                            })
                         }
                     },
                     onRetryRelated = detailsViewModel::retryRelated,
@@ -263,13 +269,35 @@ class TmdbDetailsActivity : ComponentActivity() {
     }
 
     private fun playAnitube() {
+        if (launchingPlayer) return
         val title = (detailsViewModel.state.value as? TmdbDetailsState.Ready)?.details?.title
             ?: return
         detailsViewModel.playAnitube(
             onError = { message -> Toast.makeText(this, message, Toast.LENGTH_LONG).show() },
             onSuccess = { url, voiceIndex, episodeIndex, episodeNumber, resumeProgress, backups ->
+                if (launchingPlayer) return@playAnitube
+                launchingPlayer = true
+                val selectedPackage = SettingsManager(this).selectedPlayerPackage()
+                if (selectedPackage != null) {
+                    val externalIntent = ExternalVideoPlayers(this).intentFor(url, selectedPackage)
+                    if (externalIntent != null) {
+                        try {
+                            startActivity(externalIntent)
+                            TmdbWatchHistoryStore(this).saveEpisodeProgress(title,
+                                voiceIndex, episodeIndex, episodeNumber, resumeProgress)
+                            returningFromAnitubePlayer = true
+                            return@playAnitube
+                        } catch (_: ActivityNotFoundException) {
+                            // The selected player may have been removed after discovery.
+                        } catch (_: SecurityException) {
+                            // The selected player no longer accepts explicit launches.
+                        }
+                    }
+                    Toast.makeText(this, "Обраний плеєр недоступний. Відкриваємо вбудований",
+                        Toast.LENGTH_LONG).show()
+                }
                 returningFromAnitubePlayer = true
-                startActivity(Intent(this, PlayerActivity::class.java).apply {
+                try { startActivity(Intent(this, PlayerActivity::class.java).apply {
                     putExtra(PlayerActivity.EXTRA_STREAM_URL, url)
                     putExtra(PlayerActivity.EXTRA_SOURCE_TYPE, PlayerActivity.SOURCE_ANITUBE_TMDB)
                     putExtra(PlayerActivity.EXTRA_VOICE_INDEX, voiceIndex)
@@ -290,7 +318,11 @@ class TmdbDetailsActivity : ComponentActivity() {
                         backups.map { it.voiceIndex }.toIntArray())
                     putExtra(PlayerActivity.EXTRA_BACKUP_EPISODE_INDICES,
                         backups.map { it.episodeIndex }.toIntArray())
-                })
+                }) } catch (_: Exception) {
+                    launchingPlayer = false
+                    returningFromAnitubePlayer = false
+                    Toast.makeText(this, "Не вдалося відкрити плеєр", Toast.LENGTH_LONG).show()
+                }
             },
         )
     }

@@ -68,6 +68,10 @@
             android:exported="false" />
 
         <activity
+            android:name=".TrailerActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".TmdbLibraryActivity"
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
             android:exported="false" />

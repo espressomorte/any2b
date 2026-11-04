@@ -32,7 +32,7 @@ object TolokaTmdbRanker {
     }
 
     fun rank(details: TmdbDetails, hits: List<TolokaHit>, learnedTitles: Set<String> = emptySet(),
-        ignoredTitles: Set<String> = emptySet()): RankedTolokaHits {
+        ignoredTitles: Set<String> = emptySet(), additionalNames: List<String> = emptyList()): RankedTolokaHits {
         val title = details.title
         val ukrainian = listOfNotNull(title.ukrainianTitle, title.title.takeIf(::hasCyrillic))
             .distinctBy(::normalize)
@@ -40,7 +40,7 @@ object TolokaTmdbRanker {
             title.title.takeIf { !hasCyrillic(it) && title.originalLanguage == "en" },
             title.originalTitle.takeIf { title.originalLanguage == "en" })
             .distinctBy(::normalize)
-        val other = (listOfNotNull(title.originalTitle) + details.alternativeTitles)
+        val other = (listOfNotNull(title.originalTitle) + details.alternativeTitles + additionalNames)
             .filterNot { name -> name in ukrainian || name in english }
             .distinctBy(::normalize)
         val expectedSeason = expectedSeason(details)
@@ -188,6 +188,9 @@ object TolokaTmdbRanker {
     private fun expectedSeason(details: TmdbDetails): ua.any2b.core.tmdb.TmdbSeason? {
         val seasons = details.seasonEntries.filter { it.number > 0 }
         if (seasons.isEmpty()) return null
+        details.title.matchedSeasonNumber?.let { number ->
+            seasons.firstOrNull { it.number == number }?.let { return it }
+        }
         val titleNames = listOfNotNull(details.title.matchedSeasonTitle, details.title.title,
             details.title.englishTitle, details.title.originalTitle) + details.alternativeTitles
         val explicit = titleNames.firstNotNullOfOrNull { name ->
