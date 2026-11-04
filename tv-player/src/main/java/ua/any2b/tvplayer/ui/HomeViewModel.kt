@@ -1,6 +1,8 @@
 package ua.any2b.tvplayer.ui
 
 import android.app.Application
+import android.os.SystemClock
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
@@ -41,12 +43,20 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     fun load() {
         _state.value = HomeState.Loading
         viewModelScope.launch {
+            val startedAt = SystemClock.elapsedRealtime()
+            Log.i(TAG, "Home catalog load started source=AniList perRow=$HOME_FETCH_SIZE")
             _state.value = try {
                 catalogRows = client.homeRows(perRow = HOME_FETCH_SIZE)
+                Log.i(TAG, "Home catalog load succeeded source=AniList rows=${catalogRows.size} " +
+                    "titles=${catalogRows.sumOf { it.items.size }} " +
+                    "elapsedMs=${SystemClock.elapsedRealtime() - startedAt}")
                 HomeState.Ready(rowsWithLocal(catalogRows))
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                Log.e(TAG, "Home catalog load failed source=AniList " +
+                    "elapsedMs=${SystemClock.elapsedRealtime() - startedAt} " +
+                    "errorType=${e.javaClass.name} message=${e.message}", e)
                 catalogRows = emptyList()
                 HomeState.Ready(rowsWithLocal(emptyList()), e.message ?: "Не вдалося завантажити каталог")
             }
@@ -77,5 +87,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         return settingsManager.homeSections()
             .filter { it.enabled }
             .mapNotNull { byId[it.id] }
+    }
+
+    private companion object {
+        const val TAG = "HomeCatalog"
     }
 }

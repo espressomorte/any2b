@@ -25,13 +25,13 @@ internal fun voiceCategoryGroups(voices: List<AnitubeVoice>): List<VoiceCategory
     }
 }
 
-internal fun voiceButtonLabel(group: VoiceCategoryGroup, voice: AnitubeVoice): String {
+internal fun voiceButtonLabel(voice: AnitubeVoice): String {
     val studio = voice.name.trim().ifBlank { "Невідома студія" }
     val player = voice.playerName.trim()
         .replace(Regex("^(?:плеєр|player)\\s*[:·-]?\\s*", RegexOption.IGNORE_CASE), "")
         .firstOrNull { it.isLetterOrDigit() }
         ?.uppercaseChar()
-    return listOfNotNull(group.name, studio, player?.toString()).joinToString(" ")
+    return listOfNotNull(studio, player?.toString()).joinToString(" ")
 }
 
 internal fun defaultVoiceIndex(voices: List<AnitubeVoice>): Int {

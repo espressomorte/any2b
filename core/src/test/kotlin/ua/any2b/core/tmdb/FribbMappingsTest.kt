@@ -31,4 +31,32 @@ class FribbMappingsTest {
         assertEquals(mappings[10], index.byMal[20])
         assertEquals(index, FribbMappings.parseCompactIndex(FribbMappings.compactIndex(index)))
     }
+
+    @Test
+    fun compactIndexRoundTripPreservesBothReverseLookups() {
+        val original = FribbMappings.parseIndex("""[
+            {"anilist_id": 101, "mal_id": 201, "themoviedb_id": {"tv": 301}, "season": {"tmdb": 2}},
+            {"anilist_id": 101, "mal_id": 201, "themoviedb_id": {"movie": [302, 303]}},
+            {"anilist_id": 102, "mal_id": 202, "themoviedb_id": {"tv": 304}}
+        ]""")
+
+        val restored = FribbMappings.parseCompactIndex(FribbMappings.compactIndex(original))
+
+        assertEquals(original.byAniList, restored.byAniList)
+        assertEquals(original.byMal, restored.byMal)
+        assertEquals(listOf(FribbAnimeEntry(101, 2)),
+            restored.anilistFor(TmdbMediaType.TV, 301))
+    }
+
+    @Test
+    fun parserRetainsTmdbSeasonFromMiniEntryShape() {
+        val index = FribbMappings.parseIndex("""[
+            {"anilist_id": 55, "mal_id": 66, "themoviedb_id": {"tv": 77},
+             "season": {"tvdb": 1, "tmdb": 3}}
+        ]""")
+
+        assertEquals(3, index.byAniList.getValue(55).single().season)
+        assertEquals(listOf(FribbAnimeEntry(55, 3)),
+            index.anilistFor(TmdbMediaType.TV, 77))
+    }
 }

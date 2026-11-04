@@ -63,17 +63,23 @@ import ua.any2b.core.tmdb.TmdbDetails
 import ua.any2b.core.tmdb.TmdbMediaType
 import ua.any2b.core.tmdb.TmdbTitle
 import ua.any2b.core.toloka.shortenedSearchNames
+import ua.any2b.core.matcher.SeriesTitleSearch
 import ua.any2b.core.fanart.FanartArtwork
+import ua.any2b.tvplayer.data.AnitubeState
+import ua.any2b.tvplayer.data.AniListAvailability
 import java.util.Locale
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun TmdbDetailsScreen(
     state: TmdbDetailsState,
+    favoritesLayout: Boolean = false,
     experimentalArtwork: FanartArtwork? = null,
     experimentalPalette: FanartPalette? = null,
     fanartNotice: String? = null,
     toloka: FreeTolokaState,
+    anitube: AnitubeState,
+    aniListAvailability: AniListAvailability = AniListAvailability.UNKNOWN,
     openedTopics: Set<String>,
     openedFiles: Set<Int>,
     onRetryDetails: () -> Unit,
@@ -84,6 +90,13 @@ fun TmdbDetailsScreen(
     onRejectTorrent: (String) -> Unit,
     onRetryMetadata: () -> Unit,
     onPlayFile: (Int) -> Unit,
+    onPanelSelected: (Panel) -> Unit,
+    onRetryAnitube: () -> Unit,
+    onSelectAnitubeRelease: (ua.any2b.core.anitube.AnitubeSearchResult) -> Unit,
+    onSelectAnitubeSeason: (Int) -> Unit,
+    onSelectAnitubeVoice: (Int) -> Unit,
+    onSelectAnitubeEpisode: (Int) -> Unit,
+    onPlayAnitube: () -> Unit,
     onToggleFavorite: () -> Unit,
     onTrailer: () -> Unit,
     onRetryRelated: () -> Unit,
@@ -106,12 +119,16 @@ fun TmdbDetailsScreen(
             }
             is TmdbDetailsState.Ready -> TmdbDetailsContent(
                 details = state.details,
+                activePanel = state.activePanel,
+                favoritesLayout = favoritesLayout,
                 experimentalArtwork = experimentalArtwork,
                 experimentalPalette = experimentalPalette,
                 fanartNotice = fanartNotice,
                 isFavorite = state.isFavorite,
                 related = state.related,
                 toloka = toloka,
+                anitube = anitube,
+                aniListAvailability = aniListAvailability,
                 openedTopics = openedTopics,
                 openedFiles = openedFiles,
                 onToggleFavorite = onToggleFavorite,
@@ -125,6 +142,13 @@ fun TmdbDetailsScreen(
                 onRejectTorrent = onRejectTorrent,
                 onRetryMetadata = onRetryMetadata,
                 onPlayFile = onPlayFile,
+                onPanelSelected = onPanelSelected,
+                onRetryAnitube = onRetryAnitube,
+                onSelectAnitubeRelease = onSelectAnitubeRelease,
+                onSelectAnitubeSeason = onSelectAnitubeSeason,
+                onSelectAnitubeVoice = onSelectAnitubeVoice,
+                onSelectAnitubeEpisode = onSelectAnitubeEpisode,
+                onPlayAnitube = onPlayAnitube,
                 onBack = onBack,
             )
         }
@@ -135,12 +159,16 @@ fun TmdbDetailsScreen(
 @Composable
 private fun TmdbDetailsContent(
     details: TmdbDetails,
+    activePanel: Panel,
+    favoritesLayout: Boolean,
     experimentalArtwork: FanartArtwork?,
     experimentalPalette: FanartPalette?,
     fanartNotice: String?,
     isFavorite: Boolean,
     related: TmdbRelatedState,
     toloka: FreeTolokaState,
+    anitube: AnitubeState,
+    aniListAvailability: AniListAvailability,
     openedTopics: Set<String>,
     openedFiles: Set<Int>,
     onToggleFavorite: () -> Unit,
@@ -154,6 +182,13 @@ private fun TmdbDetailsContent(
     onRejectTorrent: (String) -> Unit,
     onRetryMetadata: () -> Unit,
     onPlayFile: (Int) -> Unit,
+    onPanelSelected: (Panel) -> Unit,
+    onRetryAnitube: () -> Unit,
+    onSelectAnitubeRelease: (ua.any2b.core.anitube.AnitubeSearchResult) -> Unit,
+    onSelectAnitubeSeason: (Int) -> Unit,
+    onSelectAnitubeVoice: (Int) -> Unit,
+    onSelectAnitubeEpisode: (Int) -> Unit,
+    onPlayAnitube: () -> Unit,
     onBack: () -> Unit,
 ) {
     val title = details.title
@@ -166,7 +201,7 @@ private fun TmdbDetailsContent(
                 .getDisplayCountry(Locale.forLanguageTag("uk"))
         }?.takeIf(String::isNotBlank)
     }
-    var torrentOpened by rememberSaveable(title.type, title.id) { mutableStateOf(false) }
+    val torrentOpened = activePanel == Panel.TORRENT
     val customTorrentQueries = remember(title.type, title.id) { mutableStateListOf<String>() }
     val torrentOptions = (customTorrentQueries.map { "Власний" to it } +
         tmdbTorrentQueryOptions(details)).distinctBy { it.second.lowercase() }
@@ -178,7 +213,6 @@ private fun TmdbDetailsContent(
     val torrentFocus = remember(title.type, title.id) { FocusRequester() }
     var showRelated by rememberSaveable(title.type, title.id) { mutableStateOf(false) }
     var infoDialog by rememberSaveable(title.type, title.id) { mutableStateOf<String?>(null) }
-    LaunchedEffect(title.type, title.id) { torrentOpened = true }
     LaunchedEffect(title.type, title.id) { torrentFocus.requestFocus() }
     LaunchedEffect(title.englishTitle, details.alternativeTitles) {
         if (!torrentQueryCustomized && torrentOptions.isNotEmpty()) {
@@ -196,7 +230,7 @@ private fun TmdbDetailsContent(
                 .then(if (experimentalArtwork == null)
                     Modifier.clip(RoundedCornerShape(16.dp)) else Modifier)
                 .background(AppColors.SurfaceCard)) {
-                if (experimentalArtwork != null) {
+                if (experimentalArtwork != null && !favoritesLayout) {
                     FanartPoster(experimentalArtwork, title.title,
                         experimentalPalette?.background ?: AppColors.BackgroundDark,
                         Modifier.fillMaxSize())
@@ -204,7 +238,7 @@ private fun TmdbDetailsContent(
                     AsyncImage(model = title.posterUrl, contentDescription = title.title,
                         contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
                 }
-                if (experimentalArtwork == null) title.rating?.let { score ->
+                if (experimentalArtwork == null && !favoritesLayout) title.rating?.let { score ->
                     ReleaseBadge((score * 10).toInt(), Modifier.align(Alignment.TopEnd).padding(8.dp))
                 }
             }
@@ -219,6 +253,18 @@ private fun TmdbDetailsContent(
                     modifier = Modifier.weight(1f), surfaceColors = surfaceColors,
                     onClick = { showRelated = true })
             }
+            if (favoritesLayout) {
+                if (title.type == TmdbMediaType.TV) {
+                    details.seasons?.let { Text("Сезонів: $it", color = dayText) }
+                    details.episodes?.let { Text("Серій: $it", color = dayText) }
+                }
+                details.runtimeMinutes?.let { Text("Тривалість: $it хв", color = dayText) }
+                if (!title.overview.isNullOrBlank()) {
+                    TmdbInfoChip("Синопсис", surfaceColors) { infoDialog = "synopsis" }
+                    Text(title.overview.orEmpty(), color = dayText, maxLines = 5, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.clickable { infoDialog = "synopsis" })
+                }
+            } else {
             val typeLabel = if (title.type == TmdbMediaType.MOVIE) "Фільм" else "Серіал"
             if (experimentalArtwork != null) {
                 val metadata = listOfNotNull(
@@ -238,21 +284,53 @@ private fun TmdbDetailsContent(
                 Text(details.genres.joinToString(" · "), color = dayText,
                     style = MaterialTheme.typography.bodySmall)
             }
+            }
         }
 
         Column(Modifier.weight(1f).fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween) {
-                if (experimentalArtwork != null) {
+                if (favoritesLayout) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                            if (experimentalArtwork?.logoUrl != null) {
+                                FanartLogo(experimentalArtwork, title.title,
+                                    Modifier.weight(1f, fill = false).widthIn(max = 460.dp).height(82.dp))
+                            } else if (details.logoUrl != null) {
+                                AsyncImage(model = details.logoUrl, contentDescription = title.title,
+                                    contentScale = ContentScale.Fit,
+                                    modifier = Modifier.weight(1f, fill = false).widthIn(max = 460.dp).height(82.dp))
+                            } else {
+                                Text(title.title, style = MaterialTheme.typography.headlineLarge,
+                                    color = surfaceColors.text, fontWeight = FontWeight.Bold,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                        Text(title.matchedSeasonTitle ?: title.ukrainianTitle ?: title.title,
+                            style = MaterialTheme.typography.titleMedium, color = AppColors.TextLight,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            title.year?.let { Text(it.toString(), color = AppColors.TextSecondary) }
+                            if (countries.isNotEmpty()) Text(countries.joinToString(", "), color = AppColors.TextSecondary)
+                            title.rating?.let { Text("TMDB: ${String.format(Locale.US, "%.1f", it)}",
+                                color = AppColors.TextSecondary) }
+                        }
+                    }
+                } else if (experimentalArtwork != null) {
                     FanartLogo(experimentalArtwork, title.title,
                         Modifier.widthIn(max = 460.dp).height(82.dp))
+                } else if (details.logoUrl != null) {
+                    AsyncImage(model = details.logoUrl, contentDescription = title.title,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.widthIn(max = 460.dp).height(82.dp))
                 } else {
                     Text(title.title, modifier = Modifier.weight(1f, fill = false),
                         style = MaterialTheme.typography.headlineLarge,
                         color = surfaceColors.text,
                         fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (!favoritesLayout) Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (!title.overview.isNullOrBlank()) {
                         TmdbInfoChip("Synopsis", surfaceColors) { infoDialog = "synopsis" }
                     }
@@ -261,7 +339,7 @@ private fun TmdbDetailsContent(
                     }
                 }
             }
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+            if (!favoritesLayout) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 val secondaryTitle = title.englishTitle?.takeIf { it != title.title }
                     ?: title.originalTitle?.takeIf { it != title.title }
@@ -282,7 +360,9 @@ private fun TmdbDetailsContent(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 OutlinedButton(
-                    onClick = { torrentOpened = true },
+                    onClick = { onPanelSelected(if (torrentOpened) Panel.ONLINE else Panel.TORRENT) },
+                    enabled = aniListAvailability != AniListAvailability.CHECKING &&
+                        aniListAvailability != AniListAvailability.MISSING,
                     scale = OutlinedButtonDefaults.scale(scale = 1f, focusedScale = 1f),
                     shape = OutlinedButtonDefaults.shape(RoundedCornerShape(10.dp)),
                     border = OutlinedButtonDefaults.border(
@@ -296,7 +376,7 @@ private fun TmdbDetailsContent(
                         focusedContentColor = AppColors.ButtonDarkText
                     ),
                     modifier = Modifier.focusRequester(torrentFocus)
-                        .semantics { contentDescription = "Торент" },
+                        .semantics { contentDescription = if (torrentOpened) "Перемкнутися на AniTube" else "Перемкнутися на Toloka" },
                 ) { FontAwesomeIcon(FaIcons.ASTERISK, size = 18.sp) }
 
                 if (torrentOpened) {
@@ -309,6 +389,39 @@ private fun TmdbDetailsContent(
                         modifier = Modifier.weight(1f),
                         surfaceColors = surfaceColors,
                     )
+                } else {
+                    Spacer(Modifier.width(16.dp))
+                    if (anitube is AnitubeState.Found) {
+                        val candidate = anitube.catalog?.candidates?.firstOrNull {
+                            it.release.newsId == anitube.release.newsId
+                        }
+                        val isFilm = title.type == TmdbMediaType.MOVIE ||
+                            candidate?.kind == ua.any2b.tvplayer.data.AnitubeReleaseKind.FILM
+                        val seasons = anitube.catalog?.seasons.orEmpty()
+                            .filter { it.releases.isNotEmpty() }
+                        val voice = anitube.voices.getOrNull(anitube.selectedVoiceIndex)
+                        Box(Modifier.weight(1f)) {
+                            AnitubePlaybackControls(
+                                voices = anitube.voices,
+                                selectedVoiceIndex = anitube.selectedVoiceIndex,
+                                onSelectVoice = onSelectAnitubeVoice,
+                                episodes = if (isFilm) emptyList() else voice?.episodes.orEmpty(),
+                                selectedEpisodeIndex = anitube.selectedEpisodeIndex,
+                                onSelectEpisode = onSelectAnitubeEpisode,
+                                seasons = seasons.map { AnitubeSeasonOption(it.number, "S${it.number}") },
+                                selectedSeasonId = candidate?.seasonNumber ?: seasons.firstOrNull()?.number,
+                                onSelectSeason = onSelectAnitubeSeason,
+                                isMovie = isFilm,
+                                resolving = anitube.resolvingStream,
+                                watchLabel = if (anitube.resumeProgress in 0.01f..0.98f)
+                                    "Продовжити перегляд" else "Дивитися ${if (isFilm) "фільм" else "серію"}",
+                                canWatch = voice?.episodes?.getOrNull(anitube.selectedEpisodeIndex) != null,
+                                onWatch = onPlayAnitube,
+                                surfaceColors = surfaceColors,
+                                showWatch = true,
+                            )
+                        }
+                    }
                 }
             }
             if (torrentOpened) {
@@ -334,6 +447,24 @@ private fun TmdbDetailsContent(
                         surfaceColors = surfaceColors,
                     )
                 }
+            } else if (anitube !is AnitubeState.Found) {
+                Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState())
+                    .background(surfaceColors.panel, RoundedCornerShape(12.dp))) {
+                    AnitubeControllerPanel(
+                        state = anitube,
+                        isMovie = title.type == TmdbMediaType.MOVIE,
+                        query = SeriesTitleSearch.clean(title.matchedSeasonTitle ?: title.title),
+                        onRetry = onRetryAnitube,
+                        onSelectRelease = onSelectAnitubeRelease,
+                        onSelectSeason = onSelectAnitubeSeason,
+                        onSelectVoice = onSelectAnitubeVoice,
+                        onSelectEpisode = onSelectAnitubeEpisode,
+                        onPlay = onPlayAnitube,
+                        surfaceColors = surfaceColors,
+                    )
+                }
+            } else {
+                Spacer(Modifier.weight(1f))
             }
         }
     }
@@ -425,7 +556,8 @@ internal fun tmdbTorrentQueryOptions(details: TmdbDetails): List<Pair<String, St
             if (year != null) add("$label + рік" to "$value $year")
         }
         fun addName(label: String, name: String?) {
-            val value = name?.trim()?.takeIf(String::isNotBlank) ?: return
+            val value = name?.trim()?.takeIf(String::isNotBlank)
+                ?.let(SeriesTitleSearch::clean)?.takeIf(String::isNotBlank) ?: return
             addVariant(label, value)
             shortenedSearchNames(value).forEach { short ->
                 addVariant("$label · без уточнення", short)

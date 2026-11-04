@@ -4,6 +4,7 @@ import android.content.Intent
 import android.content.ActivityNotFoundException
 import android.net.Uri
 import android.os.Bundle
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -16,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ua.any2b.tvplayer.ui.AppTheme
 import ua.any2b.tvplayer.ui.DetailsScreen
@@ -34,7 +36,12 @@ import ua.any2b.tvplayer.data.FanartKeyStore
 import ua.any2b.tvplayer.data.SettingsManager
 import ua.any2b.tvplayer.data.TorrServerAuthStore
 import ua.any2b.tvplayer.data.TolokaPlaybackStore
+import ua.any2b.tvplayer.data.AniListTmdbCatalog
 import ua.any2b.core.anilist.trailerSearchUrl
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class DetailsActivity : ComponentActivity() {
 
@@ -57,6 +64,11 @@ class DetailsActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val legacyAniListId = intent.getIntExtra("ANIME_ID", -1)
+        if (legacyAniListId > 0) {
+            openUnifiedTmdbDetails(legacyAniListId)
+            return
+        }
         refreshAfterPlayback = savedInstanceState?.getBoolean("refresh_after_playback") ?: false
         val experimental = SettingsManager(this).isExperimentalAppearanceEnabled() &&
             !FanartKeyStore(this).read().isNullOrBlank()
@@ -113,7 +125,7 @@ class DetailsActivity : ComponentActivity() {
                     onSelectTmdb = viewModel::confirmTmdbLink,
                     onFindTmdbCandidates = { viewModel.retryTmdbLink(ignoreSaved = true) },
                     onTolokaSearch = viewModel::searchToloka,
-                    onAutoTolokaSearch = viewModel::searchTolokaAutomatically,
+                    onPanelSelected = viewModel::setPanel,
                     onSelectTolokaHit = viewModel::selectTolokaHit,
                     onPromoteTolokaHit = viewModel::promoteTolokaHit,
                     onDiscardTolokaHit = viewModel::discardWeakTolokaHit,
@@ -164,6 +176,38 @@ class DetailsActivity : ComponentActivity() {
                 )
                 }
             }
+        }
+    }
+
+    private fun openUnifiedTmdbDetails(aniListId: Int) {
+        setContent {
+            AppTheme {
+                Box(Modifier.fillMaxSize().background(AppColors.BackgroundDark),
+                    contentAlignment = Alignment.Center) {
+                    Text("Зіставляємо тайтл з TMDB…")
+                }
+            }
+        }
+        lifecycleScope.launch {
+            val title = try {
+                withContext(Dispatchers.IO) { AniListTmdbCatalog(applicationContext).resolveById(aniListId) }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                Log.e("AniListDetailsBridge", "TMDB resolution failed aniListId=$aniListId", error)
+                null
+            }
+            if (isFinishing) return@launch
+            if (title == null) {
+                Toast.makeText(this@DetailsActivity,
+                    "Не вдалося знайти відповідник тайтла в TMDB", Toast.LENGTH_LONG).show()
+            } else {
+                startActivity(Intent(this@DetailsActivity, TmdbDetailsActivity::class.java).apply {
+                    putExtra(TmdbDetailsActivity.EXTRA_TMDB_ID, title.id)
+                    putExtra(TmdbDetailsActivity.EXTRA_TMDB_TYPE, title.type.path)
+                })
+            }
+            finish()
         }
     }
 

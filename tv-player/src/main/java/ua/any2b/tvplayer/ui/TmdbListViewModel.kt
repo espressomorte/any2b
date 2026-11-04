@@ -14,6 +14,7 @@ import ua.any2b.core.tmdb.TmdbMediaType
 import ua.any2b.core.tmdb.TmdbTitle
 import ua.any2b.tvplayer.data.TmdbFavoritesStore
 import ua.any2b.tvplayer.data.TmdbWatchHistoryStore
+import ua.any2b.tvplayer.data.AniListLocalDataMigrator
 import ua.any2b.tvplayer.data.MalTmdbCatalog
 import ua.any2b.tvplayer.data.tmdbHomeRecommendations
 import ua.any2b.tvplayer.data.workerTmdbConnection
@@ -35,6 +36,7 @@ class TmdbListViewModel(application: Application) : AndroidViewModel(application
     private val malTmdbCatalog = MalTmdbCatalog(application)
     private val history = TmdbWatchHistoryStore(application)
     private val favorites = TmdbFavoritesStore(application)
+    private val localDataMigrator = AniListLocalDataMigrator(application)
     private val _state = MutableStateFlow(TmdbListState())
     val state: StateFlow<TmdbListState> = _state
     private var loadJob: Job? = null
@@ -55,12 +57,16 @@ class TmdbListViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun refreshPersonalList() {
-        val titles = when (_state.value.category) {
-            "favorites" -> favorites.all()
-            "history" -> history.all()
-            else -> return
+        if (_state.value.category !in setOf("favorites", "history")) return
+        viewModelScope.launch {
+            localDataMigrator.migrate()
+            val titles = when (_state.value.category) {
+                "favorites" -> favorites.all()
+                "history" -> history.all()
+                else -> return@launch
+            }
+            _state.value = _state.value.copy(titles = titles, page = 1, hasMore = false)
         }
-        _state.value = _state.value.copy(titles = titles, page = 1, hasMore = false)
     }
 
     fun changeSort(sort: TmdbListSort) {

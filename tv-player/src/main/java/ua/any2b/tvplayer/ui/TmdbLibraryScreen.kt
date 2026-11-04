@@ -39,11 +39,12 @@ import kotlinx.coroutines.launch
 fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
     onRetry: (TmdbMediaType) -> Unit, onMore: (String) -> Unit, onBack: () -> Unit,
     animationOnly: Boolean = false,
-    onOpenAniTube: () -> Unit = {},
     onSearchTitle: () -> Unit = {},
     onOpenAllTmdb: () -> Unit = {},
     onSettings: () -> Unit = {},
     onRetryMal: () -> Unit = {},
+    onRetryAniList: () -> Unit = {},
+    onOpenFavorite: (TmdbTitle) -> Unit = onOpen,
 ) {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -57,15 +58,15 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
             }
         }
     }
-    Column(Modifier.fillMaxSize().background(AppColors.BackgroundDark)
+    if (animationOnly && state.initialHomeLoading) {
+        AnimariumLoadingScreen()
+    } else Column(Modifier.fillMaxSize().background(AppColors.BackgroundDark)
         .padding(horizontal = 32.dp, vertical = 24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End,
             verticalAlignment = Alignment.CenterVertically) {
             if (animationOnly) {
                 HomeActionButton(FaIcons.SEARCH_PLUS, "Пошук тайтла через TMDB", onClick = onSearchTitle)
-                Spacer(Modifier.width(12.dp))
-                HomeActionButton(FaIcons.ASTERISK, "Анітюб", onClick = onOpenAniTube)
                 Spacer(Modifier.width(12.dp))
                 HomeActionButton(null, "Усі тайтли TMDB", vector = R.drawable.fa_rebel,
                     onClick = onOpenAllTmdb)
@@ -84,7 +85,7 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
                                 onSectionFocus = { alignSection("history") })
                         }
                         "favorites" -> if (state.favorites.isNotEmpty()) item(key = "favorites") {
-                            TmdbLibraryRow(section.title, state.favorites, onOpen,
+                            TmdbLibraryRow(section.title, state.favorites, onOpenFavorite,
                                 onMore = { onMore("favorites") },
                                 onSectionFocus = { alignSection("favorites") })
                         }
@@ -111,6 +112,16 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
                                 onMore = { onMore("mal_top") }, onRetry = onRetryMal,
                                 onSectionFocus = { alignSection("mal_top") })
                         }
+                        "trending" -> item(key = "trending") {
+                            AniListHomeRow(section.title, state.trending, onOpen,
+                                onMore = { onMore("trending") }, onRetry = onRetryAniList,
+                                onSectionFocus = { alignSection("trending") })
+                        }
+                        "popular_season" -> item(key = "popular_season") {
+                            AniListHomeRow(section.title, state.popularSeason, onOpen,
+                                onMore = { onMore("popular_season") }, onRetry = onRetryAniList,
+                                onSectionFocus = { alignSection("popular_season") })
+                        }
                     }
                 }
             } else {
@@ -130,12 +141,32 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
                         onSectionFocus = { alignSection("movies") })
                 }
                 if (state.favorites.isNotEmpty()) item(key = "favorites") {
-                    TmdbLibraryRow("Обрані тайтли", state.favorites, onOpen,
+                    TmdbLibraryRow("Обрані тайтли", state.favorites, onOpenFavorite,
                         onMore = { onMore("favorites") },
                         onSectionFocus = { alignSection("favorites") })
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun AniListHomeRow(title: String, state: AniListHomeState,
+    onOpen: (TmdbTitle) -> Unit, onMore: () -> Unit, onRetry: () -> Unit,
+    onSectionFocus: () -> Unit) {
+    when (state) {
+        AniListHomeState.Loading -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(title, style = MaterialTheme.typography.titleLarge, color = Color.White)
+            Text("Завантаження…", color = AppColors.TextSecondary)
+        }
+        is AniListHomeState.Error -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(title, style = MaterialTheme.typography.titleLarge, color = Color.White)
+            Text(state.message, color = AppColors.ErrorRed)
+            Button(onClick = onRetry) { Text("Повторити") }
+        }
+        is AniListHomeState.Results -> if (state.titles.isNotEmpty())
+            TmdbLibraryRow(title, state.titles, onOpen, onMore,
+                onSectionFocus = onSectionFocus)
     }
 }
 

@@ -109,6 +109,52 @@ class AniListClient(
         )
     }
 
+    /** Resolves several AniList IDs in a single GraphQL request with only search metadata. */
+    suspend fun animeLookups(ids: List<Int>): List<AniListAnimeLookup> {
+        val uniqueIds = ids.filter { it > 0 }.distinct()
+        if (uniqueIds.isEmpty()) return emptyList()
+        val data = execute(ANIME_LOOKUPS_QUERY,
+            JSONObject().put("ids", JSONArray(uniqueIds)))
+        val media = data.optJSONObject("Page")?.optJSONArray("media") ?: return emptyList()
+        fun parseLookup(item: JSONObject, relations: Boolean): AniListAnimeLookup? {
+            val titleJson = item.optJSONObject("title") ?: return null
+            val startDate = item.optJSONObject("startDate")?.let { date ->
+                listOfNotNull(date.int("year"), date.int("month")?.toString()?.padStart(2, '0'),
+                    date.int("day")?.toString()?.padStart(2, '0')).joinToString("-")
+                    .takeIf(String::isNotEmpty)
+            }
+            val parsedRelations = if (!relations) emptyList() else {
+                val edges = item.optJSONObject("relations")?.optJSONArray("edges")
+                (0 until (edges?.length() ?: 0)).mapNotNull { relationIndex ->
+                    val edge = edges?.optJSONObject(relationIndex) ?: return@mapNotNull null
+                    val node = edge.optJSONObject("node") ?: return@mapNotNull null
+                    if (node.optString("type") != "ANIME" || node.optBoolean("isAdult"))
+                        return@mapNotNull null
+                    parseLookup(node, relations = false)?.let {
+                        AniListLookupRelation(edge.optString("relationType"), it)
+                    }
+                }.distinctBy { it.anime.id }
+            }
+            return AniListAnimeLookup(
+                id = item.optInt("id"),
+                title = Title(titleJson.str("romaji"), titleJson.str("english"), titleJson.str("native")),
+                synonyms = item.optJSONArray("synonyms")?.let { synonyms ->
+                    (0 until synonyms.length()).mapNotNull { synonyms.optString(it).takeIf(String::isNotBlank) }
+                }.orEmpty(),
+                seasonYear = item.int("seasonYear"),
+                episodes = item.int("episodes"),
+                durationMinutes = item.int("duration"),
+                format = item.str("format"),
+                status = item.str("status"),
+                startDate = startDate,
+                relations = parsedRelations,
+            )
+        }
+        return (0 until media.length()).mapNotNull { index ->
+            media.optJSONObject(index)?.let { parseLookup(it, relations = true) }
+        }
+    }
+
     /** A page of recommendations for the full list on a details screen. */
     suspend fun recommendationsPage(id: Int, page: Int, perPage: Int = 20): AnimeCardPage {
         require(page > 0 && perPage in 1..25)
@@ -126,6 +172,46 @@ class AniListClient(
         val vars = JSONObject().put("search", query).put("perPage", perPage)
         val data = execute(SEARCH_QUERY, vars)
         return data.getJSONObject("Page").getJSONArray("media").toCards()
+    }
+
+    /** Search candidates with the extra fields needed to resolve external IDs and seasons. */
+    suspend fun searchAnimeLookups(query: String, perPage: Int = 20): List<AniListAnimeLookup> {
+        require(perPage in 1..50)
+        if (query.isBlank()) return emptyList()
+        val data = execute(SEARCH_LOOKUPS_QUERY,
+            JSONObject().put("search", query.trim()).put("perPage", perPage))
+        val media = data.optJSONObject("Page")?.optJSONArray("media") ?: return emptyList()
+        return (0 until media.length()).mapNotNull { index ->
+            val item = media.optJSONObject(index) ?: return@mapNotNull null
+            val titleJson = item.optJSONObject("title") ?: return@mapNotNull null
+            val date = item.optJSONObject("startDate")
+            val startDate = listOfNotNull(date?.int("year"), date?.int("month")?.toString()?.padStart(2, '0'),
+                date?.int("day")?.toString()?.padStart(2, '0')).joinToString("-")
+                .takeIf(String::isNotEmpty)
+            val links = item.optJSONArray("externalLinks")?.let { array ->
+                (0 until array.length()).mapNotNull { linkIndex ->
+                    array.optJSONObject(linkIndex)?.let { link ->
+                        val site = link.str("site") ?: return@mapNotNull null
+                        val url = link.str("url") ?: return@mapNotNull null
+                        AniListExternalLink(site, url)
+                    }
+                }
+            }.orEmpty()
+            AniListAnimeLookup(
+                id = item.optInt("id"),
+                title = Title(titleJson.str("romaji"), titleJson.str("english"), titleJson.str("native")),
+                synonyms = item.optJSONArray("synonyms")?.let { array ->
+                    (0 until array.length()).mapNotNull { array.optString(it).takeIf(String::isNotBlank) }
+                }.orEmpty(),
+                seasonYear = item.int("seasonYear"),
+                episodes = item.int("episodes"),
+                durationMinutes = item.int("duration"),
+                format = item.str("format"),
+                status = item.str("status"),
+                startDate = startDate,
+                externalLinks = links,
+            )
+        }
     }
 
     /** One page of a home category, used by the full category screen. */
@@ -379,6 +465,42 @@ fragment relatedCard on Media {
 }
 """
 
+        const val ANIME_LOOKUPS_QUERY = """
+query AnimeLookups(${'$'}ids: [Int]) {
+  Page(page: 1, perPage: 50) {
+    media(id_in: ${'$'}ids, type: ANIME, isAdult: false) {
+      id
+      title { romaji english native }
+      synonyms
+      seasonYear
+      episodes
+      duration
+      format
+      status
+      startDate { year month day }
+      relations {
+        edges {
+          relationType
+          node {
+            id
+            type
+            isAdult
+            title { romaji english native }
+            synonyms
+            seasonYear
+            episodes
+            duration
+            format
+            status
+            startDate { year month day }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
         const val RECOMMENDATIONS_QUERY = """
 query Recommendations(${'$'}id: Int, ${'$'}page: Int, ${'$'}perPage: Int) {
   Media(id: ${'$'}id, type: ANIME) {
@@ -421,6 +543,25 @@ fragment card on Media {
   status
   seasonYear
   nextAiringEpisode { episode }
+}
+"""
+
+        const val SEARCH_LOOKUPS_QUERY = """
+query SearchAnimeLookups(${'$'}search: String, ${'$'}perPage: Int) {
+  Page(page: 1, perPage: ${'$'}perPage) {
+    media(type: ANIME, search: ${'$'}search, isAdult: false, sort: SEARCH_MATCH) {
+      id
+      title { romaji english native }
+      synonyms
+      seasonYear
+      episodes
+      duration
+      format
+      status
+      startDate { year month day }
+      externalLinks { site url }
+    }
+  }
 }
 """
     }

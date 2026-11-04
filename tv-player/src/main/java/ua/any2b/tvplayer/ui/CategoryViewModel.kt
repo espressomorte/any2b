@@ -9,15 +9,15 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import ua.any2b.core.anilist.AniListClient
-import ua.any2b.core.anilist.AnimeCard
-import ua.any2b.core.anilist.Title
-import ua.any2b.core.anilist.groupNumberedTvSeasons
 import ua.any2b.core.tmdb.TmdbListSort
-import ua.any2b.tvplayer.data.FavoritesManager
-import ua.any2b.tvplayer.data.WatchHistoryManager
+import ua.any2b.core.tmdb.TmdbTitle
+import ua.any2b.tvplayer.data.AniListTmdbCatalog
+import ua.any2b.tvplayer.data.AniListLocalDataMigrator
+import ua.any2b.tvplayer.data.TmdbFavoritesStore
+import ua.any2b.tvplayer.data.TmdbWatchHistoryStore
 
 data class CategoryState(
-    val items: List<AnimeCard> = emptyList(),
+    val items: List<TmdbTitle> = emptyList(),
     val sort: TmdbListSort = TmdbListSort.POPULARITY,
     val yearAscending: Boolean = false,
     val yearRange: IntRange? = null,
@@ -32,11 +32,13 @@ class CategoryViewModel(
     private val categoryId: String,
     private val client: AniListClient = AniListClient(),
 ) : AndroidViewModel(application) {
-    private val favoritesManager = FavoritesManager(application)
-    private val historyManager = WatchHistoryManager(application)
+    private val localFavorites = TmdbFavoritesStore(application)
+    private val localHistory = TmdbWatchHistoryStore(application)
+    private val tmdbCatalog = AniListTmdbCatalog(application)
+    private val localDataMigrator = AniListLocalDataMigrator(application)
     private var page = 0
-    private var localItems: List<AnimeCard> = emptyList()
-    private var loadedRawItems: List<AnimeCard> = emptyList()
+    private var localItems: List<TmdbTitle> = emptyList()
+    private var loadedRawItems: List<TmdbTitle> = emptyList()
     private var loadJob: Job? = null
 
     private val _state = MutableStateFlow(CategoryState(
@@ -47,8 +49,11 @@ class CategoryViewModel(
     val state: StateFlow<CategoryState> = _state
 
     init {
-        if (isLocal) localItems = readLocalItems()
-        loadMore()
+        if (isLocal) viewModelScope.launch {
+            localDataMigrator.migrate()
+            localItems = readLocalItems()
+            loadMore()
+        } else loadMore()
     }
 
     private val isLocal: Boolean get() = categoryId == "favorites" || categoryId == "history"
@@ -88,7 +93,7 @@ class CategoryViewModel(
         _state.value = current.copy(loadingMore = true, error = null)
         loadJob = viewModelScope.launch {
             try {
-                val nextItems: List<AnimeCard>
+                val nextItems: List<TmdbTitle>
                 val hasMore: Boolean
                 val relatedId = relatedAnimeId
                 val recommendationsId = recommendationsAnimeId
@@ -98,24 +103,25 @@ class CategoryViewModel(
                         hasMore = loadedRawItems.size + nextItems.size < localItems.size
                     }
                     relatedId != null -> {
-                        nextItems = client.animeDetails(relatedId).related
+                        nextItems = tmdbCatalog.resolveCards(client.animeDetails(relatedId).related)
                         hasMore = false
                     }
                     recommendationsId != null -> {
                         val result = client.recommendationsPage(recommendationsId, page + 1, PAGE_SIZE)
                         page++
-                        nextItems = result.items
+                        nextItems = tmdbCatalog.resolveCards(result.items)
                         hasMore = result.hasNextPage
                     }
                     else -> {
-                        nextItems = client.categoryPage(categoryId, page + 1, PAGE_SIZE,
+                        val cards = client.categoryPage(categoryId, page + 1, PAGE_SIZE,
                             current.sort, current.yearRange, current.yearAscending)
                         page++
-                        hasMore = nextItems.size == PAGE_SIZE
+                        nextItems = tmdbCatalog.resolveCards(cards)
+                        hasMore = cards.size == PAGE_SIZE
                     }
                 }
-                loadedRawItems = (loadedRawItems + nextItems).distinctBy { it.id }
-                val allItems = groupNumberedTvSeasons(loadedRawItems)
+                loadedRawItems = (loadedRawItems + nextItems).distinctBy { it.type to it.id }
+                val allItems = loadedRawItems
                 _state.value = _state.value.copy(items = allItems,
                     loadingMore = false, hasMore = hasMore)
             } catch (e: CancellationException) {
@@ -129,29 +135,20 @@ class CategoryViewModel(
 
     fun refreshLocal() {
         if (!isLocal) return
-        localItems = readLocalItems()
-        val visibleCount = maxOf(PAGE_SIZE, loadedRawItems.size)
-        val visible = localItems.take(visibleCount)
-        loadedRawItems = visible
-        _state.value = _state.value.copy(items = groupNumberedTvSeasons(visible),
-            hasMore = visible.size < localItems.size)
+        viewModelScope.launch {
+            localDataMigrator.migrate()
+            localItems = readLocalItems()
+            val visibleCount = maxOf(PAGE_SIZE, loadedRawItems.size)
+            val visible = localItems.take(visibleCount)
+            loadedRawItems = visible
+            _state.value = _state.value.copy(items = visible,
+                hasMore = visible.size < localItems.size)
+        }
     }
 
-    private fun readLocalItems(): List<AnimeCard> = when (categoryId) {
-        "favorites" -> favoritesManager.getFavorites()
-        "history" -> historyManager.getHistory().map { entry ->
-            AnimeCard(
-                id = entry.animeId,
-                title = Title(entry.romaji, entry.english, entry.native),
-                cover = entry.cover,
-                score = entry.score,
-                episodes = entry.episodes,
-                format = entry.format,
-                status = entry.status,
-                seasonYear = entry.seasonYear,
-                nextEpisode = null,
-            )
-        }
+    private fun readLocalItems(): List<TmdbTitle> = when (categoryId) {
+        "favorites" -> localFavorites.all()
+        "history" -> localHistory.all()
         else -> emptyList()
     }
 

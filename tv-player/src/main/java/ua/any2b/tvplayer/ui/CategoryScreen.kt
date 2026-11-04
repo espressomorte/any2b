@@ -18,7 +18,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.tv.material3.*
 import kotlinx.coroutines.flow.collect
-import ua.any2b.core.anilist.AnimeCard
+import ua.any2b.core.tmdb.TmdbTitle
 import ua.any2b.core.tmdb.TmdbListSort
 
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -26,7 +26,7 @@ import ua.any2b.core.tmdb.TmdbListSort
 fun CategoryScreen(
     title: String,
     state: CategoryState,
-    onOpen: (AnimeCard) -> Unit,
+    onOpen: (TmdbTitle) -> Unit,
     onLoadMore: () -> Unit,
     onSort: (TmdbListSort) -> Unit,
     onYearRange: (IntRange?) -> Unit,
@@ -119,14 +119,8 @@ fun CategoryScreen(
                 horizontalArrangement = Arrangement.spacedBy(20.dp),
                 verticalArrangement = Arrangement.spacedBy(28.dp),
             ) {
-                items(state.items, key = { it.id }) { card ->
-                    PosterCard(
-                        card,
-                        modifier = Modifier.fillMaxWidth(),
-                        showRelatedBadge = showRelatedBadge,
-                        onClick = { onOpen(card) },
-                        onFavoriteChanged = onFavoriteChanged,
-                    )
+                items(state.items, key = { "${it.type}:${it.id}" }) { title ->
+                    TmdbPosterCard(title, onClick = { onOpen(title) })
                 }
                 if (state.loadingMore) {
                     item(key = "loading") { Text("Завантаження...", color = AppColors.TextSecondary) }

@@ -239,7 +239,7 @@ internal fun HomeActionButton(icon: String?, label: String, vector: Int? = null,
 }
 
 @Composable
-private fun AnimariumLoadingScreen() {
+internal fun AnimariumLoadingScreen() {
     Box(
         modifier = Modifier
             .fillMaxSize()

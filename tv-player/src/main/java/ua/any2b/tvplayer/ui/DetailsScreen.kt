@@ -1,46 +1,30 @@
 package ua.any2b.tvplayer.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.basicMarquee
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.relocation.BringIntoViewRequester
-import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
-import kotlinx.coroutines.delay
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.foundation.focusable
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -52,14 +36,10 @@ import coil.compose.AsyncImage
 import ua.any2b.core.anilist.AnimeDetails
 import ua.any2b.core.anilist.AnimeCard
 import ua.any2b.core.anilist.Title
-import ua.any2b.core.anilist.NumberedSeason
 import ua.any2b.core.anilist.groupNumberedTvSeasons
-import ua.any2b.core.anitube.AnitubeEpisode
 import ua.any2b.core.anitube.AnitubeSearchResult
 import ua.any2b.core.anitube.AnitubeVoice
-import ua.any2b.core.toloka.TolokaHit
-import ua.any2b.core.toloka.TolokaReleaseMetadataParser
-import ua.any2b.core.toloka.shortenedSearchNames
+import ua.any2b.core.anitube.AnitubeEpisode
 import ua.any2b.core.tmdb.TmdbTitle
 import ua.any2b.core.fanart.FanartArtwork
 
@@ -78,7 +58,7 @@ fun DetailsScreen(
     onSelectTmdb: (TmdbTitle) -> Unit,
     onFindTmdbCandidates: () -> Unit,
     onTolokaSearch: (String) -> Unit,
-    onAutoTolokaSearch: (String, String?) -> Unit,
+    onPanelSelected: (Panel) -> Unit,
     onSelectTolokaHit: (String) -> Unit,
     onPromoteTolokaHit: (String) -> Unit = {},
     onDiscardTolokaHit: (String) -> Unit = {},
@@ -140,17 +120,8 @@ fun DetailsScreen(
                 var showTmdbDialog by remember(state.details.id) { mutableStateOf(false) }
                 var showRelatedDialog by remember(state.details.id) { mutableStateOf(false) }
                 var showTolokaQueryDialog by remember(state.details.id) { mutableStateOf(false) }
-                var showEpisodeDialog by remember(state.details.id) { mutableStateOf(false) }
                 var showSynopsisDialog by remember(state.details.id) { mutableStateOf(false) }
-                LaunchedEffect(showEpisodeDialog) {
-                    if (!showEpisodeDialog && initialWatchFocusSet) watchFocusRequester.requestFocus()
-                }
-                var videoTab by rememberSaveable(state.details.id) { mutableStateOf("online") }
-                val onlineUnavailable = state.videoSource is VideoSourceState.NotFound &&
-                    state.tmdbLink !is TmdbLinkState.Loading &&
-                    state.seriesSeasons.count { it.animeId != null } <= 1
-                val displayVideoTab = if (onlineUnavailable) "torrent" else videoTab
-                var automaticTorrentSearchStarted by remember(state.details.id) { mutableStateOf(false) }
+                val displayVideoTab = if (state.activePanel == Panel.TORRENT) "torrent" else "online"
                 val anitubeUkrainianTitle = (state.videoSource as? VideoSourceState.Success)?.release?.title
                 val tmdbUkrainianTitle = state.tmdbLink.ukrainianTitle
                 val seriesTitle = (state.tmdbLink as? TmdbLinkState.Confirmed)?.title
@@ -181,37 +152,10 @@ fun DetailsScreen(
                         tolokaQuery = tolokaOptions.first().second
                     }
                 }
-                LaunchedEffect(onlineUnavailable, state.details.id) {
-                    if (onlineUnavailable) {
-                        // TMDB can trigger one last AniTube retry immediately after resolving.
-                        delay(250)
-                        videoTab = "torrent"
-                        if (!automaticTorrentSearchStarted && state.tolokaSearch is TolokaSearchState.Idle) {
-                            automaticTorrentSearchStarted = true
-                            val initial = tolokaOptions.firstOrNull()?.second.orEmpty()
-                            if (initial.isNotBlank()) {
-                                tolokaQuery = initial
-                                onAutoTolokaSearch(initial, state.details.title.english)
-                            }
-                        }
-                    }
-                }
-                LaunchedEffect(state.tolokaSearch, onlineUnavailable) {
+                LaunchedEffect(state.tolokaSearch) {
                     val result = state.tolokaSearch as? TolokaSearchState.Results
-                    if (onlineUnavailable && result != null) {
+                    if (!tolokaQueryCustomized && result != null) {
                         tolokaQuery = result.query
-                        tolokaQueryCustomized = true
-                    }
-                }
-                LaunchedEffect(videoTab, onlineUnavailable, state.details.id) {
-                    if (videoTab == "torrent" && !onlineUnavailable) {
-                        val currentQuery = if (tolokaQueryCustomized) tolokaQuery
-                            else tolokaOptions.firstOrNull()?.second.orEmpty()
-                        if (currentQuery.isNotBlank()) {
-                            tolokaQuery = currentQuery
-                            tolokaQueryCustomized = true
-                            onTolokaSearch(currentQuery)
-                        }
                     }
                 }
                 val releaseCandidates = when (val source = state.videoSource) {
@@ -522,13 +466,12 @@ fun DetailsScreen(
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    if (onlineUnavailable) {
-                                        SegmentButton("Торент", selected = true,
-                                            surfaceColors = surfaceColors,
-                                            icon = FaIcons.ASTERISK) { videoTab = "torrent" }
-                                    } else {
-                                        SegmentedControl(selectedTab = videoTab,
-                                            surfaceColors = surfaceColors) { tab -> videoTab = tab }
+                                    SegmentButton("Перемкнути пошукову панель",
+                                        selected = displayVideoTab == "torrent",
+                                        surfaceColors = surfaceColors,
+                                        icon = FaIcons.ASTERISK) {
+                                        onPanelSelected(if (state.activePanel == Panel.TORRENT)
+                                            Panel.ONLINE else Panel.TORRENT)
                                     }
                                     if (displayVideoTab == "torrent") {
                                         TorrentTitleHeading(
@@ -612,20 +555,8 @@ fun DetailsScreen(
                                             } else onRetryVideoSource
                                         )
                                         is VideoSourceState.Success -> {
-                                            val groups = remember(source.voices) { voiceCategoryGroups(source.voices) }
-                                            val selectedGroup = groups.firstOrNull { group ->
-                                                group.variants.any { it.index == state.selectedVoiceIndex }
-                                            }
-                                            val rememberedVariants = remember(state.details.id, source.release.newsId, source.voices) {
-                                                mutableStateMapOf<String, Int>().apply {
-                                                    if (selectedGroup != null) put(selectedGroup.key, state.selectedVoiceIndex)
-                                                }
-                                            }
-                                            var menuGroup by remember(state.details.id, source.release.newsId, source.voices) {
-                                                mutableStateOf<VoiceCategoryGroup?>(null)
-                                            }
-                                            val selectedEpisode = state.voices.getOrNull(state.selectedVoiceIndex)
-                                                ?.episodes?.getOrNull(state.selectedEpisodeIndex)
+                                            val currentVoice = source.voices.getOrNull(state.selectedVoiceIndex)
+                                            val selectedEpisode = currentVoice?.episodes?.getOrNull(state.selectedEpisodeIndex)
                                             val canWatch = selectedEpisode != null && !state.resolvingStream
                                             LaunchedEffect(canWatch) {
                                                 if (canWatch && !initialWatchFocusSet) {
@@ -644,142 +575,30 @@ fun DetailsScreen(
                                                 isMovie -> "Дивитися фільм"
                                                 else -> "Дивитися серію"
                                             }
-                                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                                Row(
-                                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                ) {
-                                                    var isWatchFocused by remember { mutableStateOf(false) }
-                                                    val watchBg = if (isWatchFocused) AppColors.NeonCyanLight else surfaceColors.card
-                                                    val watchText = if (isWatchFocused) AppColors.ButtonDarkText else surfaceColors.text
-                                                    Button(
-                                                        onClick = onWatchClick,
-                                                        enabled = canWatch,
-                                                        scale = ButtonDefaults.scale(scale = 1f, focusedScale = 1f),
-                                                        shape = ButtonDefaults.shape(RoundedCornerShape(10.dp)),
-                                                        glow = ButtonDefaults.glow(
-                                                            glow = Glow.None,
-                                                            focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 8.dp),
-                                                        ),
-                                                        colors = ButtonDefaults.colors(
-                                                            containerColor = watchBg,
-                                                            contentColor = watchText,
-                                                            focusedContainerColor = watchBg,
-                                                            focusedContentColor = watchText,
-                                                        ),
-                                                        modifier = Modifier
-                                                            .height(38.dp)
-                                                            .focusRequester(watchFocusRequester)
-                                                            .zIndex(if (isWatchFocused) 1f else 0f)
-                                                            .onFocusChanged { isWatchFocused = it.isFocused }
-                                                            .neonGlow(focused = isWatchFocused, borderRadius = 10.dp),
-                                                    ) {
-                                                        Text(buttonText, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                                    }
-                                                LazyRow(
-                                                    contentPadding = PaddingValues(vertical = 8.dp),
-                                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                                    modifier = Modifier.weight(1f).graphicsLayer { clip = false }
-                                                ) {
-                                                    itemsIndexed(groups) { _, group ->
-                                                        var isStudioFocused by remember { mutableStateOf(false) }
-                                                        val isSelected = group.key == selectedGroup?.key
-                                                        val displayedIndex = if (isSelected) state.selectedVoiceIndex
-                                                            else rememberedVariants[group.key] ?: group.preferredIndex
-                                                        val displayedVoice = group.variants.firstOrNull { it.index == displayedIndex }
-                                                            ?.value ?: group.variants.first().value
-                                                        val bg = when {
-                                                            isStudioFocused -> AppColors.NeonCyanLight
-                                                            isSelected -> AppColors.NeonCyan
-                                                            else -> AppColors.SurfaceCard
-                                                        }
-                                                        val textColor = when {
-                                                            isStudioFocused -> AppColors.ButtonDarkText
-                                                            isSelected -> AppColors.ButtonDarkText
-                                                            else -> AppColors.TextSecondary
-                                                        }
-
-                                                        Card(
-                                                            onClick = {
-                                                                if (isSelected && group.variants.size > 1) {
-                                                                    menuGroup = group
-                                                                } else {
-                                                                    val index = rememberedVariants[group.key] ?: group.preferredIndex
-                                                                    rememberedVariants[group.key] = index
-                                                                    onSelectVoice(index)
-                                                                }
-                                                            },
-                                                            onLongClick = { if (group.variants.size > 1) menuGroup = group },
-                                                            scale = CardDefaults.scale(scale = 1f, focusedScale = 1f),
-                                                            shape = CardDefaults.shape(RoundedCornerShape(10.dp)),
-                                                            border = CardDefaults.border(border = Border.None, focusedBorder = Border.None),
-                                                            glow = CardDefaults.glow(
-                                                                glow = Glow.None,
-                                                                focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 8.dp)
-                                                            ),
-                                                            colors = CardDefaults.colors(
-                                                                containerColor = bg,
-                                                                focusedContainerColor = bg
-                                                            ),
-                                                            modifier = Modifier
-                                                                .zIndex(if (isStudioFocused) 1f else 0f)
-                                                                .onFocusChanged { isStudioFocused = it.isFocused }
-                                                                .neonGlow(focused = isStudioFocused, borderRadius = 10.dp)
-                                                        ) {
-                                                            Row(
-                                                                modifier = Modifier
-                                                                    .heightIn(min = 32.dp)
-                                                                    .padding(horizontal = 10.dp),
-                                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                                                verticalAlignment = Alignment.CenterVertically,
-                                                            ) {
-                                                                Text(
-                                                                    text = voiceButtonLabel(group, displayedVoice),
-                                                                    color = textColor,
-                                                                    fontSize = 11.sp,
-                                                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                                                )
-                                                                if (group.variants.size > 1) {
-                                                                    FontAwesomeIcon(FaIcons.ANGLE_DOWN, color = textColor, size = 11.sp)
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                                }
-                                            }
-                                            menuGroup?.let { group ->
-                                                StudioVoiceDialog(
-                                                    group = group,
-                                                    selectedVoiceIndex = state.selectedVoiceIndex,
-                                                    onDismiss = { menuGroup = null },
-                                                    onSelect = { index ->
-                                                        rememberedVariants[group.key] = index
-                                                        onSelectVoice(index)
-                                                        menuGroup = null
-                                                    },
-                                                )
-                                            }
+                                            val numbered = state.seriesSeasons.filter { it.animeId != null }
+                                            AnitubePlaybackControls(
+                                                voices = source.voices,
+                                                selectedVoiceIndex = state.selectedVoiceIndex,
+                                                onSelectVoice = onSelectVoice,
+                                                episodes = if (isMovie) emptyList() else currentVoice?.episodes.orEmpty(),
+                                                selectedEpisodeIndex = state.selectedEpisodeIndex,
+                                                onSelectEpisode = onSelectEpisode,
+                                                seasons = numbered.mapNotNull { season -> season.animeId?.let { id ->
+                                                    AnitubeSeasonOption(id, "S${season.number}")
+                                                } },
+                                                selectedSeasonId = state.details.id,
+                                                onSelectSeason = onOpenSeason,
+                                                isMovie = isMovie,
+                                                resolving = state.resolvingStream,
+                                                watchLabel = buttonText,
+                                                canWatch = canWatch,
+                                                watchFocusRequester = watchFocusRequester,
+                                                onWatch = onWatchClick,
+                                                surfaceColors = surfaceColors,
+                                            )
                                         }
                                     }
 
-                                    // Season and episode choices stay together below playback.
-                                    val currentVoice = if (state.videoSource is VideoSourceState.Success)
-                                        state.voices.getOrNull(state.selectedVoiceIndex) else null
-                                    val numbered = state.seriesSeasons
-                                    if (!isMovie && (numbered.isNotEmpty() ||
-                                            currentVoice?.episodes?.isNotEmpty() == true)) {
-                                        val currentSeason = numbered.firstOrNull { it.animeId == state.details.id }
-                                        OutlinedButton(
-                                            onClick = { showEpisodeDialog = true },
-                                            modifier = Modifier.padding(horizontal = 16.dp),
-                                        ) {
-                                            val episode = currentVoice?.episodes?.getOrNull(state.selectedEpisodeIndex)
-                                            Text((currentSeason?.let { "Сезон ${it.number} · " } ?: "") +
-                                                (episode?.let { "Серія ${it.episodeNumber}" } ?: "Вибрати серію") + "  ⌄")
-                                        }
-                                    }
                                 } else {
                                     TolokaSearchPanel(
                                         query = tolokaQuery,
@@ -821,35 +640,8 @@ fun DetailsScreen(
 
                 // Related Dialog ("Пов'язане")
                 if (showSynopsisDialog) {
-                    Dialog(onDismissRequest = { showSynopsisDialog = false }) {
-                        Column(Modifier.width(680.dp).heightIn(max = 560.dp)
-                            .background(surfaceColors.panel, RoundedCornerShape(12.dp))
-                            .verticalScroll(rememberScrollState()).padding(24.dp),
-                            verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                            Text("Синопсис", color = surfaceColors.text,
-                                style = MaterialTheme.typography.titleLarge)
-                            Text(state.details.description.orEmpty(), color = surfaceColors.mutedText)
-                            OutlinedButton(onClick = { showSynopsisDialog = false }) { Text("Назад") }
-                        }
-                    }
-                }
-                if (showEpisodeDialog) {
-                    val voice = state.voices.getOrNull(state.selectedVoiceIndex)
-                    SeasonEpisodeDialog(
-                        seasons = state.seriesSeasons,
-                        currentAnimeId = state.details.id,
-                        episodes = voice?.episodes.orEmpty(),
-                        selectedEpisodeIndex = state.selectedEpisodeIndex,
-                        onDismiss = { showEpisodeDialog = false },
-                        onEpisode = { index ->
-                            onSelectEpisode(index)
-                            showEpisodeDialog = false
-                        },
-                        onSeason = { id ->
-                            showEpisodeDialog = false
-                            onOpenSeason(id)
-                        },
-                    )
+                    DetailsSynopsisDialog(state.details.description.orEmpty(), surfaceColors,
+                        onDismiss = { showSynopsisDialog = false })
                 }
                 if (showRelatedDialog) {
                     RelatedDialog(
@@ -920,772 +712,6 @@ fun DetailsScreen(
     }
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun TmdbMatchDialog(
-    link: TmdbLinkState,
-    onDismiss: () -> Unit,
-    onRetry: () -> Unit,
-    onSelect: (TmdbTitle) -> Unit,
-) {
-    Dialog(onDismissRequest = onDismiss) {
-        Column(
-            Modifier.width(600.dp).heightIn(max = 620.dp)
-                .clip(RoundedCornerShape(18.dp))
-                .background(AppColors.SurfaceDark).padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text("Уточнити назву TMDB", style = MaterialTheme.typography.titleLarge,
-                color = AppColors.TextLight)
-            Text("Виберіть відповідний тайтл. Зв’язок збережеться після підтвердження.",
-                color = AppColors.TextSecondary)
-            Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                when (link) {
-                    TmdbLinkState.Loading -> Text("Пошук кандидатів…", color = AppColors.TextLight)
-                    is TmdbLinkState.Error -> Text(link.message, color = AppColors.ErrorRed)
-                    is TmdbLinkState.Confirmed -> Text("Пошук кандидатів…", color = AppColors.TextLight)
-                    is TmdbLinkState.Candidates -> {
-                        if (link.matches.isEmpty()) Text("Відповідників не знайдено", color = AppColors.TextSecondary)
-                        link.matches.forEach { match ->
-                            val title = match.title
-                            val secondary = listOfNotNull(title.englishTitle,
-                                title.originalTitle).distinct().filter { it != title.ukrainianTitle }
-                                .take(2).joinToString(" · ")
-                            Button(onClick = { onSelect(title) }, modifier = Modifier.fillMaxWidth()) {
-                                Column(Modifier.fillMaxWidth()) {
-                                    Text(title.matchedSeasonTitle ?: title.ukrainianTitle ?: title.title,
-                                        maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                    if (secondary.isNotBlank()) Text(secondary,
-                                        style = MaterialTheme.typography.labelSmall)
-                                    Text("${if (title.type == ua.any2b.core.tmdb.TmdbMediaType.MOVIE) "Фільм" else "TV"} · " +
-                                        "${title.matchedSeasonYear ?: title.year ?: "рік невідомий"}" +
-                                        if (16 in title.genreIds) " · Animation" else "",
-                                        style = MaterialTheme.typography.labelSmall)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Button(onClick = onRetry) { Text("Шукати знову") }
-                Button(onClick = onDismiss) { Text("Закрити") }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SegmentedControl(
-    selectedTab: String,
-    surfaceColors: DetailsSurfaceColors,
-    onTabSelected: (String) -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .clip(RoundedCornerShape(10.dp))
-            .background(surfaceColors.card)
-            .padding(3.dp),
-        horizontalArrangement = Arrangement.spacedBy(3.dp)
-    ) {
-        SegmentButton("Онлайн", selected = selectedTab == "online", surfaceColors = surfaceColors) {
-            onTabSelected("online")
-        }
-        SegmentButton("Торент", selected = selectedTab == "torrent",
-            surfaceColors = surfaceColors, icon = FaIcons.ASTERISK) {
-            onTabSelected("torrent")
-        }
-    }
-}
-
-@Composable
-private fun SegmentButton(label: String, selected: Boolean,
-    surfaceColors: DetailsSurfaceColors, icon: String? = null, onClick: () -> Unit) {
-    var focused by remember { mutableStateOf(false) }
-    val bg = when {
-        focused -> AppColors.NeonCyanLight
-        selected -> AppColors.NeonCyan
-        else -> Color.Transparent
-    }
-    val textColor = if (selected || focused) AppColors.ButtonDarkText else surfaceColors.text
-
-    Surface(
-        onClick = onClick,
-        scale = ClickableSurfaceDefaults.scale(scale = 1f, focusedScale = 1f),
-        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
-        border = ClickableSurfaceDefaults.border(border = Border.None, focusedBorder = Border.None),
-        glow = ClickableSurfaceDefaults.glow(glow = Glow.None, focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 6.dp)),
-        colors = ClickableSurfaceDefaults.colors(
-            containerColor = bg,
-            focusedContainerColor = bg
-        ),
-        modifier = Modifier
-            .zIndex(if (focused) 1f else 0f)
-            .onFocusChanged { focused = it.isFocused }
-            .neonGlow(focused = focused, borderRadius = 8.dp)
-            .semantics { contentDescription = label }
-    ) {
-        Box(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            if (icon != null) FontAwesomeIcon(icon, color = textColor, size = 14.sp)
-            else Text(label, color = textColor, fontSize = 12.sp,
-                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
-        }
-    }
-}
-
-@Composable
-private fun RelatedDialog(
-    related: List<AnimeCard>,
-    onDismiss: () -> Unit,
-    onOpen: (AnimeCard) -> Unit,
-) {
-    Dialog(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier
-                .width(720.dp)
-                .heightIn(max = 600.dp)
-                .clip(RoundedCornerShape(18.dp))
-                .background(AppColors.SurfaceDark)
-                .padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            Text("Пов’язані релізи", color = Color.White, style = MaterialTheme.typography.titleLarge)
-            LazyRow(
-                contentPadding = PaddingValues(vertical = 12.dp, horizontal = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(20.dp),
-                modifier = Modifier.graphicsLayer { clip = false }
-            ) {
-                itemsIndexed(related, key = { _, card -> card.id }) { _, card ->
-                    PosterCard(
-                        item = card,
-                        modifier = Modifier.width(160.dp),
-                        showRelatedBadge = true,
-                        onClick = { onOpen(card) },
-                    )
-                }
-            }
-            OutlinedButton(
-                onClick = onDismiss,
-                scale = OutlinedButtonDefaults.scale(scale = 1f, focusedScale = 1f),
-                shape = OutlinedButtonDefaults.shape(RoundedCornerShape(12.dp)),
-                border = OutlinedButtonDefaults.border(border = Border.None, focusedBorder = Border.None),
-                glow = OutlinedButtonDefaults.glow(
-                    glow = Glow.None,
-                    focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 10.dp)
-                ),
-                colors = OutlinedButtonDefaults.colors(
-                    containerColor = AppColors.SurfaceCard,
-                    contentColor = Color.White,
-                    focusedContainerColor = AppColors.SurfaceCard,
-                    focusedContentColor = AppColors.NeonCyan
-                )
-            ) { Text("Закрити") }
-        }
-    }
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-internal fun TolokaSearchPanel(
-    query: String,
-    searchState: TolokaSearchState,
-    transferState: TolokaTransferState,
-    playbackStatus: String?,
-    openedTopics: Set<String>,
-    openedFiles: Set<Int>,
-    onSearch: () -> Unit,
-    onSelect: (String) -> Unit,
-    onPromote: (String) -> Unit = {},
-    onDiscard: (String) -> Unit = {},
-    onRejectForever: (String) -> Unit = {},
-    onRetryMetadata: () -> Unit,
-    onPlayFile: (Int) -> Unit,
-    onEditQuery: (() -> Unit)? = null,
-    manualSearch: Boolean = false,
-    seasonEntries: List<ua.any2b.core.tmdb.TmdbSeason> = emptyList(),
-    surfaceColors: DetailsSurfaceColors = detailsSurfaceColors(null, false),
-) {
-    Column(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        val displayedQuery = (searchState as? TolokaSearchState.Results)?.query ?: query
-        val resultCount = (searchState as? TolokaSearchState.Results)
-            ?.takeIf { it.query == query.trim() }
-            ?.let { "Підхожих роздач: ${it.hits.size} із ${it.totalFound}" }
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            resultCount?.let { count ->
-                Text(count, modifier = Modifier.widthIn(max = 240.dp),
-                    color = surfaceColors.mutedText, fontSize = 12.sp, maxLines = 1,
-                    overflow = TextOverflow.Ellipsis)
-            }
-            Text(
-                text = "Запит: $displayedQuery",
-                modifier = Modifier.weight(1f).then(if (onEditQuery != null) Modifier
-                    .clickable(onClick = onEditQuery)
-                    .semantics { contentDescription = "Змінити пошуковий запит Toloka: $displayedQuery" }
-                    else Modifier),
-                color = surfaceColors.mutedText, fontSize = 12.sp, maxLines = 1,
-                textAlign = TextAlign.End,
-                overflow = TextOverflow.Ellipsis,
-            )
-            val searchEnabled = query.isNotBlank() && searchState !is TolokaSearchState.Loading
-            var searchFocused by remember { mutableStateOf(false) }
-            Box(
-                Modifier.size(24.dp)
-                    .clip(RoundedCornerShape(50))
-                    .background(if (searchFocused) AppColors.NeonCyan.copy(alpha = 0.22f)
-                        else Color.Transparent)
-                    .onFocusChanged { searchFocused = it.isFocused }
-                    .clickable(enabled = searchEnabled, role = Role.Button, onClick = onSearch)
-                    .semantics { contentDescription = "Шукати за запитом: $displayedQuery" },
-                contentAlignment = Alignment.Center,
-            ) {
-                FontAwesomeIcon(FaIcons.SEARCH, size = 14.sp,
-                    color = if (searchFocused) AppColors.NeonCyan else surfaceColors.mutedText)
-            }
-        }
-        when (searchState) {
-            TolokaSearchState.Idle -> Text(if (manualSearch) "Введіть назву й натисніть «Шукати»." else "Пошук роздач почнеться автоматично.",
-                color = surfaceColors.mutedText)
-            TolokaSearchState.Loading -> Text("Шукаємо роздачі…", color = surfaceColors.text)
-            is TolokaSearchState.Error -> {
-                Text(searchState.message, color = AppColors.ErrorRed)
-                Button(onClick = onSearch) { Text("Повторити пошук") }
-            }
-            is TolokaSearchState.Results -> {
-                var showWeak by rememberSaveable(searchState.query) { mutableStateOf(false) }
-                var showRejected by rememberSaveable(searchState.query) { mutableStateOf(false) }
-                var pendingPermanentReject by rememberSaveable(searchState.query) {
-                    mutableStateOf<String?>(null)
-                }
-                if (searchState.query != query.trim()) {
-                    Text("Пошук за новим запитом…",
-                        color = AppColors.TextSecondary)
-                } else {
-                    if (searchState.hits.isEmpty()) Text(
-                        if (searchState.weakHits.isNotEmpty()) "Точних збігів немає. Можна переглянути сумнівні роздачі нижче."
-                        else if (manualSearch) "Відеороздач за цим запитом не знайдено."
-                        else "Підхожих роздач немає. Знайдено: ${searchState.totalFound}; відсіяно за назвою, роком або сезоном.",
-                        color = surfaceColors.text)
-                    val selectedWeak = searchState.selectedId?.let { id ->
-                        searchState.weakHits.any { it.id == id }
-                    } == true
-                    val visibleHits = searchState.hits +
-                        if (showWeak || selectedWeak) searchState.weakHits else emptyList()
-                    visibleHits.forEach { hit ->
-                        val canPromote = hit in searchState.weakHits
-                        TolokaResultRow(
-                            hit = hit,
-                            selected = hit.id == searchState.selectedId,
-                            opened = hit.id in openedTopics,
-                            enabled = transferState !is TolokaTransferState.Loading,
-                            onClick = { onSelect(hit.id) },
-                            onPromote = if (canPromote) {{ onPromote(hit.id) }} else null,
-                            onDiscard = if (canPromote) {{ onDiscard(hit.id) }} else null,
-                            onRejectForever = { pendingPermanentReject = hit.id },
-                            seasonEntries = seasonEntries,
-                            surfaceColors = surfaceColors,
-                        )
-                        if (hit.id == searchState.selectedId) {
-                            TolokaTransferContent(transferState, playbackStatus, openedFiles,
-                                onSearch, onRetryMetadata, onPlayFile, surfaceColors)
-                        }
-                    }
-                    if (searchState.weakHits.isNotEmpty()) {
-                        Button(onClick = { showWeak = !showWeak },
-                            modifier = Modifier.fillMaxWidth()) {
-                            Text(if (showWeak || selectedWeak)
-                                "Згорнути сумнівні збіги"
-                            else "…  Показати ще ${searchState.weakHits.size} сумнівних збігів")
-                        }
-                    }
-                    if (searchState.rejectedHits.isNotEmpty()) {
-                        Button(onClick = { showRejected = !showRejected },
-                            modifier = Modifier.fillMaxWidth()) {
-                            Text(if (showRejected) "Згорнути відсіяні роздачі"
-                                else "Поритися у відсіяному · ${searchState.rejectedHits.size}")
-                        }
-                        if (showRejected) searchState.rejectedHits.forEach { hit ->
-                            TolokaResultRow(
-                                hit = hit, selected = hit.id == searchState.selectedId,
-                                opened = hit.id in openedTopics,
-                                enabled = transferState !is TolokaTransferState.Loading,
-                                onClick = { onSelect(hit.id) },
-                                onPromote = { onPromote(hit.id) },
-                                onDiscard = null,
-                                onRejectForever = { pendingPermanentReject = hit.id },
-                                seasonEntries = seasonEntries,
-                                surfaceColors = surfaceColors,
-                            )
-                        }
-                    }
-                    val pendingHit = pendingPermanentReject?.let { pendingId ->
-                        (searchState.hits + searchState.weakHits + searchState.rejectedHits)
-                            .firstOrNull { it.id == pendingId }
-                    }
-                    if (pendingHit != null) {
-                        Dialog(onDismissRequest = { pendingPermanentReject = null }) {
-                            Column(
-                                Modifier.fillMaxWidth().background(surfaceColors.panel,
-                                    RoundedCornerShape(16.dp)).padding(24.dp),
-                                verticalArrangement = Arrangement.spacedBy(16.dp),
-                            ) {
-                                Text("Відхилити роздачу назавжди?",
-                                    color = surfaceColors.text,
-                                    style = MaterialTheme.typography.titleLarge)
-                                Text(pendingHit.title, color = surfaceColors.text)
-                                Text("Вона більше не показуватиметься для цього тайтлу. Це можна буде скасувати в налаштуваннях пошуку.",
-                                    color = surfaceColors.mutedText)
-                                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                    Button(onClick = { pendingPermanentReject = null }) {
-                                        Text("Скасувати")
-                                    }
-                                    Button(onClick = {
-                                        onRejectForever(pendingHit.id)
-                                        pendingPermanentReject = null
-                                    }) { Text("Відхилити") }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-internal fun TorrentTitleHeading(
-    ukrainianTitle: String?,
-    englishTitle: String?,
-    modifier: Modifier = Modifier,
-    surfaceColors: DetailsSurfaceColors,
-) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        ukrainianTitle?.takeIf(String::isNotBlank)?.let { title ->
-            Text(title, color = surfaceColors.text, fontWeight = FontWeight.SemiBold,
-                fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-        englishTitle?.takeIf { it.isNotBlank() && it != ukrainianTitle }?.let { title ->
-            Text(title, color = surfaceColors.mutedText, fontSize = 12.sp,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-    }
-}
-
-private fun tolokaQueryOptions(details: AnimeDetails, releaseTitle: String?,
-    tmdbTitle: String?): List<Pair<String, String>> {
-    val ukrainian = releaseTitle?.takeIf(String::isNotBlank)
-        ?: tmdbTitle?.takeIf(String::isNotBlank)
-        ?: details.synonyms.firstOrNull { it.contains(Regex("[іїєґІЇЄҐ]")) }
-    val year = details.seasonYear?.toString()
-    return buildList {
-        fun addVariant(label: String, value: String) {
-            add(label to value)
-            if (year != null) add("$label + рік" to "$value $year")
-        }
-        fun addName(label: String, name: String?) {
-            val value = name?.trim()?.takeIf(String::isNotBlank) ?: return
-            addVariant(label, value)
-            shortenedSearchNames(value).forEach { short ->
-                addVariant("$label · без уточнення", short)
-            }
-        }
-        addName("Українська", ukrainian)
-        if (releaseTitle != null && tmdbTitle != null && releaseTitle != tmdbTitle)
-            addName("Українська TMDB", tmdbTitle)
-        addName("English", details.title.english)
-        addName("Romaji", details.title.romaji)
-        addName("Native", details.title.native)
-        details.synonyms.filter { it != ukrainian }.take(4).forEachIndexed { index, name ->
-            addName("Синонім ${index + 1}", name)
-        }
-        if (isEmpty()) add("Назва" to details.title.display)
-    }.distinctBy { it.second.lowercase() }
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-internal fun TolokaQueryDialog(
-    options: List<Pair<String, String>>,
-    selectedQuery: String,
-    onDismiss: () -> Unit,
-    onSelect: (String) -> Unit,
-    onEdited: (String) -> Unit,
-) {
-    var editingValue by remember { mutableStateOf<String?>(null) }
-    if (editingValue != null) {
-        TolokaQueryEditDialog(
-            initialValue = editingValue.orEmpty(),
-            onDismiss = { editingValue = null },
-            onConfirm = onEdited,
-        )
-        return
-    }
-    Dialog(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier.width(560.dp).heightIn(max = 600.dp)
-                .clip(RoundedCornerShape(18.dp)).background(AppColors.SurfaceDark).padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text("Варіант пошукової назви", color = Color.White,
-                style = MaterialTheme.typography.titleLarge)
-            Text("OK — шукати · утримуйте OK — редагувати варіант",
-                color = AppColors.TextSecondary, fontSize = 13.sp)
-            Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                options.forEach { (label, value) ->
-                    var focused by remember(value) { mutableStateOf(false) }
-                    Card(
-                        onClick = { onSelect(value) },
-                        onLongClick = { editingValue = value },
-                        colors = CardDefaults.colors(
-                            containerColor = if (value == selectedQuery) AppColors.NeonCyan else AppColors.SurfaceCard,
-                            focusedContainerColor = AppColors.NeonCyanLight,
-                        ),
-                        modifier = Modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused },
-                    ) {
-                        Text("$label: $value" + if (value == selectedQuery) " · обрано" else "",
-                            modifier = Modifier.padding(12.dp), maxLines = 2,
-                            color = if (focused || value == selectedQuery) AppColors.ButtonDarkText else Color.White,
-                            overflow = TextOverflow.Ellipsis)
-                    }
-                }
-            }
-            OutlinedButton(onClick = onDismiss) { Text("Назад") }
-        }
-    }
-}
-
-@Composable
-private fun TolokaQueryEditDialog(
-    initialValue: String,
-    onDismiss: () -> Unit,
-    onConfirm: (String) -> Unit,
-) {
-    var value by remember(initialValue) { mutableStateOf(initialValue) }
-    val focus = remember { FocusRequester() }
-    val keyboard = LocalSoftwareKeyboardController.current
-    LaunchedEffect(Unit) { focus.requestFocus(); keyboard?.show() }
-    Dialog(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier.width(560.dp).clip(RoundedCornerShape(18.dp))
-                .background(AppColors.SurfaceDark).padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            Text("Редагувати пошуковий запит", color = Color.White,
-                style = MaterialTheme.typography.titleLarge)
-            Box(
-                modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)
-                    .background(AppColors.SurfaceCard, RoundedCornerShape(10.dp))
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                contentAlignment = Alignment.CenterStart,
-            ) {
-                BasicTextField(
-                    value = value,
-                    onValueChange = { value = it },
-                    singleLine = true,
-                    textStyle = androidx.compose.ui.text.TextStyle(color = Color.White, fontSize = 16.sp),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(onSearch = {
-                        value.trim().takeIf(String::isNotBlank)?.let(onConfirm)
-                    }),
-                    modifier = Modifier.fillMaxWidth().focusRequester(focus),
-                )
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Button(onClick = { onConfirm(value.trim()) }, enabled = value.isNotBlank()) {
-                    Text("Шукати")
-                }
-                OutlinedButton(onClick = onDismiss) { Text("Назад") }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalFoundationApi::class)
-@Composable
-private fun TolokaTransferContent(
-    transferState: TolokaTransferState,
-    playbackStatus: String?,
-    openedFiles: Set<Int>,
-    onSearch: () -> Unit,
-    onRetryMetadata: () -> Unit,
-    onPlayFile: (Int) -> Unit,
-    surfaceColors: DetailsSurfaceColors,
-) {
-    Column(
-        modifier = Modifier.fillMaxWidth().padding(start = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-    when (transferState) {
-        TolokaTransferState.Idle -> Unit
-        is TolokaTransferState.Loading -> {
-            Text(transferState.step + "…", color = AppColors.TextLight)
-            Text("Останній успішний етап: ${transferState.lastSuccess}", color = AppColors.TextSecondary,
-                fontSize = 12.sp)
-        }
-        is TolokaTransferState.Error -> {
-            Text(transferState.message, color = AppColors.ErrorRed)
-            Text("Останній успішний етап: ${transferState.lastSuccess}", color = AppColors.TextSecondary,
-                fontSize = 12.sp)
-            if (transferState.repeatSearch) {
-                Button(onClick = onSearch) { Text("Повторити пошук") }
-            }
-            if (transferState.retryMetadata) {
-                Button(onClick = onRetryMetadata) { Text("Повторити читання файлів") }
-            }
-        }
-        is TolokaTransferState.Files -> {
-            val files = transferState.torrent.videoFiles
-            val firstFileFocus = remember(transferState.torrent.hash) { FocusRequester() }
-            val firstFileBringIntoView = remember(transferState.torrent.hash) { BringIntoViewRequester() }
-            LaunchedEffect(transferState.torrent.hash, files.firstOrNull()?.id) {
-                if (files.isNotEmpty()) {
-                    firstFileFocus.requestFocus()
-                    firstFileBringIntoView.bringIntoView()
-                }
-            }
-            Text("Торент додано. Виберіть відеофайл для відтворення:", color = Color.White,
-                style = MaterialTheme.typography.titleMedium)
-            Text("Метадані отримано: ${transferState.torrent.files.size} файлів, відео: ${files.size}",
-                color = AppColors.TextSecondary, fontSize = 12.sp)
-            if (playbackStatus != null) Text(playbackStatus, color = AppColors.TextLight,
-                fontSize = 12.sp)
-            if (files.isEmpty()) {
-                Text("У роздачі немає доступних відеофайлів.", color = AppColors.TextSecondary)
-            } else {
-                files.forEachIndexed { index, file ->
-                    var focused by remember(file.id) { mutableStateOf(false) }
-                    val opened = file.id in openedFiles
-                    Card(
-                        onClick = { onPlayFile(file.id) },
-                        scale = CardDefaults.scale(scale = 1f, focusedScale = 1f),
-                        shape = CardDefaults.shape(RoundedCornerShape(10.dp)),
-                        colors = CardDefaults.colors(
-                            containerColor = if (opened) surfaceColors.panel else surfaceColors.card,
-                            focusedContainerColor = AppColors.NeonCyanLight,
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                            .then(if (index == 0) Modifier
-                                .bringIntoViewRequester(firstFileBringIntoView)
-                                .focusRequester(firstFileFocus) else Modifier)
-                            .onFocusChanged { focused = it.isFocused }
-                            .neonGlow(focused = focused, borderRadius = 10.dp),
-                    ) {
-                        Column(Modifier.fillMaxWidth().padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(file.path, color = when {
-                                focused -> AppColors.ButtonDarkText
-                                else -> surfaceColors.text
-                            }.let { if (opened) lerp(it, Color.Black, 0.3f) else it })
-                            Text(formatFileSize(file.length), fontSize = 12.sp,
-                                color = when {
-                                    focused -> AppColors.ButtonDarkText
-                                    else -> surfaceColors.mutedText
-                                }.let { if (opened) lerp(it, Color.Black, 0.3f) else it })
-                        }
-                    }
-                }
-            }
-        }
-    }
-    }
-}
-
-private fun formatFileSize(bytes: Long): String = when {
-    bytes >= 1_073_741_824L -> "%.2f GB".format(java.util.Locale.ROOT, bytes / 1_073_741_824.0)
-    bytes >= 1_048_576L -> "%.1f MB".format(java.util.Locale.ROOT, bytes / 1_048_576.0)
-    else -> "$bytes B"
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun TolokaResultRow(hit: TolokaHit, selected: Boolean, opened: Boolean, enabled: Boolean,
-    onClick: () -> Unit, onPromote: (() -> Unit)?, onDiscard: (() -> Unit)?,
-    onRejectForever: () -> Unit,
-    seasonEntries: List<ua.any2b.core.tmdb.TmdbSeason>,
-    surfaceColors: DetailsSurfaceColors) {
-    var focused by remember { mutableStateOf(false) }
-    val background = when {
-        focused -> AppColors.NeonCyanLight
-        selected -> AppColors.NeonCyan
-        else -> surfaceColors.card
-    }
-    val foreground = if (focused || selected) AppColors.ButtonDarkText else surfaceColors.text
-    val release = remember(hit.title) { TolokaReleaseMetadataParser.parse(hit.title) }
-    val resolution = release.qualityTags.firstOrNull { it.matches(Regex("\\d{3,4}p")) }
-    val source = release.qualityTags.firstOrNull { it in setOf("WEB-DL", "WEBRip", "WEB", "BluRay", "HDTV") }
-    val combinedQuality = listOfNotNull(source, resolution).joinToString(" · ")
-    val otherQuality = release.qualityTags.filterNot { it == resolution || it == source }
-    val absoluteRanges = remember(release, seasonEntries) {
-        TolokaReleaseMetadataParser.mapAbsoluteEpisodes(release, seasonEntries)
-    }
-    val parsedSeasonTags = release.qualityTags.filter { it.startsWith("S") }
-        .map { tag ->
-            when {
-                tag.matches(Regex("S\\d{2}–\\d{2}")) -> {
-                    val range = Regex("S(\\d{2})–(\\d{2})").matchEntire(tag)!!
-                    "Сезони ${range.groupValues[1].toInt()}–${range.groupValues[2].toInt()}"
-                }
-                tag.matches(Regex("S\\d{2}")) -> "Сезон ${tag.drop(1).toIntOrNull() ?: tag.drop(1)}"
-                else -> tag
-            }
-        }
-    val seasonTags = absoluteRanges?.map { "Сезон ${it.seasonNumber}" }?.distinct() ?: parsedSeasonTags
-    val parsedEpisodeTags = release.qualityTags.filter { it.startsWith("E") }.map { tag ->
-        when {
-            tag.matches(Regex("E\\d{2}–\\d{2}")) -> "Серії ${tag.drop(1)}"
-            tag.matches(Regex("E\\d{2}")) -> "Серія ${tag.drop(1)}"
-            else -> tag
-        }
-    }
-    val episodeTags = when {
-        absoluteRanges != null && absoluteRanges.size == 1 -> absoluteRanges.map { range ->
-            "Серії ${range.episodeStart}–${range.episodeEnd}" +
-                (release.episodeTotal?.let { " (із $it)" } ?: "")
-        }
-        absoluteRanges != null -> absoluteRanges.map { range ->
-            "Серії ${range.episodeStart}–${range.episodeEnd}"
-        } + listOfNotNull(release.episodeEnd?.let { end ->
-            release.episodeTotal?.let { "Пакет 1–$end із $it" }
-        })
-        release.isAbsoluteEpisodeRange -> listOfNotNull(release.episodeEnd?.let { end ->
-            "Абсолютні 1–$end" + (release.episodeTotal?.let { " / $it" } ?: "")
-        })
-        else -> parsedEpisodeTags
-    }
-    val displayQuality = listOfNotNull(combinedQuality.takeIf(String::isNotBlank)) +
-        otherQuality.filterNot { it.startsWith("S") || it.startsWith("E") }
-    val releaseChips = buildList {
-        seasonTags.forEach { add(ReleaseTagChip(it, ReleaseTagKind.SEASON)) }
-        episodeTags.forEach { add(ReleaseTagChip(it, ReleaseTagKind.SEASON)) }
-        release.audioTags.forEach { add(ReleaseTagChip(it, ReleaseTagKind.AUDIO)) }
-        release.languageTags.forEach { add(ReleaseTagChip(it, ReleaseTagKind.AUDIO)) }
-        release.subtitleTags.forEach { add(ReleaseTagChip(it, ReleaseTagKind.SUBTITLE)) }
-        displayQuality.forEach { add(ReleaseTagChip(it, ReleaseTagKind.QUALITY)) }
-    }
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically) {
-    Card(
-        onClick = { if (enabled) onClick() },
-        onLongClick = { if (enabled) onRejectForever() },
-        scale = CardDefaults.scale(scale = 1f, focusedScale = 1f),
-        shape = CardDefaults.shape(RoundedCornerShape(10.dp)),
-        colors = CardDefaults.colors(containerColor = background, focusedContainerColor = background),
-        modifier = Modifier.weight(1f).onFocusChanged { focused = it.isFocused }
-            .neonGlow(focused = focused, borderRadius = 10.dp),
-    ) {
-        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-            Text(
-                text = if (focused) hit.title else release.cleanTitle,
-                modifier = Modifier.fillMaxWidth().then(if (focused) Modifier.basicMarquee(
-                    iterations = Int.MAX_VALUE, initialDelayMillis = 700, velocity = 42.dp)
-                    else Modifier),
-                color = foreground, fontWeight = FontWeight.Medium, fontSize = 13.sp,
-                maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false,
-            )
-            if (releaseChips.isNotEmpty()) ReleaseTagRow(releaseChips, surfaceColors)
-            if (hit.sizeText.isNotBlank() || hit.seeders != null || hit.leechers != null || opened) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    if (hit.sizeText.isNotBlank()) Text(hit.sizeText, modifier = Modifier.weight(1f),
-                        color = foreground, fontSize = 12.sp, maxLines = 1,
-                        overflow = TextOverflow.Ellipsis)
-                    if (hit.sizeText.isBlank()) Spacer(Modifier.weight(1f))
-                    hit.author?.takeIf(String::isNotBlank)?.let { author ->
-                        Text(author, modifier = Modifier.widthIn(max = 180.dp),
-                            color = foreground, fontSize = 12.sp, maxLines = 1,
-                            overflow = TextOverflow.Ellipsis)
-                    }
-                    hit.seeders?.let { Text("↑ $it", color = Color(0xFF218A58), fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold) }
-                    hit.leechers?.let { Text("↓ $it", color = surfaceColors.mutedText, fontSize = 12.sp) }
-                    if (opened) FontAwesomeIcon(FaIcons.EYE, color = foreground, size = 14.sp)
-                }
-            }
-        }
-    }
-    if (onPromote != null) {
-        Column(Modifier.width(42.dp), horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            var promoteFocused by remember { mutableStateOf(false) }
-            Box(Modifier.size(24.dp)
-                .background(if (promoteFocused) AppColors.NeonCyanLight else Color.Transparent,
-                    RoundedCornerShape(5.dp))
-                .clickable(enabled = enabled) { onPromote() }
-                .focusable(enabled = enabled)
-                .onFocusChanged { promoteFocused = it.isFocused },
-                contentAlignment = Alignment.Center) {
-                Text("+", color = if (promoteFocused) AppColors.ButtonDarkText
-                    else surfaceColors.mutedText, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-            }
-            if (onDiscard != null) {
-                var discardFocused by remember { mutableStateOf(false) }
-                Box(Modifier.size(24.dp)
-                    .background(if (discardFocused) AppColors.NeonCyanLight else Color.Transparent,
-                        RoundedCornerShape(5.dp))
-                    .clickable(enabled = enabled) { onDiscard() }
-                    .focusable(enabled = enabled)
-                    .onFocusChanged { discardFocused = it.isFocused },
-                    contentAlignment = Alignment.Center) {
-                    FontAwesomeIcon(FaIcons.TRASH_O,
-                        color = if (discardFocused) AppColors.ButtonDarkText else surfaceColors.mutedText,
-                        size = 12.sp)
-                }
-            }
-        }
-    }
-    }
-}
-
-private enum class ReleaseTagKind { QUALITY, AUDIO, SUBTITLE, SEASON }
-private data class ReleaseTagChip(val label: String, val kind: ReleaseTagKind)
-
-@Composable
-private fun ReleaseTagRow(chips: List<ReleaseTagChip>, surfaceColors: DetailsSurfaceColors) {
-    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically) {
-        chips.forEach { chip ->
-            val tag = chip.label
-            val tint = when (chip.kind) {
-                ReleaseTagKind.QUALITY -> Color(0xFF8995A6)
-                ReleaseTagKind.AUDIO, ReleaseTagKind.SUBTITLE -> AppColors.NeonCyan
-                ReleaseTagKind.SEASON -> AppColors.PrimaryPurple
-            }
-            val background = lerp(surfaceColors.card, tint, when (chip.kind) {
-                ReleaseTagKind.QUALITY -> 0.16f
-                ReleaseTagKind.AUDIO -> 0.20f
-                ReleaseTagKind.SUBTITLE -> 0.14f
-                ReleaseTagKind.SEASON -> 0.20f
-            })
-            val foreground = surfaceColors.text
-            Row(Modifier.clip(RoundedCornerShape(6.dp)).background(background)
-                .padding(horizontal = 7.dp, vertical = 3.dp),
-                horizontalArrangement = Arrangement.spacedBy(5.dp),
-                verticalAlignment = Alignment.CenterVertically) {
-                when (chip.kind) {
-                    ReleaseTagKind.AUDIO -> FontAwesomeIcon(FaIcons.MICROPHONE,
-                        color = foreground, size = 11.sp)
-                    ReleaseTagKind.SUBTITLE -> FontAwesomeIcon(FaIcons.COMMENTING_O,
-                        color = foreground, size = 11.sp)
-                    else -> Unit
-                }
-                Text(tag, color = foreground, fontSize = 10.sp,
-                    fontWeight = FontWeight.Medium, maxLines = 1,
-                    overflow = TextOverflow.Ellipsis)
-            }
-        }
-    }
-}
-
 @Composable
 private fun DetailsTitleRow(
     title: String,
@@ -1704,7 +730,7 @@ private fun DetailsTitleRow(
             horizontalArrangement = Arrangement.spacedBy(20.dp),
             modifier = Modifier.graphicsLayer { clip = false }
         ) {
-            itemsIndexed(items.take(13), key = { _, card -> card.id }) { _, card ->
+            itemsIndexed(items.take(13), key = { index, card -> "title:${card.id}:$index" }) { _, card ->
                 PosterCard(
                     item = card,
                     modifier = Modifier.width(160.dp),
@@ -1713,409 +739,6 @@ private fun DetailsTitleRow(
                 )
             }
             if (showMore) item(key = "more") { MoreCard(onClick = onMore) }
-        }
-    }
-}
-
-@Composable
-private fun ManualReleaseSearchDialog(
-    searchState: ManualReleaseSearchState,
-    initialQuery: String,
-    onSearch: (String) -> Unit,
-    onDismiss: () -> Unit,
-    onSelect: (AnitubeSearchResult) -> Unit,
-) {
-    var query by remember(initialQuery) { mutableStateOf(initialQuery) }
-    val focusRequester = remember { FocusRequester() }
-    val keyboardController = LocalSoftwareKeyboardController.current
-
-    LaunchedEffect(Unit) { focusRequester.requestFocus() }
-
-    Dialog(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier
-                .width(620.dp)
-                .heightIn(max = 600.dp)
-                .clip(RoundedCornerShape(18.dp))
-                .background(AppColors.SurfaceDark)
-                .padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            Text("Змінити реліз AniTube", color = Color.White, style = MaterialTheme.typography.titleLarge)
-            Text("Введіть українську назву. Пошук виконується на AniTube.", color = AppColors.TextSecondary, fontSize = 13.sp)
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(52.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(AppColors.SurfaceCard)
-                    .padding(horizontal = 14.dp),
-                contentAlignment = Alignment.CenterStart
-            ) {
-                if (query.isBlank()) Text("Назва українською", color = AppColors.TextSecondary)
-                BasicTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    singleLine = true,
-                    textStyle = androidx.compose.ui.text.TextStyle(color = Color.White, fontSize = 16.sp),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(onSearch = {
-                        keyboardController?.hide()
-                        onSearch(query)
-                    }),
-                    modifier = Modifier.fillMaxWidth().focusRequester(focusRequester)
-                )
-            }
-            var isSearchBtnFocused by remember { mutableStateOf(false) }
-            Button(
-                onClick = { onSearch(query) },
-                enabled = query.isNotBlank(),
-                scale = ButtonDefaults.scale(scale = 1f, focusedScale = 1f),
-                shape = ButtonDefaults.shape(RoundedCornerShape(12.dp)),
-                glow = ButtonDefaults.glow(glow = Glow.None, focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 10.dp)),
-                modifier = Modifier
-                    .zIndex(if (isSearchBtnFocused) 1f else 0f)
-                    .onFocusChanged { isSearchBtnFocused = it.isFocused }
-                    .neonGlow(focused = isSearchBtnFocused, borderRadius = 12.dp)
-            ) { Text("Шукати на AniTube") }
-            Column(
-                modifier = Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                when (searchState) {
-                    ManualReleaseSearchState.Idle -> Unit
-                    ManualReleaseSearchState.Loading -> Text("Шукаємо релізи...", color = AppColors.TextLight)
-                    is ManualReleaseSearchState.Error -> Text(searchState.message, color = AppColors.ErrorRed)
-                    is ManualReleaseSearchState.Results -> {
-                        if (searchState.candidates.isEmpty()) {
-                            Text("На AniTube нічого не знайдено", color = AppColors.TextLight)
-                        } else {
-                            searchState.candidates.forEach { candidate ->
-                                var isCandFocused by remember { mutableStateOf(false) }
-                                Button(
-                                    onClick = { onSelect(candidate) },
-                                    scale = ButtonDefaults.scale(scale = 1f, focusedScale = 1f),
-                                    shape = ButtonDefaults.shape(RoundedCornerShape(12.dp)),
-                                    glow = ButtonDefaults.glow(glow = Glow.None, focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 10.dp)),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .zIndex(if (isCandFocused) 1f else 0f)
-                                        .onFocusChanged { isCandFocused = it.isFocused }
-                                        .neonGlow(focused = isCandFocused, borderRadius = 12.dp)
-                                ) {
-                                    Text(candidate.title, maxLines = 2)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            var isDismissFocused by remember { mutableStateOf(false) }
-            OutlinedButton(
-                onClick = onDismiss,
-                scale = OutlinedButtonDefaults.scale(scale = 1f, focusedScale = 1f),
-                shape = OutlinedButtonDefaults.shape(RoundedCornerShape(12.dp)),
-                border = OutlinedButtonDefaults.border(border = Border.None, focusedBorder = Border.None),
-                glow = OutlinedButtonDefaults.glow(
-                    glow = Glow.None,
-                    focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 10.dp)
-                ),
-                colors = OutlinedButtonDefaults.colors(
-                    containerColor = AppColors.SurfaceCard,
-                    contentColor = Color.White,
-                    focusedContainerColor = AppColors.SurfaceCard,
-                    focusedContentColor = AppColors.NeonCyan
-                ),
-                modifier = Modifier
-                    .zIndex(if (isDismissFocused) 1f else 0f)
-                    .onFocusChanged { isDismissFocused = it.isFocused }
-                    .neonGlow(focused = isDismissFocused, borderRadius = 12.dp)
-            ) { Text("Скасувати") }
-        }
-    }
-}
-
-@Composable
-private fun VideoSourceNotice(
-    modifier: Modifier = Modifier,
-    message: String,
-    action: String,
-    onClick: () -> Unit,
-    detail: String? = null,
-) {
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(AppColors.SurfaceCard)
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Text(message, color = Color.White, style = MaterialTheme.typography.titleSmall)
-        if (!detail.isNullOrBlank()) Text(detail, color = AppColors.TextMuted, fontSize = 12.sp)
-        var isNoticeFocused by remember { mutableStateOf(false) }
-        Button(
-            onClick = onClick,
-            scale = ButtonDefaults.scale(scale = 1f, focusedScale = 1f),
-            shape = ButtonDefaults.shape(RoundedCornerShape(12.dp)),
-            glow = ButtonDefaults.glow(glow = Glow.None, focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 10.dp)),
-            modifier = Modifier
-                .zIndex(if (isNoticeFocused) 1f else 0f)
-                .onFocusChanged { isNoticeFocused = it.isFocused }
-                .neonGlow(focused = isNoticeFocused, borderRadius = 12.dp)
-        ) { Text(action) }
-    }
-}
-
-@Composable
-private fun ReleaseSelectionDialog(
-    candidates: List<AnitubeSearchResult>,
-    onDismiss: () -> Unit,
-    onSelect: (AnitubeSearchResult) -> Unit,
-) {
-    Dialog(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier
-                .width(620.dp)
-                .heightIn(max = 600.dp)
-                .clip(RoundedCornerShape(18.dp))
-                .background(AppColors.SurfaceDark)
-                .padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            Text("Виберіть реліз AniTube", color = Color.White, style = MaterialTheme.typography.titleLarge)
-            Column(
-                modifier = Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                candidates.forEach { candidate ->
-                    var isCandFocused by remember { mutableStateOf(false) }
-                    Button(
-                        onClick = { onSelect(candidate) },
-                        scale = ButtonDefaults.scale(scale = 1f, focusedScale = 1f),
-                        shape = ButtonDefaults.shape(RoundedCornerShape(12.dp)),
-                        glow = ButtonDefaults.glow(glow = Glow.None, focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 10.dp)),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .zIndex(if (isCandFocused) 1f else 0f)
-                            .onFocusChanged { isCandFocused = it.isFocused }
-                            .neonGlow(focused = isCandFocused, borderRadius = 12.dp)
-                    ) {
-                        Text(candidate.title, maxLines = 2)
-                    }
-                }
-            }
-            var isDismissFocused by remember { mutableStateOf(false) }
-            OutlinedButton(
-                onClick = onDismiss,
-                scale = OutlinedButtonDefaults.scale(scale = 1f, focusedScale = 1f),
-                shape = OutlinedButtonDefaults.shape(RoundedCornerShape(12.dp)),
-                border = OutlinedButtonDefaults.border(border = Border.None, focusedBorder = Border.None),
-                glow = OutlinedButtonDefaults.glow(
-                    glow = Glow.None,
-                    focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 10.dp)
-                ),
-                colors = OutlinedButtonDefaults.colors(
-                    containerColor = AppColors.SurfaceCard,
-                    contentColor = Color.White,
-                    focusedContainerColor = AppColors.SurfaceCard,
-                    focusedContentColor = AppColors.NeonCyan
-                ),
-                modifier = Modifier
-                    .zIndex(if (isDismissFocused) 1f else 0f)
-                    .onFocusChanged { isDismissFocused = it.isFocused }
-                    .neonGlow(focused = isDismissFocused, borderRadius = 12.dp)
-            ) { Text("Скасувати") }
-        }
-    }
-}
-
-@Composable
-private fun StudioVoiceDialog(
-    group: VoiceCategoryGroup,
-    selectedVoiceIndex: Int,
-    onDismiss: () -> Unit,
-    onSelect: (Int) -> Unit,
-) {
-    Dialog(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier
-                .width(520.dp)
-                .heightIn(max = 600.dp)
-                .clip(RoundedCornerShape(18.dp))
-                .background(AppColors.SurfaceDark)
-                .padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            Text(group.name, color = Color.White, style = MaterialTheme.typography.titleLarge)
-            Column(
-                modifier = Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                group.variants.forEachIndexed { position, (index, voice) ->
-                    val player = voice.playerName.ifBlank { "Плеєр ${position + 1}" }
-                    val studio = voice.name.ifBlank { "Невідома студія" }
-                    val isSelected = index == selectedVoiceIndex
-                    var isVoiceFocused by remember { mutableStateOf(false) }
-                    val containerColor = when {
-                        isVoiceFocused -> AppColors.NeonCyanLight
-                        isSelected -> AppColors.NeonCyan
-                        else -> AppColors.SurfaceCard
-                    }
-                    val contentColor = when {
-                        isVoiceFocused -> AppColors.ButtonDarkText
-                        isSelected -> AppColors.ButtonDarkText
-                        else -> Color.White
-                    }
-                    Button(
-                        onClick = { onSelect(index) },
-                        scale = ButtonDefaults.scale(scale = 1f, focusedScale = 1f),
-                        shape = ButtonDefaults.shape(RoundedCornerShape(12.dp)),
-                        glow = ButtonDefaults.glow(glow = Glow.None, focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 10.dp)),
-                        colors = ButtonDefaults.colors(
-                            containerColor = containerColor,
-                            contentColor = contentColor,
-                            focusedContainerColor = containerColor,
-                            focusedContentColor = contentColor
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .zIndex(if (isVoiceFocused) 1f else 0f)
-                            .onFocusChanged { isVoiceFocused = it.isFocused }
-                            .neonGlow(focused = isVoiceFocused, borderRadius = 12.dp)
-                    ) {
-                        Text(
-                            text = "$studio · $player" + if (isSelected) " · обрано" else "",
-                            maxLines = 1,
-                            color = contentColor
-                        )
-                    }
-                }
-            }
-            var isDismissFocused by remember { mutableStateOf(false) }
-            OutlinedButton(
-                onClick = onDismiss,
-                scale = OutlinedButtonDefaults.scale(scale = 1f, focusedScale = 1f),
-                shape = OutlinedButtonDefaults.shape(RoundedCornerShape(12.dp)),
-                border = OutlinedButtonDefaults.border(border = Border.None, focusedBorder = Border.None),
-                glow = OutlinedButtonDefaults.glow(
-                    glow = Glow.None,
-                    focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 10.dp)
-                ),
-                colors = OutlinedButtonDefaults.colors(
-                    containerColor = AppColors.SurfaceCard,
-                    contentColor = Color.White,
-                    focusedContainerColor = AppColors.SurfaceCard,
-                    focusedContentColor = AppColors.NeonCyan
-                ),
-                modifier = Modifier
-                    .zIndex(if (isDismissFocused) 1f else 0f)
-                    .onFocusChanged { isDismissFocused = it.isFocused }
-                    .neonGlow(focused = isDismissFocused, borderRadius = 12.dp)
-            ) { Text("Скасувати") }
-        }
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class, ExperimentalTvMaterial3Api::class)
-@Composable
-private fun DetailsGenreTags(genres: List<String>, onOpenGenre: (String) -> Unit,
-    light: Boolean) {
-    LazyRow(
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier.fillMaxWidth(),
-        reverseLayout = true,
-    ) {
-        itemsIndexed(genres.reversed()) { _, genre ->
-            var isFocused by remember(genre) { mutableStateOf(false) }
-            val chipShape = RoundedCornerShape(percent = 50)
-            Surface(
-                onClick = { onOpenGenre(genre) },
-                scale = ClickableSurfaceDefaults.scale(scale = 1f, focusedScale = 1f),
-                shape = ClickableSurfaceDefaults.shape(chipShape),
-                border = ClickableSurfaceDefaults.border(
-                    border = Border(
-                        border = BorderStroke(1.5.dp, if (light) Color(0xFF596575)
-                            else AppColors.TextMuted.copy(alpha = 0.65f)),
-                        shape = chipShape,
-                    ),
-                    focusedBorder = Border.None,
-                ),
-                colors = ClickableSurfaceDefaults.colors(
-                    containerColor = Color.Transparent,
-                    focusedContainerColor = AppColors.NeonCyanLight,
-                ),
-                modifier = Modifier
-                    .zIndex(if (isFocused) 1f else 0f)
-                    .onFocusChanged { isFocused = it.isFocused },
-            ) {
-                Text(
-                    genreLabel(genre),
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                    color = if (isFocused) AppColors.ButtonDarkText else if (light)
-                        Color(0xFF263241) else AppColors.TextLight,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun SeasonEpisodeDialog(
-    seasons: List<NumberedSeason>,
-    currentAnimeId: Int,
-    episodes: List<AnitubeEpisode>,
-    selectedEpisodeIndex: Int,
-    onDismiss: () -> Unit,
-    onEpisode: (Int) -> Unit,
-    onSeason: (Int) -> Unit,
-) {
-    Dialog(onDismissRequest = onDismiss) {
-        Column(
-            Modifier.width(640.dp).heightIn(max = 600.dp)
-                .background(AppColors.SurfaceDark, RoundedCornerShape(12.dp))
-                .verticalScroll(rememberScrollState()).padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            Text("Сезони та серії", color = Color.White,
-                style = MaterialTheme.typography.titleLarge)
-            if (seasons.isNotEmpty()) {
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    seasons.forEach { season ->
-                        val current = season.animeId == currentAnimeId
-                        OutlinedButton(
-                            onClick = { season.animeId?.let { if (!current) onSeason(it) } },
-                            enabled = season.animeId != null,
-                        ) {
-                            Text("Сезон ${season.number}" +
-                                if (season.animeId == null) " · немає релізу" else if (current) " ✓" else "")
-                        }
-                    }
-                }
-            }
-            if (episodes.isEmpty()) {
-                Text("Для цього сезону серії ще не завантажені. Оберіть реліз AniTube.",
-                    color = AppColors.TextSecondary)
-            } else {
-                Text("Серії поточного сезону", color = AppColors.TextLight)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    episodes.forEachIndexed { index, episode ->
-                        Button(onClick = { onEpisode(index) },
-                            colors = ButtonDefaults.colors(
-                                containerColor = if (index == selectedEpisodeIndex)
-                                    AppColors.NeonCyan else AppColors.SurfaceCard,
-                                contentColor = if (index == selectedEpisodeIndex)
-                                    AppColors.ButtonDarkText else Color.White,
-                            )) { Text("${episode.episodeNumber}") }
-                    }
-                }
-            }
-            OutlinedButton(onClick = onDismiss) { Text("Назад") }
         }
     }
 }
@@ -2198,7 +821,7 @@ private fun DetailsScreenPreview() {
             onSelectTmdb = {},
             onFindTmdbCandidates = {},
             onTolokaSearch = {},
-            onAutoTolokaSearch = { _, _ -> },
+            onPanelSelected = {},
             onSelectTolokaHit = {},
             onRetryTolokaMetadata = {},
             onPlayTolokaFile = {},

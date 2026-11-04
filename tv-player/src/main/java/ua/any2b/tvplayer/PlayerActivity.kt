@@ -48,6 +48,7 @@ class PlayerActivity : FragmentActivity() {
         const val EXTRA_IS_MOVIE = "IS_MOVIE"
         const val EXTRA_SOURCE_TYPE = "SOURCE_TYPE"
         const val SOURCE_TOLOKA = "toloka"
+        const val SOURCE_ANITUBE_TMDB = "anitube_tmdb"
         const val EXTRA_TOLOKA_TOPIC_ID = "TOLOKA_TOPIC_ID"
         const val EXTRA_TOLOKA_FILE_ID = "TOLOKA_FILE_ID"
         const val EXTRA_TMDB_ID = "TMDB_ID"
@@ -57,6 +58,7 @@ class PlayerActivity : FragmentActivity() {
         const val EXTRA_TMDB_YEAR = "TMDB_YEAR"
         const val EXTRA_TMDB_POSTER_URL = "TMDB_POSTER_URL"
         const val EXTRA_TMDB_RATING = "TMDB_RATING"
+        const val EXTRA_TMDB_RESUME_PROGRESS = "TMDB_RESUME_PROGRESS"
     }
 
     private lateinit var binding: ActivityPlayerBinding
@@ -68,6 +70,10 @@ class PlayerActivity : FragmentActivity() {
     private var episodeNumber: Int = 1
     private var isMovie: Boolean = false
     private var isToloka: Boolean = false
+    private var isTmdbAnitube: Boolean = false
+    private var tmdbAnitubeStarted: Boolean = false
+    private var tmdbResumeProgress: Float = 0f
+    private var tmdbResumeApplied: Boolean = false
     private var tolokaPlaybackMarked: Boolean = false
 
     private var nextEpisodeUrl: String? = null
@@ -125,6 +131,8 @@ class PlayerActivity : FragmentActivity() {
         episodeNumber = intent.getIntExtra(EXTRA_EPISODE_NUMBER, episodeIndex + 1)
         isMovie = intent.getBooleanExtra(EXTRA_IS_MOVIE, false)
         isToloka = intent.getStringExtra(EXTRA_SOURCE_TYPE) == SOURCE_TOLOKA
+        isTmdbAnitube = intent.getStringExtra(EXTRA_SOURCE_TYPE) == SOURCE_ANITUBE_TMDB
+        tmdbResumeProgress = intent.getFloatExtra(EXTRA_TMDB_RESUME_PROGRESS, 0f)
 
         if (url.isNullOrBlank()) {
             Log.w("NextEp", "finish(): url is null or blank")
@@ -141,7 +149,7 @@ class PlayerActivity : FragmentActivity() {
             }
         }
 
-        if (isToloka) binding.btnNextEpisode.visibility = View.GONE
+        if (isToloka || isTmdbAnitube) binding.btnNextEpisode.visibility = View.GONE
         showStatus("⏳ Підключення до потоку…", if (isToloka) "" else url)
         initPlayer(url)
     }
@@ -164,6 +172,10 @@ class PlayerActivity : FragmentActivity() {
                         Player.STATE_READY   -> {
                             showStatus("▶ Відтворення", if (isToloka) "" else url)
                             if (!isToloka) {
+                                if (isTmdbAnitube && !tmdbResumeApplied && tmdbResumeProgress in 0.01f..0.98f && exo.duration > 0) {
+                                    exo.seekTo((exo.duration * tmdbResumeProgress).toLong())
+                                    tmdbResumeApplied = true
+                                }
                                 startProgressReporting()
                                 startPreFetchingNextEpisode()
                             }
@@ -174,6 +186,7 @@ class PlayerActivity : FragmentActivity() {
                             val duration = exo.duration
                             if (duration > 0 && current >= duration - 3000) {
                                 showStatus("✓ Завершено", if (isToloka) "" else url)
+                                if (isTmdbAnitube) saveTmdbAnitubeProgress(1f)
                                 handlePlaybackEnded()
                             } else {
                                 Log.w(TAG, "Ignored premature STATE_ENDED at current=$current, duration=$duration")
@@ -196,6 +209,10 @@ class PlayerActivity : FragmentActivity() {
 
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
                     if (isPlaying) {
+                        if (isTmdbAnitube && !tmdbAnitubeStarted) {
+                            saveTmdbAnitubeProgress(tmdbResumeProgress)
+                            tmdbAnitubeStarted = true
+                        }
                         if (isToloka && !tolokaPlaybackMarked) {
                             val topicId = intent.getStringExtra(EXTRA_TOLOKA_TOPIC_ID)
                             val fileId = intent.getIntExtra(EXTRA_TOLOKA_FILE_ID, -1)
@@ -245,19 +262,41 @@ class PlayerActivity : FragmentActivity() {
                 val exo = player ?: continue
                 val current = exo.currentPosition
                 val duration = exo.duration
-                if (duration > 0 && animeId > 0) {
+                if (duration > 0 && (animeId > 0 || isTmdbAnitube)) {
                     val progress = (current.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
-                    withContext(Dispatchers.IO) {
-                        try {
-                            val aniListClient = AniListClient()
-                            val details = aniListClient.animeDetails(animeId)
-                            val historyManager = WatchHistoryManager(this@PlayerActivity)
-                            historyManager.saveProgress(details, episodeIndex, voiceIndex, progress, episodeNumber)
-                        } catch (_: Exception) {}
+                    if (isTmdbAnitube) {
+                        saveTmdbAnitubeProgress(progress)
+                    } else {
+                        withContext(Dispatchers.IO) {
+                            try {
+                                val aniListClient = AniListClient()
+                                val details = aniListClient.animeDetails(animeId)
+                                val historyManager = WatchHistoryManager(this@PlayerActivity)
+                                historyManager.saveProgress(details, episodeIndex, voiceIndex, progress, episodeNumber)
+                            } catch (_: Exception) {}
+                        }
                     }
                 }
             }
         }
+    }
+
+    private fun saveTmdbAnitubeProgress(progress: Float) {
+        val type = TmdbMediaType.entries.firstOrNull {
+            it.path == intent.getStringExtra(EXTRA_TMDB_TYPE)
+        } ?: return
+        val id = intent.getIntExtra(EXTRA_TMDB_ID, -1).takeIf { it > 0 } ?: return
+        val title = intent.getStringExtra(EXTRA_TMDB_TITLE)?.takeIf(String::isNotBlank) ?: return
+        TmdbWatchHistoryStore(this).saveEpisodeProgress(
+            TmdbTitle(
+                id, type, title,
+                intent.getStringExtra(EXTRA_TMDB_ORIGINAL_TITLE),
+                intent.getIntExtra(EXTRA_TMDB_YEAR, 0).takeIf { it > 0 },
+                intent.getStringExtra(EXTRA_TMDB_POSTER_URL), null,
+                intent.getDoubleExtra(EXTRA_TMDB_RATING, Double.NaN).takeIf(Double::isFinite),
+            ),
+            voiceIndex, episodeIndex, episodeNumber, progress,
+        )
     }
 
     private suspend fun getCachedOrFetchVoices(): List<AnitubeVoice>? {

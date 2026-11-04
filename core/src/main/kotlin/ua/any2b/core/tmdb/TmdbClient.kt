@@ -4,6 +4,7 @@ import java.io.IOException
 import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.async
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -16,6 +17,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import org.json.JSONObject
+import org.json.JSONArray
 import java.net.URLEncoder
 
 enum class TmdbMediaType(val path: String) { MOVIE("movie"), TV("tv") }
@@ -71,6 +73,7 @@ data class TmdbDetails(
     val countryCodes: List<String> = emptyList(),
     val alternativeTitles: List<String> = emptyList(),
     val tvdbId: Int? = null,
+    val logoUrl: String? = null,
 )
 
 fun TmdbDetails.trailerSearchUrl(): String {
@@ -83,10 +86,14 @@ data class TmdbSeason(val number: Int, val name: String?, val year: Int?, val ep
 
 sealed class TmdbFailure(message: String) : IOException(message) {
     class MissingToken : TmdbFailure("Ключ доступу не налаштовано")
-    class Unauthorized : TmdbFailure("Worker відхилив ключ доступу")
+    class Unauthorized : TmdbFailure("TMDB відхилив токен доступу")
     class Http(val status: Int) : TmdbFailure("TMDB відповів HTTP $status")
-    class Timeout : TmdbFailure("Час очікування TMDB вичерпано")
-    class Network : TmdbFailure("Не вдалося з’єднатися з TMDB")
+    class Timeout(cause: IOException? = null) : TmdbFailure("Час очікування TMDB вичерпано") {
+        init { if (cause != null) initCause(cause) }
+    }
+    class Network(cause: IOException? = null) : TmdbFailure("Не вдалося з’єднатися з TMDB") {
+        init { if (cause != null) initCause(cause) }
+    }
     class InvalidResponse : TmdbFailure("TMDB повернув неочікувані дані")
 }
 
@@ -241,8 +248,27 @@ class TmdbClient(
                 }
             }
         }.orEmpty().distinctBy { it.lowercase() }
+        val imageLanguage = title.originalLanguage?.takeIf(String::isNotBlank)
+            ?: countryCodes.firstOrNull()?.let { country ->
+                mapOf("JP" to "ja", "US" to "en", "GB" to "en", "UA" to "uk",
+                    "KR" to "ko", "CN" to "zh", "FR" to "fr", "DE" to "de")[country]
+            }
+        val images = try {
+            request(listOf(type.path, id.toString(), "images"), token, "",
+                "include_image_language" to listOfNotNull("null", imageLanguage, "uk", "en")
+                    .distinct().joinToString(","))
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            null
+        }
+        val poster = images?.optJSONArray("posters")?.preferredImage(
+            listOf(null, imageLanguage, "uk", "en"))
+        val logo = images?.optJSONArray("logos")?.preferredImage(
+            listOf(imageLanguage, "uk", "en", null))
         return TmdbDetails(
-            title = title,
+            title = title.copy(posterUrl = poster?.let { "https://image.tmdb.org/t/p/w780$it" }
+                ?: title.posterUrl),
             genres = genres,
             status = json.optionalString("status"),
             runtimeMinutes = runtime.takeIf { it > 0 },
@@ -265,6 +291,7 @@ class TmdbClient(
             tvdbId = if (type == TmdbMediaType.TV)
                 json.optJSONObject("external_ids")?.optInt("tvdb_id")?.takeIf { it > 0 }
             else null,
+            logoUrl = logo?.let { "https://image.tmdb.org/t/p/w500$it" },
         )
     }
 
@@ -274,7 +301,7 @@ class TmdbClient(
         if (token.isBlank()) throw TmdbFailure.MissingToken()
         val url = baseUrl.newBuilder().apply {
             segments.forEach(::addPathSegment)
-            addQueryParameter("language", language)
+            if (language.isNotBlank()) addQueryParameter("language", language)
             parameters.forEach { addQueryParameter(it.first, it.second) }
         }.build()
         val call = http.newCall(Request.Builder().url(url)
@@ -293,9 +320,9 @@ class TmdbClient(
                 })
             }
         } catch (error: SocketTimeoutException) {
-            throw TmdbFailure.Timeout()
+            throw TmdbFailure.Timeout(error)
         } catch (error: IOException) {
-            throw TmdbFailure.Network()
+            throw TmdbFailure.Network(error)
         }
         return response.use {
             when (it.code) {
@@ -306,6 +333,22 @@ class TmdbClient(
             }
         }
     }
+}
+
+private fun JSONArray.preferredImage(languages: List<String?>): String? {
+    val priorities = languages.distinct()
+    return (0 until length()).mapNotNull { optJSONObject(it) }
+        .filter { image -> image.optionalString("file_path")?.let { path ->
+            path.startsWith("/") && !path.endsWith(".svg", ignoreCase = true)
+        } == true }
+        .minWithOrNull(compareBy<JSONObject> {
+            val language = it.optionalString("iso_639_1")
+            priorities.indexOf(language).takeIf { index -> index >= 0 } ?: Int.MAX_VALUE
+        }.thenByDescending { it.optDouble("vote_average") }
+            .thenByDescending { it.optInt("vote_count") })
+        ?.takeIf { image ->
+            priorities.contains(image.optionalString("iso_639_1"))
+        }?.optionalString("file_path")
 }
 
 private fun JSONObject.toTitle(type: TmdbMediaType, language: String): TmdbTitle? {

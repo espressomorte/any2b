@@ -52,6 +52,15 @@ object TolokaHitFilter {
             }
             (learnedMatch || (TolokaTmdbRanker.isVideoCandidate(hit) && titleMatches && yearMatches &&
                 (expectedSeason == null || foundSeason == null || foundSeason == expectedSeason)))
+        }.sortedBy { hit ->
+            val release = TolokaReleaseMetadataParser.parse(hit.title)
+            when {
+                expectedSeason == null -> 1
+                release.season == expectedSeason -> 0
+                release.isAbsoluteEpisodeRange -> 1
+                release.season == null -> 2
+                else -> 3 // Explicit wrong seasons are filtered above; retain stable ordering.
+            }
         }
     }
 

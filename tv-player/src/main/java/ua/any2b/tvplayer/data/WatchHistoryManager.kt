@@ -67,6 +67,11 @@ class WatchHistoryManager(context: Context) {
         prefs.edit().remove("history_list").apply()
     }
 
+    fun removeEntries(animeIds: Set<Int>) {
+        if (animeIds.isEmpty()) return
+        persist(getHistory().filterNot { it.animeId in animeIds })
+    }
+
     fun saveProgress(
         details: AnimeDetails,
         episodeIndex: Int,

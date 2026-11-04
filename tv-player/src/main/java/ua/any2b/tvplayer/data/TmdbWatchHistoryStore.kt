@@ -6,6 +6,13 @@ import org.json.JSONObject
 import ua.any2b.core.tmdb.TmdbMediaType
 import ua.any2b.core.tmdb.TmdbTitle
 
+data class TmdbEpisodeProgress(
+    val voiceIndex: Int,
+    val episodeIndex: Int,
+    val episodeNumber: Int,
+    val progress: Float,
+)
+
 /** Titles whose TorrServer stream actually started in the built-in player. */
 class TmdbWatchHistoryStore(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences(
@@ -30,6 +37,41 @@ class TmdbWatchHistoryStore(context: Context) {
                 })
             }
         }.toString()).apply()
+    }
+
+    fun saveEpisodeProgress(
+        title: TmdbTitle,
+        voiceIndex: Int,
+        episodeIndex: Int,
+        episodeNumber: Int,
+        progress: Float,
+    ) = synchronized(lock) {
+        record(title)
+        val key = TitleKey.Tmdb(title.type, title.id).storageKey
+        val values = try { JSONObject(prefs.getString("episode_progress", "{}").orEmpty()) }
+            catch (_: Exception) { JSONObject() }
+        values.put(key, JSONObject().apply {
+            put("voiceIndex", voiceIndex)
+            put("episodeIndex", episodeIndex)
+            put("episodeNumber", episodeNumber)
+            put("progress", progress.coerceIn(0f, 1f).toDouble())
+            put("updatedAt", System.currentTimeMillis())
+        })
+        prefs.edit().putString("episode_progress", values.toString()).apply()
+    }
+
+    fun episodeProgress(type: TmdbMediaType, id: Int): TmdbEpisodeProgress? = synchronized(lock) {
+        val key = TitleKey.Tmdb(type, id).storageKey
+        try {
+            val data = JSONObject(prefs.getString("episode_progress", "{}").orEmpty())
+                .optJSONObject(key) ?: return@synchronized null
+            TmdbEpisodeProgress(
+                voiceIndex = data.optInt("voiceIndex", 0),
+                episodeIndex = data.optInt("episodeIndex", 0),
+                episodeNumber = data.optInt("episodeNumber", 1),
+                progress = data.optDouble("progress", 0.0).toFloat().coerceIn(0f, 1f),
+            )
+        } catch (_: Exception) { null }
     }
 
     fun clear() = synchronized(lock) { prefs.edit().clear().apply() }

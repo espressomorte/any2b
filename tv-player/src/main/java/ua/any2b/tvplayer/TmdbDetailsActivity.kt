@@ -12,17 +12,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.tv.material3.Text
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ua.any2b.core.tmdb.TmdbMediaType
 import ua.any2b.core.tmdb.trailerSearchUrl
 import ua.any2b.tvplayer.data.ExternalVideoPlayers
-import ua.any2b.tvplayer.data.FanartKeyStore
 import ua.any2b.tvplayer.data.SettingsManager
 import ua.any2b.tvplayer.data.TorrServerAuthStore
 import ua.any2b.tvplayer.data.TolokaPlaybackStore
@@ -34,11 +27,11 @@ import ua.any2b.tvplayer.ui.TolokaSearchViewModel
 import ua.any2b.tvplayer.ui.TolokaSearchState
 import ua.any2b.tvplayer.ui.TmdbDetailsState
 import ua.any2b.tvplayer.ui.tmdbTorrentQueryOptions
+import ua.any2b.core.matcher.SeriesTitleSearch
+import ua.any2b.tvplayer.ui.FanartDayTheme
 import ua.any2b.tvplayer.ui.FanartArtworkKey
 import ua.any2b.tvplayer.ui.FanartArtworkState
 import ua.any2b.tvplayer.ui.FanartArtworkViewModel
-import ua.any2b.tvplayer.ui.FanartDayTheme
-import ua.any2b.tvplayer.ui.AppColors
 
 class TmdbDetailsActivity : ComponentActivity() {
     companion object {
@@ -48,12 +41,14 @@ class TmdbDetailsActivity : ComponentActivity() {
         const val EXTRA_PREFERRED_TITLE = "PREFERRED_TITLE"
         const val EXTRA_ORIGINAL_LANGUAGE = "ORIGINAL_LANGUAGE"
         const val EXTRA_ORIGINAL_TITLE = "ORIGINAL_TITLE"
+        const val EXTRA_FAVORITES_LAYOUT = "FAVORITES_LAYOUT"
     }
 
     private val detailsViewModel: TmdbDetailsViewModel by viewModels()
     private val tolokaViewModel: TolokaSearchViewModel by viewModels()
-    private val fanartViewModel: FanartArtworkViewModel by viewModels()
+    private val artworkViewModel: FanartArtworkViewModel by viewModels()
     private var launchingPlayer = false
+    private var returningFromAnitubePlayer = false
     private var openedTopics by mutableStateOf(emptySet<String>())
     private var openedFiles by mutableStateOf(emptySet<Int>())
     private var selectedTopicId: String? = null
@@ -74,23 +69,32 @@ class TmdbDetailsActivity : ComponentActivity() {
         val preferredTitle = intent.getStringExtra(EXTRA_PREFERRED_TITLE)
         val originalLanguage = intent.getStringExtra(EXTRA_ORIGINAL_LANGUAGE)
         val originalTitle = intent.getStringExtra(EXTRA_ORIGINAL_TITLE)
-        val experimental = SettingsManager(this).isExperimentalAppearanceEnabled() &&
-            !FanartKeyStore(this).read().isNullOrBlank()
+        val favoritesLayout = intent.getBooleanExtra(EXTRA_FAVORITES_LAYOUT, false)
+        val experimental = SettingsManager(this).isExperimentalAppearanceEnabled()
         detailsViewModel.load(type, id, query, preferredTitle, originalLanguage, originalTitle)
         setContent {
             AppTheme {
-                val artworkState = fanartViewModel.state.collectAsStateWithLifecycle().value
+                val artworkState = artworkViewModel.state.collectAsStateWithLifecycle().value
                 val detailsState = detailsViewModel.state.collectAsStateWithLifecycle().value
+                val anitubeState = detailsViewModel.anitubeState.collectAsStateWithLifecycle().value
+                val aniListAvailability = detailsViewModel.aniListAvailability.collectAsStateWithLifecycle().value
                 val tolokaState = tolokaViewModel.state.collectAsStateWithLifecycle().value
                 val readyDetails = (detailsState as? TmdbDetailsState.Ready)?.details
-                val artworkKey = readyDetails?.let {
-                    FanartArtworkKey(type, id, it.tvdbId)
+                val tmdbArtwork = readyDetails?.let { details ->
+                    val poster = details.title.posterUrl
+                    val logo = details.logoUrl
+                    if (poster != null && logo != null)
+                        ua.any2b.core.fanart.FanartArtwork(poster, logo) else null
                 }
-                LaunchedEffect(experimental, artworkKey) {
-                    if (experimental && artworkKey != null)
-                        fanartViewModel.load(type, id, artworkKey.tvdbId,
-                            readyDetails?.title?.posterUrl)
+                val artworkKey = readyDetails?.let { FanartArtworkKey(type, id) }
+                LaunchedEffect(experimental, artworkKey, tmdbArtwork) {
+                    if (experimental && tmdbArtwork != null)
+                        artworkViewModel.loadTmdbArtwork(type, id,
+                            tmdbArtwork.posterUrl, tmdbArtwork.logoUrl)
                 }
+                val readyArtwork = (artworkState as? FanartArtworkState.Ready)
+                    ?.takeIf { it.key == artworkKey }
+                val activePalette = if (experimental) readyArtwork?.palette else null
                 LaunchedEffect(tolokaState.search) { refreshPlaybackMarks() }
                 LaunchedEffect(readyDetails?.title?.type, readyDetails?.title?.id,
                     readyDetails?.title?.englishTitle) {
@@ -101,33 +105,22 @@ class TmdbDetailsActivity : ComponentActivity() {
                     }
                     val initial = tmdbTorrentQueryOptions(details).firstOrNull()?.second
                         ?: details.title.title
-                    val english = details.title.englishTitle
+                    val english = (details.title.englishTitle
                         ?: details.title.originalTitle?.takeIf {
                             details.title.originalLanguage == "en"
-                        }
+                        })?.let(SeriesTitleSearch::clean)
                     tolokaViewModel.searchAutomatically(details, initial, english)
                 }
-                if (experimental && detailsState is ua.any2b.tvplayer.ui.TmdbDetailsState.Ready &&
-                    (artworkState as? FanartArtworkState.Ready)?.key != artworkKey) {
-                    Box(Modifier.fillMaxSize().background(AppColors.BackgroundDark),
-                        contentAlignment = Alignment.Center) { Text("Готуємо вигляд деталей…") }
-                    return@AppTheme
-                }
-                val activePalette = if (experimental)
-                    (artworkState as? FanartArtworkState.Ready)
-                        ?.takeIf { it.key == artworkKey }?.palette else null
                 FanartDayTheme(activePalette?.light == true) {
                 TmdbDetailsScreen(
                     state = detailsState,
+                    favoritesLayout = favoritesLayout,
                     experimentalPalette = activePalette,
-                    experimentalArtwork = if (experimental)
-                        (artworkState as? FanartArtworkState.Ready)
-                            ?.takeIf { it.key == artworkKey }?.artwork else null,
-                    fanartNotice = if (experimental)
-                        (artworkState as? FanartArtworkState.Ready)
-                            ?.takeIf { it.key == artworkKey }?.reason?.let { "fanart.tv: $it" }
-                        else null,
+                    experimentalArtwork = if (experimental) tmdbArtwork else null,
+                    fanartNotice = null,
                     toloka = tolokaState,
+                    anitube = anitubeState,
+                    aniListAvailability = aniListAvailability,
                     openedTopics = openedTopics,
                     openedFiles = openedFiles,
                     onRetryDetails = {
@@ -148,6 +141,13 @@ class TmdbDetailsActivity : ComponentActivity() {
                     onRejectTorrent = tolokaViewModel::rejectHit,
                     onRetryMetadata = tolokaViewModel::retryMetadata,
                     onPlayFile = ::openFile,
+                    onPanelSelected = detailsViewModel::setPanel,
+                    onRetryAnitube = detailsViewModel::retryAnitube,
+                    onSelectAnitubeRelease = detailsViewModel::selectAnitubeRelease,
+                    onSelectAnitubeSeason = detailsViewModel::selectAnitubeSeason,
+                    onSelectAnitubeVoice = detailsViewModel::selectAnitubeVoice,
+                    onSelectAnitubeEpisode = detailsViewModel::selectAnitubeEpisode,
+                    onPlayAnitube = ::playAnitube,
                     onToggleFavorite = detailsViewModel::toggleFavorite,
                     onTrailer = {
                         val details = (detailsViewModel.state.value as?
@@ -178,6 +178,14 @@ class TmdbDetailsActivity : ComponentActivity() {
         super.onResume()
         launchingPlayer = false
         refreshPlaybackMarks()
+        if (returningFromAnitubePlayer) {
+            returningFromAnitubePlayer = false
+            val title = (detailsViewModel.state.value as? TmdbDetailsState.Ready)?.details?.title
+            if (title != null) {
+                val progress = TmdbWatchHistoryStore(this).episodeProgress(title.type, title.id)
+                detailsViewModel.restoreAnitubeProgress(progress)
+            }
+        }
     }
 
     private fun refreshPlaybackMarks() {
@@ -250,5 +258,32 @@ class TmdbDetailsActivity : ComponentActivity() {
             tolokaViewModel.reportPlaybackStatus("Не вдалося запустити плеєр після формування URL потоку")
             Toast.makeText(this, "Не вдалося відкрити плеєр", Toast.LENGTH_LONG).show()
         }
+    }
+
+    private fun playAnitube() {
+        val title = (detailsViewModel.state.value as? TmdbDetailsState.Ready)?.details?.title
+            ?: return
+        detailsViewModel.playAnitube(
+            onError = { message -> Toast.makeText(this, message, Toast.LENGTH_LONG).show() },
+            onSuccess = { url, voiceIndex, episodeIndex, episodeNumber, resumeProgress ->
+                returningFromAnitubePlayer = true
+                startActivity(Intent(this, PlayerActivity::class.java).apply {
+                    putExtra(PlayerActivity.EXTRA_STREAM_URL, url)
+                    putExtra(PlayerActivity.EXTRA_SOURCE_TYPE, PlayerActivity.SOURCE_ANITUBE_TMDB)
+                    putExtra(PlayerActivity.EXTRA_VOICE_INDEX, voiceIndex)
+                    putExtra(PlayerActivity.EXTRA_EPISODE_INDEX, episodeIndex)
+                    putExtra(PlayerActivity.EXTRA_EPISODE_NUMBER, episodeNumber)
+                    putExtra(PlayerActivity.EXTRA_IS_MOVIE, title.type == TmdbMediaType.MOVIE)
+                    putExtra(PlayerActivity.EXTRA_TMDB_ID, title.id)
+                    putExtra(PlayerActivity.EXTRA_TMDB_TYPE, title.type.path)
+                    putExtra(PlayerActivity.EXTRA_TMDB_TITLE, title.title)
+                    putExtra(PlayerActivity.EXTRA_TMDB_ORIGINAL_TITLE, title.originalTitle)
+                    putExtra(PlayerActivity.EXTRA_TMDB_YEAR, title.year ?: 0)
+                    putExtra(PlayerActivity.EXTRA_TMDB_POSTER_URL, title.posterUrl)
+                    putExtra(PlayerActivity.EXTRA_TMDB_RATING, title.rating ?: Double.NaN)
+                    putExtra(PlayerActivity.EXTRA_TMDB_RESUME_PROGRESS, resumeProgress)
+                })
+            },
+        )
     }
 }

@@ -23,6 +23,8 @@ class TmdbListActivity : ComponentActivity() {
                         startActivity(Intent(this, TmdbDetailsActivity::class.java).apply {
                             putExtra(TmdbDetailsActivity.EXTRA_TMDB_ID, title.id)
                             putExtra(TmdbDetailsActivity.EXTRA_TMDB_TYPE, title.type.path)
+                            if (intent.getStringExtra(EXTRA_CATEGORY) == "favorites")
+                                putExtra(TmdbDetailsActivity.EXTRA_FAVORITES_LAYOUT, true)
                         })
                     },
                     onSort = viewModel::changeSort,

@@ -41,6 +41,22 @@ class TmdbFavoritesStore(context: Context) {
         !wasFavorite
     }
 
+    fun addAll(titles: List<TmdbTitle>) = synchronized(lock) {
+        val existing = read()
+        val merged = (existing + titles).distinctBy { it.type to it.id }
+        prefs.edit().putString("items", JSONArray().apply {
+            merged.forEach { item -> put(JSONObject().apply {
+                put("type", item.type.path)
+                put("id", item.id)
+                put("title", item.title)
+                put("originalTitle", item.originalTitle)
+                put("year", item.year)
+                put("posterUrl", item.posterUrl)
+                put("rating", item.rating)
+            }) }
+        }.toString()).apply()
+    }
+
     private fun read(): List<TmdbTitle> = try {
         val array = JSONArray(prefs.getString("items", "[]"))
         (0 until array.length()).mapNotNull { index ->

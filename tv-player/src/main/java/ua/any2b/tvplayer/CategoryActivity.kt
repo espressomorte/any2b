@@ -37,8 +37,11 @@ class CategoryActivity : ComponentActivity() {
                 CategoryScreen(
                     title = categoryTitle,
                     state = state,
-                    onOpen = { card ->
-                        startActivity(Intent(this, DetailsActivity::class.java).apply { putExtra("ANIME_ID", card.id) })
+                    onOpen = { title ->
+                        startActivity(Intent(this, TmdbDetailsActivity::class.java).apply {
+                            putExtra(TmdbDetailsActivity.EXTRA_TMDB_ID, title.id)
+                            putExtra(TmdbDetailsActivity.EXTRA_TMDB_TYPE, title.type.path)
+                        })
                     },
                     onLoadMore = viewModel::loadMore,
                     onSort = viewModel::changeSort,

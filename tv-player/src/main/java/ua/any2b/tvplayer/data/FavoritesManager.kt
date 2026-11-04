@@ -50,4 +50,11 @@ class FavoritesManager(context: Context) {
         sharedFavoriteIds.value = favorites.mapTo(mutableSetOf()) { it.id }
         return isFavorite
     }
+
+    fun remove(ids: Set<Int>) {
+        if (ids.isEmpty()) return
+        val remaining = getFavorites().filterNot { it.id in ids }
+        prefs.edit().putString("items", FavoritesCodec.encode(remaining)).apply()
+        sharedFavoriteIds.value = remaining.mapTo(mutableSetOf()) { it.id }
+    }
 }

@@ -25,6 +25,7 @@ import ua.any2b.core.anitube.AnitubeVoice
 import ua.any2b.core.anitube.playableVoices
 import ua.any2b.core.extractor.StreamResolver
 import ua.any2b.core.matcher.TitleMatcher
+import ua.any2b.core.matcher.SeriesTitleSearch
 import ua.any2b.core.tmdb.AniListTmdbMatcher
 import ua.any2b.core.tmdb.TmdbFailure
 import ua.any2b.core.tmdb.TmdbMatch
@@ -109,6 +110,8 @@ sealed interface TolokaTransferState {
     ) : TolokaTransferState
 }
 
+enum class Panel { TORRENT, ONLINE }
+
 sealed interface DetailsState {
     data object Loading : DetailsState
     data class Ready(
@@ -124,6 +127,7 @@ sealed interface DetailsState {
         val tolokaOpenedTopics: Set<String> = emptySet(),
         val tolokaOpenedFiles: Set<Int> = emptySet(),
         val isFavorite: Boolean = false,
+        val activePanel: Panel = Panel.TORRENT,
         val selectedVoiceIndex: Int = 0,
         val selectedEpisodeIndex: Int = 0,
         val resolvingStream: Boolean = false,
@@ -212,6 +216,11 @@ class DetailsViewModel(
                     isFavorite = favoritesManager.isFavorite(animeId),
                     historyEntry = historyEntry
                 )
+                val torrentQuery = listOfNotNull(details.title.english, details.title.romaji,
+                    details.title.native).firstOrNull(String::isNotBlank)?.let(SeriesTitleSearch::clean).orEmpty()
+                val englishTorrentTitle = details.title.english?.let(SeriesTitleSearch::clean)
+                if (torrentQuery.isNotBlank())
+                    searchTolokaAutomatically(torrentQuery, englishTorrentTitle)
                 videoSourceJob = viewModelScope.launch { loadVideoSource(details) }
                 tmdbJob = viewModelScope.launch { loadTmdbLink(details) }
             } catch (e: CancellationException) {
@@ -219,6 +228,18 @@ class DetailsViewModel(
             } catch (e: Exception) {
                 _state.value = DetailsState.Error(e.message ?: "Не вдалося завантажити деталі")
             }
+        }
+    }
+
+    fun setPanel(panel: Panel) {
+        val ready = _state.value as? DetailsState.Ready ?: return
+        if (ready.activePanel == panel) return
+        updateReady { it.copy(activePanel = panel) }
+        if (panel == Panel.TORRENT && ready.tolokaSearch is TolokaSearchState.Idle) {
+            val details = ready.details
+            val query = listOfNotNull(details.title.english, details.title.romaji,
+                details.title.native).firstOrNull(String::isNotBlank)?.let(SeriesTitleSearch::clean).orEmpty()
+            if (query.isNotBlank()) searchTolokaAutomatically(query, details.title.english)
         }
     }
 
@@ -274,17 +295,23 @@ class DetailsViewModel(
                 maybeRetryAniTubeWithTmdb()
                 return
             }
-            val queries = listOf(details.title.english, details.title.romaji)
-                .filterNotNull().map(String::trim).filter(String::isNotBlank).distinct()
-            val first = queries.firstOrNull() ?: throw IllegalArgumentException("Немає назви для пошуку TMDB")
-            val firstMatches = AniListTmdbMatcher.rank(details,
-                enrichSeasonCandidates(details, connection.client, connection.accessKey,
-                    connection.client.search(first, connection.accessKey)))
-            val matches = if (firstMatches.isEmpty() && queries.size > 1) {
-                AniListTmdbMatcher.rank(details,
-                    enrichSeasonCandidates(details, connection.client, connection.accessKey,
-                        connection.client.search(queries[1], connection.accessKey)))
-            } else firstMatches
+            val queryNames = (listOfNotNull(details.title.english, details.title.romaji,
+                details.title.native) + details.synonyms).map(String::trim)
+                .filter(String::isNotBlank).distinctBy(String::lowercase)
+            val queries = queryNames.flatMap(SeriesTitleSearch::fanartQueries)
+                .distinctBy(String::lowercase).take(MAX_TMDB_TITLE_QUERIES)
+            if (queries.isEmpty()) throw IllegalArgumentException("Немає назви для пошуку TMDB")
+            // Fanart itself resolves by TMDB/TVDB ID. Search numbered spellings first, then
+            // clean franchise names so a season title can still resolve to the series entry.
+            val tmdbResults = linkedMapOf<Pair<TmdbMediaType, Int>, TmdbTitle>()
+            queries.forEach { query ->
+                connection.client.search(query, connection.accessKey).forEach { candidate ->
+                    tmdbResults.putIfAbsent(candidate.type to candidate.id, candidate)
+                }
+            }
+            val enriched = enrichSeasonCandidates(details, connection.client,
+                connection.accessKey, tmdbResults.values.toList())
+            val matches = AniListTmdbMatcher.rank(details, enriched)
             updateReady { it.copy(tmdbLink = TmdbLinkState.Candidates(
                 matches, AniListTmdbMatcher.clearSuggestion(matches))) }
             maybeRetryAniTubeWithTmdb()
@@ -443,6 +470,10 @@ class DetailsViewModel(
             retriedAniTubeWithTmdb = true
             retryVideoSource()
         }
+    }
+
+    private companion object {
+        const val MAX_TMDB_TITLE_QUERIES = 12
     }
 
     fun toggleFavorite() {

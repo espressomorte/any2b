@@ -49,3 +49,10 @@ key.properties
 # External native build folders
 .externalNativeBuild/
 .cxx/
+
+# Python runtime artifacts
+__pycache__/
+*.py[cod]
+
+# Accidental root-level filenames made of a control character
+/[[:cntrl:]]

@@ -52,6 +52,39 @@ class FanartArtworkViewModel(application: Application) : AndroidViewModel(applic
     val state: StateFlow<FanartArtworkState> = _state
     private var job: Job? = null
 
+    fun loadTmdbArtwork(type: TmdbMediaType, id: Int, posterUrl: String, logoUrl: String) {
+        val lookup = FanartArtworkKey(type, id)
+        if ((_state.value as? FanartArtworkState.Ready)?.key == lookup ||
+            (_state.value as? FanartArtworkState.Loading)?.key == lookup) return
+        job?.cancel()
+        _state.value = FanartArtworkState.Loading(lookup)
+        job = viewModelScope.launch {
+            val result = try {
+                withTimeoutOrNull(20_000) {
+                    val app = getApplication<Application>()
+                    val loaded = coroutineScope {
+                        val poster = async { app.imageLoader.execute(ImageRequest.Builder(app)
+                            .data(posterUrl).size(700, 1050).allowHardware(false).build()) as? SuccessResult }
+                        val logo = async { app.imageLoader.execute(ImageRequest.Builder(app)
+                            .data(logoUrl).size(900, 450).allowHardware(false).build()) as? SuccessResult }
+                        poster.await() to logo.await()
+                    }
+                    if (loaded.first != null && loaded.second != null)
+                        FanartArtworkState.Ready(lookup, FanartArtwork(posterUrl, logoUrl),
+                            palette = withContext(Dispatchers.Default) {
+                                paletteFromArtwork(loaded.first!!, loaded.second!!)
+                            })
+                    else FanartArtworkState.Ready(lookup, null)
+                } ?: FanartArtworkState.Ready(lookup, null)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                FanartArtworkState.Ready(lookup, null)
+            }
+            if ((_state.value as? FanartArtworkState.Loading)?.key == lookup) _state.value = result
+        }
+    }
+
     fun load(type: TmdbMediaType, id: Int, tvdbId: Int? = null, tmdbPosterUrl: String? = null) {
         val lookup = FanartArtworkKey(type, id, tvdbId)
         if (id <= 0 || (_state.value as? FanartArtworkState.Ready)?.key == lookup ||
@@ -178,12 +211,21 @@ private fun paletteFromPoster(result: SuccessResult?): FanartPalette {
 
 private fun paletteFromArtwork(poster: SuccessResult, logo: SuccessResult): FanartPalette {
     val palette = paletteFromPoster(poster)
+    val posterBitmap = (poster.drawable as? BitmapDrawable)?.bitmap ?: return palette
     val logoBitmap = (logo.drawable as? BitmapDrawable)?.bitmap ?: return palette
-    val logoColor = sampledColorBins(logoBitmap, 96, 48).maxByOrNull { it.count }?.color
-        ?: return palette
+    val logoColors = sampledColorBins(logoBitmap, 96, 48)
+    val largestBin = logoColors.maxOfOrNull { it.count } ?: return palette
+    val edgeColor = darkPosterEdge(posterBitmap)
+    if (edgeColor != null && logoColors.any {
+            it.count >= max(2, largestBin / 6) && contrastRatio(it.color, edgeColor) >= 3.0
+        }) {
+        // Keep the poster's dark frame continuous with the page, with a slight separation.
+        return FanartPalette(capSaturation(lerp(edgeColor, Color.White, 0.06f)), false)
+    }
+    val logoColor = logoColors.filter { it.count >= max(2, largestBin / 6) }
+        .minByOrNull { it.color.luminance() }?.color ?: return palette
     if (contrastRatio(logoColor, palette.background) >= 4.5) return palette
 
-    val posterBitmap = (poster.drawable as? BitmapDrawable)?.bitmap ?: return palette
     val posterColors = sampledColorBins(posterBitmap, 32, 48)
         .filterNot { isDarkNeutral(it.color) }
     val darkText = Color(0xFF182330)
@@ -204,6 +246,39 @@ private fun paletteFromArtwork(poster: SuccessResult, logo: SuccessResult): Fana
     val background = capSaturation(rawBackground, 0.30f)
     val light = contrastRatio(background, darkText) >= contrastRatio(background, Color.White)
     return palette.copy(background = background, light = light)
+}
+
+/** Returns the edge color only when most sampled points form a dark frame. */
+private fun darkPosterEdge(bitmap: Bitmap): Color? {
+    var red = 0L
+    var green = 0L
+    var blue = 0L
+    var dark = 0
+    var total = 0
+    try {
+        for (step in 1..20) {
+            val along = step / 21f
+            val points = arrayOf(0.04f to along, 0.96f to along,
+                along to 0.04f, along to 0.96f)
+            for ((x, y) in points) {
+                val pixel = bitmap.getPixel(((bitmap.width - 1) * x).toInt(),
+                    ((bitmap.height - 1) * y).toInt())
+                if (android.graphics.Color.alpha(pixel) < 200) continue
+                total++
+                val color = Color(pixel)
+                if (color.luminance() > 0.20f) continue
+                dark++
+                red += android.graphics.Color.red(pixel)
+                green += android.graphics.Color.green(pixel)
+                blue += android.graphics.Color.blue(pixel)
+            }
+        }
+    } catch (_: IllegalStateException) {
+        return null
+    }
+    if (total < 40 || dark * 4 < total * 3) return null
+    return Color(android.graphics.Color.rgb((red / dark).toInt(),
+        (green / dark).toInt(), (blue / dark).toInt()))
 }
 
 private data class ColorBin(val color: Color, val count: Int)

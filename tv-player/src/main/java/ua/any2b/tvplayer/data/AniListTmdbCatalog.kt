@@ -30,6 +30,29 @@ class AniListTmdbCatalog(context: Context) {
                 ?.second
         }?.let { return@coroutineScope it }
         val cards = aniList.categoryPage("top_score", page, perPage)
+        val distinct = resolveCards(cards)
+        if (cards.isNotEmpty() && distinct.isEmpty()) {
+            throw IllegalStateException("Не вдалося знайти відповідники AniList у TMDB")
+        }
+        AniListTmdbPage(distinct, hasMore = cards.size == perPage).also { result ->
+            synchronized(cache) { cache[cacheKey] = SystemClock.elapsedRealtime() to result }
+        }
+    }
+
+    suspend fun homeRows(perRow: Int): Map<String, List<TmdbTitle>> {
+        val rows = aniList.homeRows(perRow).associateBy { it.id }
+        return rows.mapValues { (_, row) -> resolveCards(row.items) }
+    }
+
+    suspend fun resolveById(aniListId: Int): TmdbTitle? {
+        val anime = aniList.animeDetails(aniListId)
+        val card = AnimeCard(anime.id, anime.title, anime.cover, anime.score, anime.episodes,
+            anime.format, anime.status, anime.seasonYear, anime.nextEpisode)
+        return resolveCards(listOf(card)).firstOrNull()
+    }
+
+    suspend fun resolveCards(cards: List<AnimeCard>): List<TmdbTitle> {
+        if (cards.isEmpty()) return emptyList()
         val saved = try {
             mappings.all()
         } catch (error: CancellationException) {
@@ -44,26 +67,22 @@ class AniListTmdbCatalog(context: Context) {
         } catch (_: Exception) {
             null
         }
-        val titles = if (index != null) {
-            cards.mapNotNull { card ->
-                val mapping = saved[card.id]
+        if (index == null) return fallbackSearch(cards, saved)
+        val mapped = mutableListOf<TmdbTitle>()
+        val unresolved = mutableListOf<AnimeCard>()
+        cards.distinctBy { it.id }.forEach { card ->
+            val mapping = saved[card.id]?.let { it.type to it.id }
+                ?: FribbMappings.preferred(index.byAniList[card.id].orEmpty(), card.format)
                     ?.let { it.type to it.id }
-                    ?: FribbMappings.preferred(index.byAniList[card.id].orEmpty(), card.format)
-                        ?.let { it.type to it.id }
-                mapping?.let { (type, id) -> card.tmdbTitle(type, id) }
-            }
-        } else fallbackSearch(cards, saved)
-        val distinct = titles.distinctBy { it.type to it.id }
-        if (cards.isNotEmpty() && distinct.isEmpty()) {
-            throw IllegalStateException("Не вдалося знайти відповідники AniList у TMDB")
+            if (mapping == null) unresolved += card
+            else mapped += card.tmdbTitle(mapping.first, mapping.second)
         }
-        AniListTmdbPage(distinct, hasMore = cards.size == perPage).also { result ->
-            synchronized(cache) { cache[cacheKey] = SystemClock.elapsedRealtime() to result }
-        }
+        return (mapped + fallbackSearch(unresolved, saved)).distinctBy { it.type to it.id }
     }
 
     private suspend fun fallbackSearch(cards: List<AnimeCard>,
         saved: Map<Int, TmdbMapping>): List<TmdbTitle> = coroutineScope {
+        if (cards.isEmpty()) return@coroutineScope emptyList()
         val connection = workerTmdbConnection(appContext)
             ?: throw IllegalStateException("Налаштуйте URL і ключ Worker для TMDB")
         val permits = Semaphore(4)

@@ -12,6 +12,8 @@ data class AnitubeSearchResult(
     val durationMinutes: Int? = null,
 )
 
+data class AnitubeReleaseMetadata(val year: Int?, val episodeCount: Int?)
+
 /** Серія конкретної студії озвучення та плеєра. */
 data class AnitubeEpisode(
     val id: String,

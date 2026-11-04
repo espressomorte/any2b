@@ -88,9 +88,11 @@ object TolokaTmdbRanker {
             val collection = details.title.type == TmdbMediaType.MOVIE && years.size > 1
             val explicitWrongSeason = expectedSeason?.let { expected ->
                 when {
+                    // An absolute episode pack without a known season map is still a
+                    // usable release. Reject it only when mapping proves it excludes Sx.
                     release.isAbsoluteEpisodeRange -> absoluteSeasonRanges?.none {
                         it.seasonNumber == expected.number
-                    } != false
+                    } == true
                     release.season != null -> expected.number !in release.season..
                         (release.seasonEnd ?: release.season)
                     else -> false
@@ -103,7 +105,6 @@ object TolokaTmdbRanker {
                         it.year == releaseYear }
                 }
             val wrongSeason = explicitWrongSeason || yearSeasonMismatch
-            val absoluteMappingMissing = release.isAbsoluteEpisodeRange && absoluteSeasonRanges == null
             val episodeOverflow = !release.isAbsoluteEpisodeRange && expectedEpisodeCount != null && release.episodeEnd != null &&
                 release.episodeEnd > expectedEpisodeCount
             val seasonMatch = expectedSeason != null && when {
@@ -118,7 +119,7 @@ object TolokaTmdbRanker {
                 qualityAndAvailability + (if (learned) 12 else 0) - (if (wrongYear) 8 else 0) -
                 (if (wrongSeason) 12 else 0) - (if (episodeOverflow) 7 else 0) -
                 (if (collection) 4 else 0)
-            val weak = !learned && (wrongYear || wrongSeason || episodeOverflow || absoluteMappingMissing || collection ||
+            val weak = !learned && (wrongYear || wrongSeason || episodeOverflow || collection ||
                 maxOf(ua, en, alt) < 5 ||
                 (ua > 0 && english.isNotEmpty() && en == 0 && alt == 0)
             )

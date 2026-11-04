@@ -72,6 +72,24 @@ fun AnimeDetails.trailerSearchUrl(): String {
 
 data class AnimeCardPage(val items: List<AnimeCard>, val hasNextPage: Boolean)
 
+/** Lightweight title metadata used when resolving TMDB-only titles back to AniList. */
+data class AniListAnimeLookup(
+    val id: Int,
+    val title: Title,
+    val synonyms: List<String>,
+    val seasonYear: Int?,
+    val episodes: Int?,
+    val durationMinutes: Int?,
+    val format: String?,
+    val status: String? = null,
+    val startDate: String? = null,
+    val relations: List<AniListLookupRelation> = emptyList(),
+    val externalLinks: List<AniListExternalLink> = emptyList(),
+)
+
+data class AniListExternalLink(val site: String, val url: String)
+data class AniListLookupRelation(val type: String, val anime: AniListAnimeLookup)
+
 /** Один горизонтальний ряд на головній. */
 data class HomeRow(
     val id: String,
