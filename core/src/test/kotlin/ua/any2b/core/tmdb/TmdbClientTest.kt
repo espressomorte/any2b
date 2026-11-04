@@ -185,7 +185,17 @@ class TmdbClientTest {
         val paths = mutableListOf<String>()
         val client = client { request ->
             paths += request.url.encodedPath
-            fixture(request, 200, if (request.url.encodedPath.endsWith("/tv/1429")) {
+            fixture(request, 200, if (request.url.encodedPath.endsWith("/tv/1429/images")) {
+                """{"posters":[
+                    {"file_path":"/uk-poster.jpg","iso_639_1":"uk","vote_average":10},
+                    {"file_path":"/textless-poster.jpg","iso_639_1":null,"vote_average":1}],
+                    "logos":[
+                    {"file_path":"/en-logo.png","iso_639_1":"en","vote_average":10},
+                    {"file_path":"/ja-logo.png","iso_639_1":"ja","vote_average":1}]}"""
+            } else if (request.url.encodedPath.endsWith("/movie/157336/images")) {
+                """{"posters":[{"file_path":"/en-movie.jpg","iso_639_1":"en"}],
+                    "logos":[]}"""
+            } else if (request.url.encodedPath.endsWith("/tv/1429")) {
                 """{"id":1429,"name":"Атака титанів","original_name":"進撃の巨人",
                     "first_air_date":"2013-04-07","overview":"Український опис",
                     "origin_country":["JP","US","JP"],
@@ -211,7 +221,11 @@ class TmdbClientTest {
         }
         val series = client.details(TmdbMediaType.TV, 1429, "token")
         val movie = client.details(TmdbMediaType.MOVIE, 157336, "token")
-        assertEquals(listOf("/3/tv/1429", "/3/movie/157336"), paths)
+        assertEquals(listOf("/3/tv/1429", "/3/tv/1429/images",
+            "/3/movie/157336", "/3/movie/157336/images"), paths)
+        assertEquals("https://image.tmdb.org/t/p/w780/textless-poster.jpg", series.title.posterUrl)
+        assertEquals("https://image.tmdb.org/t/p/w500/ja-logo.png", series.logoUrl)
+        assertEquals("https://image.tmdb.org/t/p/w780/en-movie.jpg", movie.title.posterUrl)
         assertEquals("Український опис", series.title.overview)
         assertEquals(4, series.seasons)
         assertEquals(87, series.episodes)
