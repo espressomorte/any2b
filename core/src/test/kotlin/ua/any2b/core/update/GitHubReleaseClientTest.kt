@@ -17,6 +17,26 @@ class GitHubReleaseClientTest {
         assertTrue(compareVersions("v0.1.0", "0.1.0-alpha.10") > 0)
         assertTrue(compareVersions("v0.2.0-alpha.1", "0.1.9") > 0)
         assertEquals(0, compareVersions("v0.1.0-alpha.1", "0.1.0-alpha.1"))
+        assertTrue(compareVersions("v0.1.3.0-rc", "v0.1.2-akira.5") > 0)
+        assertTrue(compareVersions("v0.1.3.0-rc", "v0.1.3.0-alpha.1") > 0)
+        assertTrue(compareVersions("v0.1.3.0", "v0.1.3.0-rc") > 0)
+        assertEquals(0, compareVersions("v0.1.3.0", "0.1.3"))
+    }
+
+    @Test
+    fun newestReleaseRecognizesFourComponentReleaseTag() = runBlocking {
+        val body = """[
+          {"tag_name":"v0.1.2-akira.5","html_url":"https://github.com/espressomorte/any2b/releases/tag/v0.1.2-akira.5","draft":false,"published_at":"2026-11-01T21:29:57Z","assets":[]},
+          {"tag_name":"v0.1.3.0-rc","html_url":"https://github.com/espressomorte/any2b/releases/tag/v0.1.3.0-rc","draft":false,"published_at":"2026-11-04T17:02:59Z","assets":[{"name":"tv-player-release.apk","browser_download_url":"https://github.com/espressomorte/any2b/releases/download/v0.1.3.0-rc/tv-player-release.apk"}]}
+        ]"""
+        val http = OkHttpClient.Builder().addInterceptor { chain ->
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK").body(body.toResponseBody()).build()
+        }.build()
+
+        val release = GitHubReleaseClient(http).newestRelease()
+        assertEquals("v0.1.3.0-rc", release?.tag)
+        assertTrue(release?.apkUrl?.endsWith("/tv-player-release.apk") == true)
     }
 
     @Test
