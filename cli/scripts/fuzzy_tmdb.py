@@ -217,6 +217,7 @@ class OllamaTitleTranslator(TitleTranslator):
     def __init__(self, model, cache_path, host="http://localhost:11434"):
         super().__init__(api_key="", model=model, cache_path=cache_path)
         self.host = host.rstrip("/")
+        self.timeout = int(os.environ.get("OLLAMA_TIMEOUT", "120"))
 
     def available(self):
         request = urllib.request.Request(self.host + "/api/tags", headers={"Accept": "application/json"})
@@ -259,7 +260,7 @@ class OllamaTitleTranslator(TitleTranslator):
         request = urllib.request.Request(self.host + "/api/chat", data=json.dumps(payload).encode("utf-8"), headers={
             "Content-Type": "application/json", "Accept": "application/json",
         }, method="POST")
-        with urllib.request.urlopen(request, timeout=300) as response:
+        with urllib.request.urlopen(request, timeout=self.timeout) as response:
             result = json.loads(response.read().decode("utf-8"))
         parsed = json.loads(result.get("message", {}).get("content", "{}"))
         translations = clean_translation(parsed, title)
@@ -329,6 +330,32 @@ def query_names(item):
     return unique[:4]
 
 
+def restore_progress(data, output_path):
+    """Keep completed fuzzy rows when input and output are separate files."""
+    if not output_path.exists():
+        return
+    previous = json.loads(output_path.read_text(encoding="utf-8"))
+    old_items, items = previous.get("items"), data["items"]
+    if not isinstance(old_items, list) or len(old_items) != len(items) or any(
+        any(old.get(key) != current.get(key) for key in
+            ("newsId", "status", "anitubeTitle", "year", "episodes"))
+        for old, current in zip(old_items, items)
+    ):
+        raise ValueError(f"Cannot resume: input and output catalogs differ: {output_path}")
+    for current, old in zip(items, old_items):
+        if "fuzzySearch" in old:
+            current["candidates"] = old.get("candidates", [])
+            current["fuzzySearch"] = old["fuzzySearch"]
+
+
+def already_processed(item, min_score, min_title_score):
+    result = item.get("fuzzySearch")
+    return isinstance(result, dict) and not result.get("llmRetryPending") and (
+        result.get("minScore") == min_score and
+        result.get("minTitleScore", 0.78) == min_title_score
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", required=True, type=Path)
@@ -348,6 +375,11 @@ def main():
     data = json.loads(args.input.read_text(encoding="utf-8"))
     if not isinstance(data.get("items"), list):
         parser.error("input JSON must contain an items array")
+    if args.output.resolve() != args.input.resolve():
+        try:
+            restore_progress(data, args.output)
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            parser.error(str(error))
     statuses = {value.strip() for value in args.statuses.split(",") if value.strip()}
     selected = [item for item in data["items"] if item.get("status") in statuses]
     if args.limit:
@@ -370,11 +402,17 @@ def main():
         print(f"LLM title fallback enabled via OpenAI ({translator.model})", file=sys.stderr)
     if translator is None:
         print("No local LLM or OpenAI provider available; using only titles already in the catalog", file=sys.stderr)
-    episode_cache, completed = {}, 0
+    episode_cache = {}
+    completed = sum(already_processed(item, args.min_score, args.min_title_score)
+                    for item in selected)
+    print(f"Resuming: {completed}/{len(selected)} rows already processed", file=sys.stderr)
     try:
         for item in selected:
+            if already_processed(item, args.min_score, args.min_title_score):
+                continue
             base_names = query_names(item)
             translations = []
+            llm_error = None
             names = base_names[:]
             found = {}
             def search_names(queries):
@@ -390,7 +428,14 @@ def main():
             search_names(names)
             best_base_title_score = max((c["evidence"]["fuzzyTitleScore"] for c in found.values()), default=0.0)
             if translator and best_base_title_score < 0.72:
-                translations = translator.variants(item)
+                try:
+                    translations = translator.variants(item)
+                except urllib.error.HTTPError:
+                    raise
+                except (TimeoutError, ConnectionError, urllib.error.URLError) as error:
+                    llm_error = f"{type(error).__name__}: {error}"
+                    print(f"AniTube #{item.get('newsId')}: LLM unavailable ({llm_error}); "
+                          "continuing with catalog titles", file=sys.stderr, flush=True)
                 translated_names = translation_queries(translations)
                 names = list(dict.fromkeys(names + translated_names))[:8]
                 if translated_names:
@@ -434,8 +479,12 @@ def main():
                     candidate.pop(private_key, None)
             item["candidates"] = [c for c in item.get("candidates", []) if not c.get("fuzzyMatch")] + additions
             item["fuzzySearch"] = {"candidateCount": len(additions), "minScore": args.min_score,
+                "minTitleScore": args.min_title_score,
                 "queries": names, "llmTitleVariants": translation_queries(translations),
-                "llmTranslation": translations, "llmUsed": bool(translation_queries(translations))}
+                "llmTranslation": translations, "llmUsed": bool(translation_queries(translations)),
+                "llmRetryPending": llm_error is not None}
+            if llm_error:
+                item["fuzzySearch"]["llmError"] = llm_error
             completed += 1
             print(f"[{completed}/{len(selected)}] AniTube #{item.get('newsId')} · {len(additions)} fuzzy candidates", file=sys.stderr, flush=True)
             # Persist completed rows and cache so an interrupted run can be resumed.
