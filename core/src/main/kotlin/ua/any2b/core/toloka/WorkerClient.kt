@@ -44,6 +44,11 @@ sealed class WorkerFailure(message: String) : IOException(message) {
     class LinkExpired : WorkerFailure("Посилання на torrent протухло. Повторіть пошук Toloka")
     class InvalidResponse : WorkerFailure("Worker повернув неочікувані дані")
     class Network : WorkerFailure("Не вдалося з’єднатися з Worker")
+    class TolokaUnauthorized : WorkerFailure("Toloka не підтвердила вхід. Перевірте логін і пароль у конфігу")
+    class TolokaInvalidResponse : WorkerFailure("Toloka повернула неочікувані дані")
+    class TolokaHttp(val status: Int) : WorkerFailure("Toloka відповіла HTTP $status")
+    class TolokaTimeout : WorkerFailure("Час очікування Toloka вичерпано")
+    class TolokaNetwork : WorkerFailure("Не вдалося з’єднатися з Toloka")
 }
 
 /** All requests use a user supplied HTTPS URL and bearer key; neither is logged. */

@@ -1,4 +1,5 @@
 import java.util.Properties
+import java.net.URI
 
 plugins {
     alias(libs.plugins.android.application)
@@ -6,20 +7,25 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+val localProperties = Properties().apply {
+    val config = rootProject.file("local.properties")
+    if (config.exists()) config.inputStream().use { load(it) }
+}
+val malClientId = (providers.environmentVariable("MAL_CLIENT_ID").orNull
+    ?: localProperties.getProperty("mal.clientid").orEmpty())
+    .takeIf { it.matches(Regex("[0-9a-fA-F]{32}")) }.orEmpty()
+val encryptedConfigUrl = (providers.environmentVariable("CURL_GIST_URL").orNull
+    ?: localProperties.getProperty("curl.gist").orEmpty())
+    .takeIf { value ->
+        runCatching { URI(value) }.getOrNull()?.let { uri ->
+            uri.scheme == "https" && uri.host == "gist.githubusercontent.com" &&
+                uri.userInfo == null && uri.fragment == null && uri.query == null
+        } == true
+    }.orEmpty()
+
 android {
     namespace = "ua.any2b.tvplayer"
     compileSdk = 35
-
-    // Local experiment: the token is packaged only in debug APKs.
-    val tmdbToken = Properties().apply {
-        val localProperties = rootProject.file("local.properties")
-        if (localProperties.isFile) localProperties.inputStream().use(::load)
-    }.getProperty("tmdb.token").orEmpty()
-    val tmdbTokenLiteral = "\"" + tmdbToken
-        .replace("\\", "\\\\")
-        .replace("\"", "\\\"")
-        .replace("\n", "\\n")
-        .replace("\r", "\\r") + "\""
 
     val githubTag = providers.environmentVariable("GITHUB_REF_TYPE").orNull
         .takeIf { it == "tag" }
@@ -35,6 +41,8 @@ android {
         versionName = providers.gradleProperty("appVersionName").orNull
             ?: githubTag?.removePrefix("v")
             ?: "0.1.0-alpha.1"
+        buildConfigField("String", "MAL_CLIENT_ID", "\"$malClientId\"")
+        buildConfigField("String", "ENCRYPTED_CONFIG_URL", "\"$encryptedConfigUrl\"")
     }
 
         val keystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
@@ -52,12 +60,8 @@ android {
     }
 
     buildTypes {
-        debug {
-            buildConfigField("String", "TMDB_TOKEN", tmdbTokenLiteral)
-        }
         release {
             isMinifyEnabled = false
-            buildConfigField("String", "TMDB_TOKEN", "\"\"")
             if (keystorePath != null) {
                 signingConfig = signingConfigs.getByName("release")
             }
@@ -65,6 +69,7 @@ android {
     }
 
     compileOptions {
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -86,6 +91,8 @@ android {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
     // Чистий Kotlin Core (AniList, AniTube, Fenix, Matcher)
     implementation(project(":core"))
 

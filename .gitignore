@@ -15,10 +15,15 @@ gen/
 out/
 build/
 **/build/
+/anilistTmbdbAnitube*.json
+/parseSearchResults.json
+/total-matcher/anilistTmbdbAnitube-reviewed.json
 tv-player/release/
 
 # Local configuration file (sdk path, etc.)
 local.properties
+/secrets.enc
+/config.json
 
 # Local requirements working document
 /req.md
@@ -42,7 +47,15 @@ key.properties
 *credentials*
 *password*
 *signing*
+!tv-player/src/main/java/ua/any2b/tvplayer/data/TolokaCredentialStore.kt
 
 # External native build folders
 .externalNativeBuild/
 .cxx/
+
+# Python runtime artifacts
+__pycache__/
+*.py[cod]
+
+# Accidental root-level filenames made of a control character
+/[[:cntrl:]]

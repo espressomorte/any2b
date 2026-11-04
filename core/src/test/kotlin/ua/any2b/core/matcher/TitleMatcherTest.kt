@@ -64,6 +64,15 @@ class TitleMatcherTest {
         assertEquals(release, TitleMatcher.confidentBest(TitleMatcher.match(details, listOf(release))))
     }
 
+    @Test
+    fun tmdbUkrainianNameCanMatchWithoutChangingAniListTitle() {
+        val details = details(year = 2024, episodes = null, duration = null)
+        val release = hit(1, "Українська назва", 2024, null, null, null)
+        val matches = TitleMatcher.match(details, listOf(release), listOf("Українська назва"))
+        assertEquals(release, TitleMatcher.confidentBest(matches))
+        assertEquals("Пригоди", details.title.romaji)
+    }
+
     private fun details(year: Int?, episodes: Int?, duration: Int?, nextEpisode: Int? = null) =
         AnimeDetails(
             id = 1,

@@ -13,24 +13,32 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.tv.material3.*
 import kotlinx.coroutines.flow.collect
-import ua.any2b.core.anilist.AnimeCard
+import ua.any2b.core.tmdb.TmdbTitle
+import ua.any2b.core.tmdb.TmdbListSort
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun CategoryScreen(
     title: String,
     state: CategoryState,
-    onOpen: (AnimeCard) -> Unit,
+    onOpen: (TmdbTitle) -> Unit,
     onLoadMore: () -> Unit,
+    onSort: (TmdbListSort) -> Unit,
+    onYearRange: (IntRange?) -> Unit,
     onBack: () -> Unit,
     showRelatedBadge: Boolean = false,
     onFavoriteChanged: () -> Unit = {},
 ) {
     val gridState = rememberLazyGridState()
+    LaunchedEffect(Unit) { gridState.scrollToItem(0) }
+    LaunchedEffect(state.sort, state.yearAscending, state.yearRange) {
+        gridState.scrollToItem(0)
+    }
     LaunchedEffect(gridState, state.items.size, state.hasMore, state.loadingMore, state.error) {
         if (state.hasMore && !state.loadingMore && state.error == null && state.items.isNotEmpty()) {
             snapshotFlow { gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1 }
@@ -42,7 +50,7 @@ fun CategoryScreen(
 
     Column(
         modifier = Modifier.fillMaxSize().background(AppColors.BackgroundDark).padding(32.dp),
-        verticalArrangement = Arrangement.spacedBy(24.dp)
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
             var isBackFocused by remember { mutableStateOf(false) }
@@ -63,6 +71,18 @@ fun CategoryScreen(
                     .neonGlow(focused = isBackFocused, borderRadius = 12.dp)
             ) { Text("← Назад") }
             Text(title, style = MaterialTheme.typography.headlineLarge)
+        }
+        if (state.sortable) {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                ListSortButton("Популярність", state.sort == TmdbListSort.POPULARITY,
+                    { onSort(TmdbListSort.POPULARITY) })
+                ListSortButton("Рейтинг", state.sort == TmdbListSort.RATING,
+                    { onSort(TmdbListSort.RATING) })
+                YearSortButton(ascending = state.yearAscending,
+                    selected = state.sort == TmdbListSort.YEAR,
+                    yearRange = state.yearRange,
+                    onSort = { onSort(TmdbListSort.YEAR) }, onYearRange = onYearRange)
+            }
         }
         if (state.error != null) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -94,19 +114,13 @@ fun CategoryScreen(
             LazyVerticalGrid(
                 columns = GridCells.Fixed(5),
                 state = gridState,
-                modifier = Modifier.weight(1f).graphicsLayer { clip = false },
-                contentPadding = PaddingValues(top = 12.dp, bottom = 32.dp),
+                modifier = Modifier.weight(1f).clipToBounds(),
+                contentPadding = PaddingValues(bottom = 32.dp),
                 horizontalArrangement = Arrangement.spacedBy(20.dp),
                 verticalArrangement = Arrangement.spacedBy(28.dp),
             ) {
-                items(state.items, key = { it.id }) { card ->
-                    PosterCard(
-                        card,
-                        modifier = Modifier.fillMaxWidth(),
-                        showRelatedBadge = showRelatedBadge,
-                        onClick = { onOpen(card) },
-                        onFavoriteChanged = onFavoriteChanged,
-                    )
+                items(state.items, key = { "${it.type}:${it.id}" }) { title ->
+                    TmdbPosterCard(title, onClick = { onOpen(title) })
                 }
                 if (state.loadingMore) {
                     item(key = "loading") { Text("Завантаження...", color = AppColors.TextSecondary) }

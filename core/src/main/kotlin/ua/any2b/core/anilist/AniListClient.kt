@@ -8,6 +8,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import ua.any2b.core.tmdb.TmdbListSort
 import java.util.concurrent.TimeUnit
 
 /**
@@ -44,7 +45,7 @@ class AniListClient(
         return listOf(
             row("popularSeason", "popular_season", "Популярне цього сезону"),
             row("trending", "trending", "У тренді"),
-            row("upcoming", "upcoming", "Скоро: наступний сезон"),
+            row("upcoming", "upcoming", "Скоро нові сезони"),
             row("popularAll", "popular_all", "Популярне за весь час"),
             row("topScore", "top_score", "Найвищі оцінки"),
         ).filter { it.items.isNotEmpty() }
@@ -68,8 +69,8 @@ class AniListClient(
             }
         }
 
-        val related = m.relationsCards()
-            .filterNot { it.id == id }
+        val relations = m.relationsCards().filterNot { it.card.id == id }
+        val related = relations.map { it.card }
         val recommendationsConnection = m.optJSONObject("recommendations")
         val recommendations = recommendationsConnection?.recommendedCards().orEmpty()
             .filterNot { it.id == id }
@@ -89,6 +90,7 @@ class AniListClient(
             genres = genres,
             studios = studios,
             related = related,
+            seasonRelations = relations.filter { it.type == "PREQUEL" || it.type == "SEQUEL" },
             recommendations = recommendations,
             recommendationsHasMore = recommendationsConnection?.optJSONObject("pageInfo")
                 ?.optBoolean("hasNextPage") == true,
@@ -105,6 +107,52 @@ class AniListClient(
             }.orEmpty(),
             nextEpisode = m.optJSONObject("nextAiringEpisode")?.int("episode"),
         )
+    }
+
+    /** Resolves several AniList IDs in a single GraphQL request with only search metadata. */
+    suspend fun animeLookups(ids: List<Int>): List<AniListAnimeLookup> {
+        val uniqueIds = ids.filter { it > 0 }.distinct()
+        if (uniqueIds.isEmpty()) return emptyList()
+        val data = execute(ANIME_LOOKUPS_QUERY,
+            JSONObject().put("ids", JSONArray(uniqueIds)))
+        val media = data.optJSONObject("Page")?.optJSONArray("media") ?: return emptyList()
+        fun parseLookup(item: JSONObject, relations: Boolean): AniListAnimeLookup? {
+            val titleJson = item.optJSONObject("title") ?: return null
+            val startDate = item.optJSONObject("startDate")?.let { date ->
+                listOfNotNull(date.int("year"), date.int("month")?.toString()?.padStart(2, '0'),
+                    date.int("day")?.toString()?.padStart(2, '0')).joinToString("-")
+                    .takeIf(String::isNotEmpty)
+            }
+            val parsedRelations = if (!relations) emptyList() else {
+                val edges = item.optJSONObject("relations")?.optJSONArray("edges")
+                (0 until (edges?.length() ?: 0)).mapNotNull { relationIndex ->
+                    val edge = edges?.optJSONObject(relationIndex) ?: return@mapNotNull null
+                    val node = edge.optJSONObject("node") ?: return@mapNotNull null
+                    if (node.optString("type") != "ANIME" || node.optBoolean("isAdult"))
+                        return@mapNotNull null
+                    parseLookup(node, relations = false)?.let {
+                        AniListLookupRelation(edge.optString("relationType"), it)
+                    }
+                }.distinctBy { it.anime.id }
+            }
+            return AniListAnimeLookup(
+                id = item.optInt("id"),
+                title = Title(titleJson.str("romaji"), titleJson.str("english"), titleJson.str("native")),
+                synonyms = item.optJSONArray("synonyms")?.let { synonyms ->
+                    (0 until synonyms.length()).mapNotNull { synonyms.optString(it).takeIf(String::isNotBlank) }
+                }.orEmpty(),
+                seasonYear = item.int("seasonYear"),
+                episodes = item.int("episodes"),
+                durationMinutes = item.int("duration"),
+                format = item.str("format"),
+                status = item.str("status"),
+                startDate = startDate,
+                relations = parsedRelations,
+            )
+        }
+        return (0 until media.length()).mapNotNull { index ->
+            media.optJSONObject(index)?.let { parseLookup(it, relations = true) }
+        }
     }
 
     /** A page of recommendations for the full list on a details screen. */
@@ -126,28 +174,90 @@ class AniListClient(
         return data.getJSONObject("Page").getJSONArray("media").toCards()
     }
 
+    /** Search candidates with the extra fields needed to resolve external IDs and seasons. */
+    suspend fun searchAnimeLookups(query: String, perPage: Int = 20): List<AniListAnimeLookup> {
+        require(perPage in 1..50)
+        if (query.isBlank()) return emptyList()
+        val data = execute(SEARCH_LOOKUPS_QUERY,
+            JSONObject().put("search", query.trim()).put("perPage", perPage))
+        val media = data.optJSONObject("Page")?.optJSONArray("media") ?: return emptyList()
+        return (0 until media.length()).mapNotNull { index ->
+            val item = media.optJSONObject(index) ?: return@mapNotNull null
+            val titleJson = item.optJSONObject("title") ?: return@mapNotNull null
+            val date = item.optJSONObject("startDate")
+            val startDate = listOfNotNull(date?.int("year"), date?.int("month")?.toString()?.padStart(2, '0'),
+                date?.int("day")?.toString()?.padStart(2, '0')).joinToString("-")
+                .takeIf(String::isNotEmpty)
+            val links = item.optJSONArray("externalLinks")?.let { array ->
+                (0 until array.length()).mapNotNull { linkIndex ->
+                    array.optJSONObject(linkIndex)?.let { link ->
+                        val site = link.str("site") ?: return@mapNotNull null
+                        val url = link.str("url") ?: return@mapNotNull null
+                        AniListExternalLink(site, url)
+                    }
+                }
+            }.orEmpty()
+            AniListAnimeLookup(
+                id = item.optInt("id"),
+                title = Title(titleJson.str("romaji"), titleJson.str("english"), titleJson.str("native")),
+                synonyms = item.optJSONArray("synonyms")?.let { array ->
+                    (0 until array.length()).mapNotNull { array.optString(it).takeIf(String::isNotBlank) }
+                }.orEmpty(),
+                seasonYear = item.int("seasonYear"),
+                episodes = item.int("episodes"),
+                durationMinutes = item.int("duration"),
+                format = item.str("format"),
+                status = item.str("status"),
+                startDate = startDate,
+                externalLinks = links,
+            )
+        }
+    }
+
     /** One page of a home category, used by the full category screen. */
-    suspend fun categoryPage(categoryId: String, page: Int, perPage: Int = 20): List<AnimeCard> {
+    suspend fun categoryPage(categoryId: String, page: Int, perPage: Int = 20,
+        sort: TmdbListSort = TmdbListSort.POPULARITY,
+        yearRange: IntRange? = null, yearAscending: Boolean = false): List<AnimeCard> {
         require(page > 0 && perPage > 0)
         val (season, year) = Season.current()
         val (nextSeason, nextYear) = season.next(year)
+        val currentDate = java.util.Calendar.getInstance()
+        val currentYear = currentDate.get(java.util.Calendar.YEAR)
+        require(yearRange == null || yearRange.first in 1920..currentYear &&
+            yearRange.last in yearRange.first..currentYear)
+        val years = yearRange ?: if (sort == TmdbListSort.YEAR)
+            1920..currentYear else null
+        val sortArg = when (sort) {
+            TmdbListSort.POPULARITY -> "POPULARITY_DESC"
+            TmdbListSort.RATING -> "SCORE_DESC"
+            TmdbListSort.YEAR ->
+                if (yearAscending) "START_DATE" else "START_DATE_DESC"
+        }
         val genre = categoryId.takeIf { it.startsWith("genre:") }
             ?.removePrefix("genre:")?.takeIf { it.isNotBlank() }
+        val yearArgs = if (years != null)
+            "startDate_greater: ${'$'}lowerDate, startDate_lesser: ${'$'}upperDate, " else ""
         val mediaArgs = when {
-            categoryId == "popular_season" -> "season: ${'$'}season, seasonYear: ${'$'}year, sort: POPULARITY_DESC"
-            categoryId == "trending" -> "sort: TRENDING_DESC"
+            categoryId == "popular_season" && years == null &&
+                sort == TmdbListSort.POPULARITY ->
+                "season: ${'$'}season, seasonYear: ${'$'}year, sort: POPULARITY_DESC"
+            categoryId == "popular_season" -> "${yearArgs}sort: $sortArg"
+            categoryId == "trending" && years == null &&
+                sort == TmdbListSort.POPULARITY -> "sort: TRENDING_DESC"
+            categoryId == "trending" -> "${yearArgs}sort: $sortArg"
             categoryId == "upcoming" -> "season: ${'$'}nextSeason, seasonYear: ${'$'}nextYear, sort: POPULARITY_DESC"
-            categoryId == "popular_all" -> "sort: POPULARITY_DESC"
-            categoryId == "top_score" -> "sort: SCORE_DESC"
-            genre != null -> "genre_in: ${'$'}genres, sort: POPULARITY_DESC"
+            categoryId == "popular_all" || categoryId == "top_score" -> "${yearArgs}sort: $sortArg"
+            genre != null -> "genre_in: ${'$'}genres, ${yearArgs}sort: $sortArg"
             else -> throw IllegalArgumentException("Невідома категорія: $categoryId")
         }
         val categoryVariables = when {
-            categoryId == "popular_season" -> ", ${'$'}season: MediaSeason, ${'$'}year: Int"
+            categoryId == "popular_season" && years == null &&
+                sort == TmdbListSort.POPULARITY ->
+                ", ${'$'}season: MediaSeason, ${'$'}year: Int"
             categoryId == "upcoming" -> ", ${'$'}nextSeason: MediaSeason, ${'$'}nextYear: Int"
             genre != null -> ", ${'$'}genres: [String]"
             else -> ""
-        }
+        } + if (years != null) ", ${'$'}lowerDate: FuzzyDateInt, ${'$'}upperDate: FuzzyDateInt" else ""
         val variables = JSONObject()
             .put("page", page)
             .put("perPage", perPage)
@@ -156,6 +266,16 @@ class AniListClient(
             .put("nextSeason", nextSeason.name)
             .put("nextYear", nextYear)
         if (genre != null) variables.put("genres", JSONArray().put(genre))
+        years?.let { range ->
+            variables.put("lowerDate", (range.first - 1) * 10000 + 1231)
+            val upper = if (range.last == currentYear) {
+                currentDate.add(java.util.Calendar.DAY_OF_MONTH, 1)
+                currentDate.get(java.util.Calendar.YEAR) * 10000 +
+                    (currentDate.get(java.util.Calendar.MONTH) + 1) * 100 +
+                    currentDate.get(java.util.Calendar.DAY_OF_MONTH)
+            } else (range.last + 1) * 10000 + 101
+            variables.put("upperDate", upper)
+        }
         val query = """
 query Category(${'$'}page: Int, ${'$'}perPage: Int$categoryVariables) {
   Page(page: ${'$'}page, perPage: ${'$'}perPage) {
@@ -232,13 +352,14 @@ query Category(${'$'}page: Int, ${'$'}perPage: Int$categoryVariables) {
         return media.toAnimeCards()
     }
 
-    private fun JSONObject.relationsCards(): List<AnimeCard> {
+    private fun JSONObject.relationsCards(): List<AnimeRelation> {
         val edges = optJSONObject("relations")?.optJSONArray("edges") ?: return emptyList()
-        val media = JSONArray()
-        for (i in 0 until edges.length()) {
-            edges.optJSONObject(i)?.optJSONObject("node")?.let { media.put(it) }
-        }
-        return media.toAnimeCards()
+        return (0 until edges.length()).mapNotNull { index ->
+            val edge = edges.optJSONObject(index) ?: return@mapNotNull null
+            val node = edge.optJSONObject("node") ?: return@mapNotNull null
+            if (node.optString("type") != "ANIME" || node.optBoolean("isAdult")) return@mapNotNull null
+            AnimeRelation(edge.optString("relationType"), node.toCard())
+        }.distinctBy { it.card.id }
     }
 
     private fun JSONObject.toCard(): AnimeCard {
@@ -318,6 +439,7 @@ query Details(${'$'}id: Int) {
     }
     relations {
       edges {
+        relationType
         node { ...relatedCard }
       }
     }
@@ -340,6 +462,42 @@ fragment relatedCard on Media {
   status
   seasonYear
   nextAiringEpisode { episode }
+}
+"""
+
+        const val ANIME_LOOKUPS_QUERY = """
+query AnimeLookups(${'$'}ids: [Int]) {
+  Page(page: 1, perPage: 50) {
+    media(id_in: ${'$'}ids, type: ANIME, isAdult: false) {
+      id
+      title { romaji english native }
+      synonyms
+      seasonYear
+      episodes
+      duration
+      format
+      status
+      startDate { year month day }
+      relations {
+        edges {
+          relationType
+          node {
+            id
+            type
+            isAdult
+            title { romaji english native }
+            synonyms
+            seasonYear
+            episodes
+            duration
+            format
+            status
+            startDate { year month day }
+          }
+        }
+      }
+    }
+  }
 }
 """
 
@@ -385,6 +543,25 @@ fragment card on Media {
   status
   seasonYear
   nextAiringEpisode { episode }
+}
+"""
+
+        const val SEARCH_LOOKUPS_QUERY = """
+query SearchAnimeLookups(${'$'}search: String, ${'$'}perPage: Int) {
+  Page(page: 1, perPage: ${'$'}perPage) {
+    media(type: ANIME, search: ${'$'}search, isAdult: false, sort: SEARCH_MATCH) {
+      id
+      title { romaji english native }
+      synonyms
+      seasonYear
+      episodes
+      duration
+      format
+      status
+      startDate { year month day }
+      externalLinks { site url }
+    }
+  }
 }
 """
     }

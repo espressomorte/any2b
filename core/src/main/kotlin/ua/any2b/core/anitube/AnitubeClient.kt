@@ -2,6 +2,7 @@ package ua.any2b.core.anitube
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.IOException
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
@@ -39,6 +40,23 @@ class AnitubeClient(
             resp.body?.string().orEmpty()
         }
 
+        parseSearchResults(html)
+    }
+
+    /** Loads one page from AniTube's full anime listing. Page numbering starts at one. */
+    suspend fun listingPage(page: Int): List<AnitubeSearchResult> = withContext(Dispatchers.IO) {
+        require(page > 0) { "Номер сторінки AniTube має бути додатним" }
+        val request = Request.Builder()
+            .url(if (page == 1) "$BASE_URL/anime/" else "$BASE_URL/anime/page/$page/")
+            .header("User-Agent", userAgent)
+            .header("Referer", "$BASE_URL/")
+            .build()
+        val html = http.newCall(request).execute().use { response ->
+            if (response.code == 404) return@withContext emptyList()
+            if (!response.isSuccessful)
+                throw IOException("AniTube listing page $page: HTTP ${response.code}")
+            response.body?.string() ?: throw IOException("AniTube listing page $page: empty response")
+        }
         parseSearchResults(html)
     }
 
@@ -89,6 +107,23 @@ class AnitubeClient(
         val htmlResponse = ajaxJson.optString("response", "")
         parsePlaylistHtml(htmlResponse)
     }
+
+    /** Fetches the release page fields needed to disambiguate a movie from a one season entry. */
+    suspend fun releaseMetadata(pageUrl: String): AnitubeReleaseMetadata =
+        withContext(Dispatchers.IO) {
+            val request = Request.Builder().url(pageUrl)
+                .header("User-Agent", userAgent).header("Referer", "$BASE_URL/").build()
+            val html = http.newCall(request).execute().use { response ->
+                if (!response.isSuccessful)
+                    throw IOException("Не вдалося прочитати реліз AniTube: HTTP ${response.code}")
+                response.body?.string().orEmpty()
+            }
+            val year = YEAR_RE.find(html)?.groupValues?.get(1)?.toIntOrNull()
+            val counts = EPS_RE.find(html)?.groupValues
+            val aired = counts?.getOrNull(1)?.toIntOrNull()
+            val total = counts?.getOrNull(2)?.toIntOrNull()
+            AnitubeReleaseMetadata(year, total ?: aired)
+        }
 
     private fun parseSearchResults(html: String): List<AnitubeSearchResult> {
         val results = mutableListOf<AnitubeSearchResult>()

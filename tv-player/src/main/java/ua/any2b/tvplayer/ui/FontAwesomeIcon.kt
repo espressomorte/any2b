@@ -22,10 +22,14 @@ object FaIcons {
     const val BOOKMARK = "\uf02e"
     const val FILM = "\uf008"
     const val EYE = "\uf06e"
+    const val MICROPHONE = "\uf130"
+    const val COMMENTING_O = "\uf4ad"
     const val ANGLE_DOWN = "\uf107"
     const val ARROW_UP = "\uf062"
     const val ARROW_DOWN = "\uf063"
     const val CHECK = "\uf00c"
+    const val ASTERISK = "\uf069"
+    const val TRASH_O = "\uf2ed"
 }
 
 @Composable

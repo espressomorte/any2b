@@ -12,11 +12,12 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -24,8 +25,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,6 +39,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -69,8 +72,23 @@ fun TmdbSearchScreen(
     onOpen: (TmdbTitle) -> Unit,
 ) {
     val inputFocus = remember { FocusRequester() }
+    val searchFocus = remember { FocusRequester() }
+    val firstResultFocus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    val finishInput = { keyboard?.hide(); focusManager.clearFocus(force = true) }
     LaunchedEffect(Unit) { inputFocus.requestFocus() }
+    LaunchedEffect(state.showRecentTitles, state.loading, state.searched, state.results) {
+        if (!state.showRecentTitles && (state.loading || state.searched)) {
+            finishInput()
+            if (state.searched) {
+                withFrameNanos { }
+                if (state.results.isNotEmpty()) firstResultFocus.requestFocus()
+                else searchFocus.requestFocus()
+                keyboard?.hide()
+            }
+        }
+    }
 
     Column(
         modifier = Modifier.fillMaxSize().background(AppColors.BackgroundDark).padding(32.dp),
@@ -95,16 +113,17 @@ fun TmdbSearchScreen(
                     singleLine = true,
                     textStyle = TextStyle(color = Color.White, fontSize = 16.sp),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(onSearch = { keyboard?.hide(); onSearch() }),
+                    keyboardActions = KeyboardActions(onSearch = { finishInput(); onSearch() }),
                     modifier = Modifier.fillMaxWidth().focusRequester(inputFocus),
                 )
             }
             TmdbSearchActionIcon(FaIcons.SEARCH, "Шукати у TMDB",
-                enabled = state.query.isNotBlank()) { keyboard?.hide(); onSearch() }
+                enabled = state.query.isNotBlank(),
+                modifier = Modifier.focusRequester(searchFocus)) { finishInput(); onSearch() }
             TmdbSearchActionIcon(FaIcons.RECYCLE, "Очистити історію пошуку",
                 enabled = state.recentTitles.isNotEmpty() || state.query.isNotEmpty() ||
                     state.results.isNotEmpty() || state.error != null,
-                onClick = onClearHistory)
+                onClick = { finishInput(); onClearHistory() })
         }
 
         if (state.showRecentTitles && state.recentTitles.isNotEmpty()) {
@@ -120,7 +139,10 @@ fun TmdbSearchScreen(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.fillMaxWidth()
                             .onFocusChanged { focused = it.isFocused }
-                            .clickable { onSelectRecentTitle(title) },
+                            .clickable {
+                                finishInput()
+                                onSelectRecentTitle(title)
+                            },
                     )
                 }
             }
@@ -143,8 +165,9 @@ fun TmdbSearchScreen(
                         horizontalArrangement = Arrangement.spacedBy(20.dp),
                         modifier = Modifier.fillMaxWidth().graphicsLayer { clip = false },
                     ) {
-                        items(state.results, key = { "${it.type}:${it.id}" }) { title ->
-                            TmdbPosterCard(title, state.query, onClick = { onOpen(title) })
+                        itemsIndexed(state.results, key = { _, title -> "${title.type}:${title.id}" }) { index, title ->
+                            TmdbPosterCard(title, state.query, onClick = { onOpen(title) },
+                                focusRequester = if (index == 0) firstResultFocus else null)
                         }
                     }
                 }
@@ -155,7 +178,8 @@ fun TmdbSearchScreen(
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun TmdbSearchActionIcon(icon: String, label: String, enabled: Boolean, onClick: () -> Unit) {
+private fun TmdbSearchActionIcon(icon: String, label: String, enabled: Boolean,
+    modifier: Modifier = Modifier, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     Surface(
         onClick = onClick,
@@ -167,7 +191,7 @@ private fun TmdbSearchActionIcon(icon: String, label: String, enabled: Boolean, 
             containerColor = AppColors.SurfaceCard,
             focusedContainerColor = AppColors.NeonCyanLight,
         ),
-        modifier = Modifier.size(48.dp)
+        modifier = modifier.size(48.dp)
             .semantics { contentDescription = label }
             .onFocusChanged { focused = it.isFocused },
     ) {
@@ -179,37 +203,54 @@ private fun TmdbSearchActionIcon(icon: String, label: String, enabled: Boolean, 
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun TmdbPosterCard(title: TmdbTitle, query: String, onClick: () -> Unit) {
+internal fun TmdbPosterCard(title: TmdbTitle, query: String = "",
+    onClick: () -> Unit, onFocused: (() -> Unit)? = null,
+    focusRequester: FocusRequester? = null) {
     var focused by remember { mutableStateOf(false) }
-    Column(Modifier.width(160.dp).padding(4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(Modifier.width(160.dp).padding(4.dp)) {
         Card(
             onClick = onClick,
-            scale = CardDefaults.scale(scale = 1f, focusedScale = 1.05f),
+            scale = CardDefaults.scale(scale = 1f, focusedScale = 1f),
             shape = CardDefaults.shape(RoundedCornerShape(12.dp)),
             modifier = Modifier.fillMaxWidth().aspectRatio(2f / 3f)
-                .onFocusChanged { focused = it.isFocused },
-        ) {
-            Box(Modifier.fillMaxSize().background(AppColors.SurfaceCard)) {
-                AsyncImage(model = title.posterUrl, contentDescription = title.title,
-                    contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-                title.rating?.let { score ->
-                    ReleaseBadge((score * 10).toInt(), Modifier.align(Alignment.TopEnd).padding(8.dp))
-                }
-                if (title.type == TmdbMediaType.TV) {
-                    Box(Modifier.align(Alignment.TopStart).padding(8.dp)
-                        .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(6.dp))
-                        .padding(horizontal = 8.dp, vertical = 4.dp)) {
-                        Text("TV", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+                .onFocusChanged {
+                    focused = it.isFocused
+                    if (it.isFocused) {
+                        onFocused?.invoke()
                     }
-                }
+                },
+        ) { TmdbPosterArt(title, Modifier.fillMaxSize()) }
+        Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 5.dp)) {
+            Text((if (query.isBlank()) listOf(title.title) else title.searchNames(query)).joinToString(" · "),
+                color = if (focused) AppColors.NeonCyan else AppColors.TextLight,
+                maxLines = 2, minLines = 2, overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.labelMedium, modifier = Modifier.heightIn(min = 36.dp))
+            title.year?.let { year ->
+                Spacer(Modifier.height(2.dp))
+                Text(year.toString(), style = MaterialTheme.typography.labelMedium,
+                    color = if (focused) AppColors.NeonCyan else AppColors.TextLight,
+                    fontSize = 10.sp,
+                    fontWeight = if (focused) FontWeight.Bold else FontWeight.Normal)
             }
         }
-        Text(title.searchNames(query).joinToString(" · "),
-            color = if (focused) AppColors.NeonCyan else AppColors.TextLight,
-            maxLines = 3, overflow = TextOverflow.Ellipsis,
-            style = MaterialTheme.typography.labelMedium)
-        title.year?.let { year ->
-            Text("$year", color = AppColors.TextSecondary, fontSize = 11.sp)
+    }
+}
+
+@Composable
+private fun TmdbPosterArt(title: TmdbTitle, modifier: Modifier = Modifier) {
+    Box(modifier.background(AppColors.SurfaceCard)) {
+        AsyncImage(model = title.posterUrl, contentDescription = title.title,
+            contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+        title.rating?.let { score ->
+            ReleaseBadge((score * 10).toInt(), Modifier.align(Alignment.TopEnd).padding(8.dp))
+        }
+        if (title.type == TmdbMediaType.TV) {
+            Box(Modifier.align(Alignment.TopStart).padding(8.dp)
+                .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(6.dp))
+                .padding(horizontal = 8.dp, vertical = 4.dp)) {
+                Text("TV", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
         }
     }
 }

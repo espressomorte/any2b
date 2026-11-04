@@ -41,12 +41,16 @@ data class AnimeDetails(
     val genres: List<String>,
     val studios: List<String>,
     val related: List<AnimeCard> = emptyList(),
+    val seasonRelations: List<AnimeRelation> = emptyList(),
     val recommendations: List<AnimeCard> = emptyList(),
     val recommendationsHasMore: Boolean = false,
     val trailer: MediaTrailer? = null,
     val synonyms: List<String> = emptyList(),
     val nextEpisode: Int? = null,
 )
+
+/** Explicit AniList sequel/prequel edge. Other relations stay in Related. */
+data class AnimeRelation(val type: String, val card: AnimeCard)
 
 /** AniList currently provides YouTube and Dailymotion trailer IDs. */
 data class MediaTrailer(val id: String, val site: String) {
@@ -67,6 +71,24 @@ fun AnimeDetails.trailerSearchUrl(): String {
 }
 
 data class AnimeCardPage(val items: List<AnimeCard>, val hasNextPage: Boolean)
+
+/** Lightweight title metadata used when resolving TMDB-only titles back to AniList. */
+data class AniListAnimeLookup(
+    val id: Int,
+    val title: Title,
+    val synonyms: List<String>,
+    val seasonYear: Int?,
+    val episodes: Int?,
+    val durationMinutes: Int?,
+    val format: String?,
+    val status: String? = null,
+    val startDate: String? = null,
+    val relations: List<AniListLookupRelation> = emptyList(),
+    val externalLinks: List<AniListExternalLink> = emptyList(),
+)
+
+data class AniListExternalLink(val site: String, val url: String)
+data class AniListLookupRelation(val type: String, val anime: AniListAnimeLookup)
 
 /** Один горизонтальний ряд на головній. */
 data class HomeRow(

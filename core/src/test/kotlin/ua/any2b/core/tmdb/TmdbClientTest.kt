@@ -7,6 +7,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -16,7 +17,7 @@ class TmdbClientTest {
     @Test
     fun multiSearchEncodesQueryAndKeepsMoviesAndTvInServerOrder() = runBlocking {
         var request: Request? = null
-        val languages = mutableListOf<String>()
+        val languages = CopyOnWriteArrayList<String>()
         val client = client { incoming ->
             request = incoming
             languages += incoming.url.queryParameter("language").orEmpty()
@@ -24,20 +25,182 @@ class TmdbClientTest {
                 {"id":1,"media_type":"tv","name":"Атака титанів: Школа","first_air_date":"2015-10-04"},
                 {"id":2,"media_type":"person","name":"Актор"},
                 {"id":1429,"media_type":"tv","name":"Атака титанів","original_name":"進撃の巨人",
-                 "first_air_date":"2013-04-07","poster_path":"/poster.jpg","vote_average":8.69},
+                 "first_air_date":"2013-04-07","poster_path":"/poster.jpg","vote_average":8.69,
+                 "genre_ids":[16,10759],"origin_country":["JP"],"original_language":"ja"},
                 {"id":11,"media_type":"movie","title":"Фільм","release_date":"2020-01-01"}
             ],"extra":true}""")
         }
         val results = client.search("Attack on Titan & year", "sample-token")
         assertEquals("Attack on Titan & year", request?.url?.queryParameter("query"))
-        assertEquals("uk-UA", request?.url?.queryParameter("language"))
-        assertEquals(listOf("en-US", "uk-UA"), languages)
+        assertEquals(setOf("en-US", "uk-UA"), languages.toSet())
         assertEquals("Bearer sample-token", request?.header("Authorization"))
         assertEquals(listOf(1, 1429, 11), results.map { it.id })
         assertEquals("Атака титанів", results[1].title)
         assertEquals(2013, results[1].year)
+        assertEquals(setOf(16, 10759), results[1].genreIds)
+        assertEquals(setOf("JP"), results[1].originCountries)
         assertEquals("https://image.tmdb.org/t/p/w500/poster.jpg", results[1].posterUrl)
         assertEquals(TmdbMediaType.MOVIE, results[2].type)
+    }
+
+    @Test
+    fun workerProxyUsesWorkerBearerKeyAndRestrictedPath() = runBlocking {
+        var path: String? = null
+        var bearer: String? = null
+        val worker = TmdbClient(
+            OkHttpClient.Builder().addInterceptor { chain ->
+                path = chain.request().url.encodedPath
+                bearer = chain.request().header("Authorization")
+                fixture(chain.request(), 200, """{"results":[]}""")
+            }.build(),
+            "https://worker.test/tmdb/3/".toHttpUrl(),
+        )
+        worker.search("Anime", "worker-key")
+        assertEquals("/tmdb/3/search/multi", path)
+        assertEquals("Bearer worker-key", bearer)
+    }
+
+    @Test
+    fun popularAndRelatedListsUseTypedEndpointsAndIgnoreAdultItems() = runBlocking {
+        val paths = CopyOnWriteArrayList<String>()
+        val client = TmdbClient(
+            OkHttpClient.Builder().addInterceptor { chain ->
+                val request = chain.request()
+                paths += request.url.encodedPath
+                fixture(request, 200, if (request.url.encodedPath.contains("/tv/")) {
+                    """{"results":[
+                      {"id":10,"name":"Серіал","first_air_date":"2026-01-01"},
+                      {"id":11,"name":"18+","adult":true}]}"""
+                } else {
+                    """{"results":[
+                      {"id":20,"title":"Фільм","release_date":"2025-02-01"},
+                      {"id":21,"title":"18+","adult":true}]}"""
+                })
+            }.build(),
+            "https://worker.test/tmdb/3/".toHttpUrl(),
+        )
+        assertEquals(listOf(10), client.popular(TmdbMediaType.TV, "key").map { it.id })
+        assertEquals(listOf(20), client.popular(TmdbMediaType.MOVIE, "key").map { it.id })
+        assertEquals(listOf(10), client.related(TmdbMediaType.TV, 42, "key").map { it.id })
+        assertEquals(listOf("/tmdb/3/tv/popular", "/tmdb/3/movie/popular",
+            "/tmdb/3/tv/42/recommendations"), paths)
+    }
+
+    @Test
+    fun movieCollectionContainsOnlyItsPartsAndExcludesAdultTitles() = runBlocking {
+        val paths = mutableListOf<String>()
+        val client = client { request ->
+            paths += request.url.encodedPath
+            fixture(request, 200, when (request.url.encodedPath) {
+                "/3/movie/10" -> """{"id":10,"title":"Частина 1",
+                    "belongs_to_collection":{"id":77,"name":"Сага"}}"""
+                "/3/collection/77" -> """{"id":77,"parts":[
+                    {"id":10,"title":"Частина 1"},
+                    {"id":11,"title":"Частина 2","release_date":"2025-01-01"},
+                    {"id":12,"title":"18+","adult":true}]}"""
+                else -> """{"posters":[],"logos":[]}"""
+            })
+        }
+        val details = client.details(TmdbMediaType.MOVIE, 10, "key")
+        assertEquals(77, details.collectionId)
+        assertEquals(listOf(10, 11), client.collectionParts(77, "key").map { it.id })
+        assertTrue("/3/collection/77" in paths)
+        assertTrue(paths.none { it.contains("recommendations") })
+    }
+
+    @Test
+    fun generalCatalogExcludesGenresInDiscoverAndResults() = runBlocking {
+        val requests = mutableListOf<Request>()
+        val client = client { request ->
+            requests += request
+            fixture(request, 200, """{"page":1,"total_pages":2,"results":[
+                {"id":1,"name":"Драма","genre_ids":[18]},
+                {"id":2,"name":"Анімація","genre_ids":[16]},
+                {"id":3,"name":"Документальний","genre_ids":[99]},
+                {"id":4,"name":"Ток шоу","genre_ids":[10767]}]}""")
+        }
+        val page = client.listPage(TmdbMediaType.TV, "key", TmdbListSort.POPULARITY, 1,
+            excludedGenreIds = TmdbGeneralCatalog.excludedGenreIds)
+        assertEquals("/3/discover/tv", requests.single().url.encodedPath)
+        assertEquals("16|99|10767", requests.single().url.queryParameter("without_genres"))
+        assertEquals(listOf(1), page.titles.map { it.id })
+        assertTrue(page.hasMore)
+    }
+
+    @Test
+    fun listPagesUseServerSideSortAndPreservePagination() = runBlocking {
+        val requests = mutableListOf<Request>()
+        val client = client { request ->
+            requests += request
+            fixture(request, 200, """{"page":2,"total_pages":5,"results":[
+                {"id":25,"title":"Фільм","release_date":"2024-01-01"}]}""")
+        }
+        val rated = client.listPage(TmdbMediaType.MOVIE, "key", TmdbListSort.RATING, 2)
+        val yearly = client.listPage(TmdbMediaType.TV, "key", TmdbListSort.YEAR, 2)
+        assertEquals(listOf(25), rated.titles.map { it.id })
+        assertTrue(rated.hasMore)
+        assertEquals(2, rated.page)
+        assertEquals("/3/discover/movie", requests[0].url.encodedPath)
+        assertEquals("vote_average.desc", requests[0].url.queryParameter("sort_by"))
+        assertEquals("100", requests[0].url.queryParameter("vote_count.gte"))
+        assertEquals("2", requests[0].url.queryParameter("page"))
+        assertEquals("/3/discover/tv", requests[1].url.encodedPath)
+        assertEquals("first_air_date.desc", requests[1].url.queryParameter("sort_by"))
+        assertTrue(yearly.hasMore)
+    }
+
+    @Test
+    fun yearSortingUsesRequestedDirectionAndNeverIncludesFutureReleases() = runBlocking {
+        val requests = mutableListOf<Request>()
+        val client = client { request ->
+            requests += request
+            fixture(request, 200, """{"page":1,"total_pages":1,"results":[]}""")
+        }
+        val today = java.util.Calendar.getInstance()
+        val currentYear = today.get(java.util.Calendar.YEAR)
+        client.listPage(TmdbMediaType.TV, "key", TmdbListSort.YEAR, 1,
+            yearAscending = true)
+        client.listPage(TmdbMediaType.MOVIE, "key", TmdbListSort.YEAR, 1,
+            yearRange = 2010..2019)
+        assertEquals("first_air_date.asc", requests[0].url.queryParameter("sort_by"))
+        assertEquals("1920-01-01", requests[0].url.queryParameter("first_air_date.gte"))
+        assertEquals("%04d-%02d-%02d".format(java.util.Locale.ROOT, currentYear,
+            today.get(java.util.Calendar.MONTH) + 1,
+            today.get(java.util.Calendar.DAY_OF_MONTH)),
+            requests[0].url.queryParameter("first_air_date.lte"))
+        assertEquals("primary_release_date.desc", requests[1].url.queryParameter("sort_by"))
+        assertEquals("2010-01-01", requests[1].url.queryParameter("primary_release_date.gte"))
+        assertEquals("2019-12-31", requests[1].url.queryParameter("primary_release_date.lte"))
+    }
+
+    @Test
+    fun animationListsUseDiscoverWithGenre16ForBothMediaTypes() = runBlocking {
+        val requests = mutableListOf<Request>()
+        val client = client { request ->
+            requests += request
+            fixture(request, 200, if (request.url.encodedPath.endsWith("/tv"))
+                """{"page":1,"total_pages":2,"results":[
+                    {"id":10,"name":"Анімація","genre_ids":[16],"first_air_date":"2025-01-01"},
+                    {"id":11,"name":"Ігровий серіал","genre_ids":[18],"first_air_date":"2025-01-01"}]}"""
+                else """{"page":1,"total_pages":2,"results":[
+                    {"id":20,"title":"Анімація","genre_ids":[16],"release_date":"2025-01-01"},
+                    {"id":21,"title":"Ігровий фільм","genre_ids":[18],"release_date":"2025-01-01"}]}""")
+        }
+        assertEquals(listOf(10), client.popular(TmdbMediaType.TV, "key", genreId = 16).map { it.id })
+        assertEquals(listOf(20), client.popular(TmdbMediaType.MOVIE, "key", genreId = 16).map { it.id })
+        assertEquals(listOf("/3/discover/tv", "/3/discover/movie"),
+            requests.map { it.url.encodedPath })
+        assertTrue(requests.all { it.url.queryParameter("with_genres") == "16" &&
+            it.url.queryParameter("sort_by") == "popularity.desc" })
+        assertEquals("60", requests[1].url.queryParameter("with_runtime.gte"))
+    }
+
+    @Test
+    fun trailerSearchUsesOriginalTitleAndYear() {
+        val title = TmdbTitle(1, TmdbMediaType.MOVIE, "Українська назва",
+            "English Name", 2025, null, null, null)
+        val details = TmdbDetails(title, emptyList(), null, null, null, null, null)
+        assertTrue(details.trailerSearchUrl().contains("English+Name+2025+trailer"))
     }
 
     @Test
@@ -63,26 +226,65 @@ class TmdbClientTest {
         val paths = mutableListOf<String>()
         val client = client { request ->
             paths += request.url.encodedPath
-            fixture(request, 200, if (request.url.encodedPath.endsWith("/tv/1429")) {
+            fixture(request, 200, if (request.url.encodedPath.endsWith("/tv/1429/images")) {
+                """{"posters":[
+                    {"file_path":"/uk-poster.jpg","iso_639_1":"uk","vote_average":10},
+                    {"file_path":"/textless-poster.jpg","iso_639_1":null,"vote_average":1}],
+                    "logos":[
+                    {"file_path":"/en-logo.png","iso_639_1":"en","vote_average":10},
+                    {"file_path":"/ja-logo.png","iso_639_1":"ja","vote_average":1}]}"""
+            } else if (request.url.encodedPath.endsWith("/movie/157336/images")) {
+                """{"posters":[{"file_path":"/en-movie.jpg","iso_639_1":"en"}],
+                    "logos":[]}"""
+            } else if (request.url.encodedPath.endsWith("/tv/1429")) {
                 """{"id":1429,"name":"Атака титанів","original_name":"進撃の巨人",
                     "first_air_date":"2013-04-07","overview":"Український опис",
-                    "genres":[{"name":"Драма"}],"number_of_seasons":4,"number_of_episodes":87,
-                    "episode_run_time":[24]}"""
+                    "origin_country":["JP","US","JP"],
+                    "alternative_titles":{"results":[{"title":"Синонім серіалу"}]},
+                    "genres":[{"id":18,"name":"Драма"}],"number_of_seasons":4,"number_of_episodes":87,
+                    "episode_run_time":[24],"seasons":[
+                      {"season_number":1,"name":"Сезон 1","air_date":"2013-04-07"},
+                      {"season_number":2,"name":"Сезон 2","air_date":"2017-04-01"}]}"""
             } else {
                 """{"id":157336,"title":"Інтерстеллар","release_date":"2014-11-04",
-                    "runtime":169,"genres":[{"name":"Пригоди"}],
-                    "belongs_to_collection":{"id":123,"name":"Інтерстеллар | Колекція"}}"""
+                    "runtime":169,"genres":[{"id":12,"name":"Пригоди"}],
+                    "production_countries":[{"iso_3166_1":"US"},{"iso_3166_1":"GB"},
+                        {"iso_3166_1":"US"}],
+                    "alternative_titles":{"titles":[{"title":"Інша назва"},
+                        {"title":"Інша назва"},{"title":"Друга назва"}]},
+                    "belongs_to_collection":{"id":123,"name":"Інтерстеллар | Колекція"},
+                    "credits":{"crew":[{"job":"Producer","name":"Продюсер"},
+                        {"job":"Director","name":"Крістофер Нолан"},
+                        {"job":"Director","name":"Крістофер Нолан"}],
+                        "cast":[{"name":"Меттью Макконегі"},{"name":"Енн Гетевей"},
+                            {"name":"Меттью Макконегі"},{"name":null}]}}"""
             })
         }
         val series = client.details(TmdbMediaType.TV, 1429, "token")
         val movie = client.details(TmdbMediaType.MOVIE, 157336, "token")
-        assertEquals(listOf("/3/tv/1429", "/3/movie/157336"), paths)
+        assertEquals(listOf("/3/tv/1429", "/3/tv/1429/images",
+            "/3/movie/157336", "/3/movie/157336/images"), paths)
+        assertEquals("https://image.tmdb.org/t/p/w780/textless-poster.jpg", series.title.posterUrl)
+        assertEquals("https://image.tmdb.org/t/p/w500/ja-logo.png", series.logoUrl)
+        assertEquals("https://image.tmdb.org/t/p/w780/en-movie.jpg", movie.title.posterUrl)
         assertEquals("Український опис", series.title.overview)
+        assertEquals(setOf(18), series.title.genreIds)
+        assertEquals(setOf(12), movie.title.genreIds)
         assertEquals(4, series.seasons)
         assertEquals(87, series.episodes)
         assertEquals(24, series.runtimeMinutes)
+        assertEquals(listOf(TmdbSeason(1, "Сезон 1", 2013),
+            TmdbSeason(2, "Сезон 2", 2017)), series.seasonEntries)
         assertEquals(169, movie.runtimeMinutes)
         assertEquals("Інтерстеллар | Колекція", movie.collectionName)
+        assertEquals(listOf("Крістофер Нолан"), movie.directors)
+        assertEquals(listOf("Меттью Макконегі", "Енн Гетевей"), movie.cast)
+        assertEquals(listOf("US", "GB"), movie.countryCodes)
+        assertEquals(listOf("JP", "US"), series.countryCodes)
+        assertEquals(listOf("Синонім серіалу"), series.alternativeTitles)
+        assertEquals(listOf("Інша назва", "Друга назва"), movie.alternativeTitles)
+        assertTrue(series.directors.isEmpty())
+        assertTrue(series.cast.isEmpty())
         assertEquals(null, series.collectionName)
         assertTrue(movie.seasons == null)
     }
@@ -93,6 +295,44 @@ class TmdbClientTest {
         assertFailsWith<TmdbFailure.MissingToken> { client.search("Anime", "") }
         assertFailsWith<TmdbFailure.Unauthorized> { client.search("Anime", "bad") }
         Unit
+    }
+
+    @Test
+    fun trailerSelectionRejectsMislabeledEventAndKeepsOfficialAlternative() = runBlocking {
+        val requested = mutableListOf<String>()
+        val client = client { request ->
+            requested += request.url.encodedPath
+            assertEquals("uk,en,null", request.url.queryParameter("include_video_language"))
+            fixture(request, 200, """{"results":[
+              {"site":"YouTube","type":"Trailer","official":false,
+               "name":"Fan meeting","key":"aaaaaaaaaaa"},
+              {"site":"YouTube","type":"Trailer","official":true,
+               "name":"Official Trailer","key":"bbbbbbbbbbb","iso_639_1":"en"},
+              {"site":"YouTube","type":"Trailer","official":true,
+               "name":"Official Trailer #2","key":"ccccccccccc","iso_639_1":"en"},
+              {"site":"YouTube","type":"Teaser","official":true,
+               "name":"Official Trailer","key":"ddddddddddd"}
+            ]}""")
+        }
+        val videos = client.trailers(TmdbMediaType.MOVIE, 42, "token")
+        assertEquals(listOf("bbbbbbbbbbb", "ccccccccccc"), videos.map { it.videoId })
+        assertEquals("https://www.youtube.com/watch?v=bbbbbbbbbbb", videos.first().youtubeUrl)
+        assertEquals(listOf("/3/movie/42/videos"), requested)
+    }
+
+    @Test
+    fun seasonTrailerFallsBackToSeriesWhenSeasonHasNone() = runBlocking {
+        val requested = mutableListOf<String>()
+        val client = client { request ->
+            requested += request.url.encodedPath
+            fixture(request, 200, if (request.url.encodedPath.contains("/season/"))
+                """{"results":[]}""" else """{"results":[
+                  {"site":"YouTube","type":"Trailer","official":true,
+                   "name":"Series Trailer","key":"eeeeeeeeeee"}]}""")
+        }
+        assertEquals("eeeeeeeeeee", client.trailers(TmdbMediaType.TV, 42, "token", 2)
+            .single().videoId)
+        assertEquals(listOf("/3/tv/42/season/2/videos", "/3/tv/42/videos"), requested)
     }
 
     private fun client(reply: (Request) -> Response): TmdbClient = TmdbClient(

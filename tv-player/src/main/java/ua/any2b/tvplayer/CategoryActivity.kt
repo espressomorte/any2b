@@ -1,6 +1,5 @@
 package ua.any2b.tvplayer
 
-import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -37,10 +36,12 @@ class CategoryActivity : ComponentActivity() {
                 CategoryScreen(
                     title = categoryTitle,
                     state = state,
-                    onOpen = { card ->
-                        startActivity(Intent(this, DetailsActivity::class.java).apply { putExtra("ANIME_ID", card.id) })
+                    onOpen = { title ->
+                        startActivity(TvNavigation.details(this, title))
                     },
                     onLoadMore = viewModel::loadMore,
+                    onSort = viewModel::changeSort,
+                    onYearRange = viewModel::changeYearRange,
                     onBack = { finish() },
                     showRelatedBadge = categoryId.startsWith("related:"),
                     onFavoriteChanged = viewModel::refreshLocal,

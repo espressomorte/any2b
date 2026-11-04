@@ -47,31 +47,13 @@
             </intent-filter>
         </activity>
 
-        <!-- Деталі тайтла -->
-        <activity
-            android:name=".DetailsActivity"
-            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
-            android:exported="false" />
-
         <activity
             android:name=".CategoryActivity"
-            android:exported="false" />
-
-        <!-- Історія переглядів -->
-        <activity
-            android:name=".HistoryActivity"
-            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
             android:exported="false" />
 
         <!-- Налаштування -->
         <activity
             android:name=".SettingsActivity"
-            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
-            android:exported="false" />
-
-        <!-- Пошук -->
-        <activity
-            android:name=".SearchActivity"
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
             android:exported="false" />
 
@@ -82,6 +64,20 @@
 
         <activity
             android:name=".TmdbDetailsActivity"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
+            android:exported="false" />
+
+        <activity
+            android:name=".TrailerActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".TmdbLibraryActivity"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
+            android:exported="false" />
+
+        <activity
+            android:name=".TmdbListActivity"
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
             android:exported="false" />
 

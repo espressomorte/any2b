@@ -49,13 +49,14 @@ class GitHubReleaseClient(
     }
 }
 
-/** SemVer comparison including prerelease identifiers such as alpha.1. */
+/** Compare release tags with up to four numeric components and prerelease identifiers. */
 fun compareVersions(first: String, second: String): Int {
     fun parse(value: String): Pair<List<Int>, List<String>?>? {
-        val match = Regex("^v?(\\d+)(?:\\.(\\d+))?(?:\\.(\\d+))?(?:-([0-9A-Za-z.-]+))?(?:\\+[0-9A-Za-z.-]+)?$")
+        val match = Regex("^v?(\\d+(?:\\.\\d+){0,3})(?:-([0-9A-Za-z.-]+))?(?:\\+[0-9A-Za-z.-]+)?$")
             .matchEntire(value) ?: return null
-        val numbers = (1..3).map { match.groupValues[it].ifBlank { "0" }.toIntOrNull() ?: return null }
-        val prerelease = match.groupValues[4].takeIf(String::isNotBlank)?.split('.')
+        val parts = match.groupValues[1].split('.').map { it.toIntOrNull() ?: return null }
+        val numbers = parts + List(4 - parts.size) { 0 }
+        val prerelease = match.groupValues[2].takeIf(String::isNotBlank)?.split('.')
         return numbers to prerelease
     }
 
@@ -66,7 +67,7 @@ fun compareVersions(first: String, second: String): Int {
         a == null -> -1
         else -> 1
     }
-    for (index in 0..2) {
+    for (index in 0..3) {
         val difference = a.first[index].compareTo(b.first[index])
         if (difference != 0) return difference
     }

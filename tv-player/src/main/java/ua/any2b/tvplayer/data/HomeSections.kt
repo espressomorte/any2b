@@ -6,14 +6,15 @@ data class HomeSectionSetting(
     val enabled: Boolean = true,
 )
 
-object HomeSections {
+object MainHomeSections {
     val defaults = listOf(
         HomeSectionSetting("history", "Історія переглядів"),
-        HomeSectionSetting("popular_season", "Популярне цього сезону"),
-        HomeSectionSetting("trending", "У тренді"),
-        HomeSectionSetting("upcoming", "Скоро: наступний сезон"),
-        HomeSectionSetting("popular_all", "Популярне за весь час"),
-        HomeSectionSetting("top_score", "Найвищі оцінки"),
         HomeSectionSetting("favorites", "Обране"),
+        HomeSectionSetting("recommendations", "Варто переглянути"),
+        HomeSectionSetting("trending", "Аніме у тренді"),
+        HomeSectionSetting("popular_season", "Аніме популярне цього сезону"),
+        HomeSectionSetting("animation_tv", "Популярні анімаційні серіали"),
+        HomeSectionSetting("animation_movie", "Популярні повнометражні анімаційні фільми"),
+        HomeSectionSetting("mal_top", "Аніме з найвищими оцінками"),
     )
 }

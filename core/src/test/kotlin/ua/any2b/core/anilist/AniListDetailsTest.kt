@@ -21,7 +21,7 @@ class AniListDetailsTest {
             "coverImage": { "large": "https://example.com/main.jpg" },
             "studios": { "nodes": [] },
             "relations": { "edges": [
-              { "node": ${card(2, "Sequel")} },
+              { "relationType": "SEQUEL", "node": ${card(2, "Sequel")} },
               { "node": ${card(3, "Manga", type = "MANGA")} },
               { "node": ${card(4, "Adult", adult = true)} },
               { "node": ${card(1, "Main")} }
@@ -41,6 +41,7 @@ class AniListDetailsTest {
         val details = client.animeDetails(1)
 
         assertEquals(listOf(2), details.related.map { it.id })
+        assertEquals(listOf(2), details.seasonRelations.map { it.card.id })
         assertEquals(listOf(5), details.recommendations.map { it.id })
         assertTrue(details.recommendationsHasMore)
         assertEquals("Sequel", details.related.single().title.display)
