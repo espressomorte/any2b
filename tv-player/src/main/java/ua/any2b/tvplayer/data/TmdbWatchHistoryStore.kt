@@ -13,6 +13,8 @@ data class TmdbEpisodeProgress(
     val progress: Float,
 )
 
+data class TmdbTorrentProgress(val positionMs: Long, val durationMs: Long)
+
 /** Titles whose TorrServer stream actually started in the built-in player. */
 class TmdbWatchHistoryStore(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences(
@@ -75,6 +77,43 @@ class TmdbWatchHistoryStore(context: Context) {
         } catch (_: Exception) { null }
     }
 
+    fun saveTorrentProgress(
+        title: TmdbTitle,
+        topicId: String,
+        fileId: Int,
+        positionMs: Long,
+        durationMs: Long,
+    ) = synchronized(lock) {
+        if (topicId.isBlank() || fileId <= 0 || positionMs < 0 || durationMs <= 0) return@synchronized
+        record(title)
+        val key = torrentKey(title.type, title.id, topicId, fileId)
+        val values = try { JSONObject(prefs.getString("torrent_progress", "{}").orEmpty()) }
+            catch (_: Exception) { JSONObject() }
+        values.put(key, JSONObject().apply {
+            put("positionMs", positionMs.coerceAtMost(durationMs))
+            put("durationMs", durationMs)
+            put("updatedAt", System.currentTimeMillis())
+        })
+        prefs.edit().putString("torrent_progress", values.toString()).apply()
+    }
+
+    fun torrentProgress(
+        type: TmdbMediaType,
+        id: Int,
+        topicId: String,
+        fileId: Int,
+    ): TmdbTorrentProgress? = synchronized(lock) {
+        if (topicId.isBlank() || fileId <= 0) return@synchronized null
+        try {
+            val value = JSONObject(prefs.getString("torrent_progress", "{}").orEmpty())
+                .optJSONObject(torrentKey(type, id, topicId, fileId)) ?: return@synchronized null
+            val duration = value.optLong("durationMs", 0L)
+            val position = value.optLong("positionMs", 0L)
+            if (duration <= 0 || position < 5_000 || position >= duration - 5_000) null
+            else TmdbTorrentProgress(position, duration)
+        } catch (_: Exception) { null }
+    }
+
     fun clear() = synchronized(lock) { prefs.edit().clear().apply() }
 
     private fun read(): List<TmdbTitle> = try {
@@ -100,6 +139,9 @@ class TmdbWatchHistoryStore(context: Context) {
     } catch (_: Exception) {
         emptyList()
     }
+
+    private fun torrentKey(type: TmdbMediaType, id: Int, topicId: String, fileId: Int) =
+        "${TitleKey.Tmdb(type, id).storageKey}|$topicId|$fileId"
 
     private companion object { val lock = Any() }
 }

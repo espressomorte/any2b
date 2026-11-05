@@ -250,6 +250,11 @@ class TmdbDetailsActivity : ComponentActivity() {
                 selectedTopicId?.let { putExtra(PlayerActivity.EXTRA_TOLOKA_TOPIC_ID, it) }
                 putExtra(PlayerActivity.EXTRA_TOLOKA_FILE_ID, fileId)
                 title?.let {
+                    val resumePosition = selectedTopicId?.let { topicId ->
+                        TmdbWatchHistoryStore(this@TmdbDetailsActivity)
+                            .torrentProgress(it.type, it.id, topicId, fileId)
+                    }?.positionMs ?: 0L
+                    putExtra(PlayerActivity.EXTRA_TORRENT_RESUME_POSITION_MS, resumePosition)
                     putExtra(PlayerActivity.EXTRA_TMDB_ID, it.id)
                     putExtra(PlayerActivity.EXTRA_TMDB_TYPE, it.type.path)
                     putExtra(PlayerActivity.EXTRA_TMDB_TITLE, it.title)
