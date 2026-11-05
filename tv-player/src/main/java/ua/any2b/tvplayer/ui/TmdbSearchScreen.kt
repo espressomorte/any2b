@@ -28,13 +28,22 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
+import android.os.SystemClock
+import android.view.KeyEvent as AndroidKeyEvent
+import android.view.ViewConfiguration as AndroidViewConfiguration
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
@@ -205,17 +214,75 @@ private fun TmdbSearchActionIcon(icon: String, label: String, enabled: Boolean,
 @Composable
 internal fun TmdbPosterCard(title: TmdbTitle, query: String = "",
     onClick: () -> Unit, onFocused: (() -> Unit)? = null,
-    focusRequester: FocusRequester? = null) {
+    focusRequester: FocusRequester? = null, onLongClick: (() -> Unit)? = null) {
     var focused by remember { mutableStateOf(false) }
+    var suppressClickUntil by remember { mutableLongStateOf(0L) }
+    var centerKeyDown by remember { mutableStateOf(false) }
+    var keyDownAt by remember { mutableLongStateOf(0L) }
+    var longPressTriggered by remember { mutableStateOf(false) }
+    var longPressJob by remember { mutableStateOf<Job?>(null) }
+    val keyScope = rememberCoroutineScope()
+    val longPressTimeout = AndroidViewConfiguration.getLongPressTimeout().toLong()
     Column(Modifier.width(160.dp).padding(4.dp)) {
         Card(
-            onClick = onClick,
+            onClick = {
+                if (onLongClick == null || SystemClock.uptimeMillis() >= suppressClickUntil)
+                    onClick()
+            },
+            onLongClick = onLongClick?.let { longClick ->
+                {
+                    if (!centerKeyDown) {
+                        suppressClickUntil = SystemClock.uptimeMillis() + 700L
+                        longClick()
+                    }
+                }
+            },
             scale = CardDefaults.scale(scale = 1f, focusedScale = 1f),
             shape = CardDefaults.shape(RoundedCornerShape(12.dp)),
             modifier = Modifier.fillMaxWidth().aspectRatio(2f / 3f)
                 .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+                .onPreviewKeyEvent { event ->
+                    val native = event.nativeKeyEvent
+                    val isCenter = native.keyCode == AndroidKeyEvent.KEYCODE_DPAD_CENTER ||
+                        native.keyCode == AndroidKeyEvent.KEYCODE_ENTER ||
+                        native.keyCode == AndroidKeyEvent.KEYCODE_NUMPAD_ENTER ||
+                        native.keyCode == AndroidKeyEvent.KEYCODE_BUTTON_SELECT
+                    if (!isCenter) return@onPreviewKeyEvent false
+                    if (native.action == AndroidKeyEvent.ACTION_DOWN) {
+                        if (onLongClick == null) return@onPreviewKeyEvent false
+                        if (!centerKeyDown) {
+                            centerKeyDown = true
+                            keyDownAt = SystemClock.uptimeMillis()
+                            longPressTriggered = false
+                            longPressJob?.cancel()
+                            longPressJob = keyScope.launch {
+                                delay(longPressTimeout)
+                                if (centerKeyDown) longPressTriggered = true
+                            }
+                        }
+                        true
+                    } else if (native.action == AndroidKeyEvent.ACTION_UP) {
+                        if (onLongClick == null || !centerKeyDown)
+                            return@onPreviewKeyEvent false
+                        val wasLongPress = longPressTriggered ||
+                            SystemClock.uptimeMillis() - keyDownAt >= longPressTimeout
+                        centerKeyDown = false
+                        longPressJob?.cancel()
+                        longPressJob = null
+                        if (wasLongPress) {
+                            suppressClickUntil = SystemClock.uptimeMillis() + 700L
+                            onLongClick?.invoke()
+                        } else onClick()
+                        true
+                    } else false
+                }
                 .onFocusChanged {
                     focused = it.isFocused
+                    if (!it.isFocused && centerKeyDown) {
+                        centerKeyDown = false
+                        longPressJob?.cancel()
+                        longPressJob = null
+                    }
                     if (it.isFocused) {
                         onFocused?.invoke()
                     }

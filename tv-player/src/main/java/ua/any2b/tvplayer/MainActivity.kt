@@ -63,6 +63,7 @@ class MainActivity : ComponentActivity() {
                     onSettings = { startActivity(Intent(this, SettingsActivity::class.java)) },
                     onRetryMal = viewModel::refreshMalTop,
                     onRetryAniList = viewModel::refreshAniListHome,
+                    onRemoveFromHistory = viewModel::removeFromHistory,
                 )
             }
         }

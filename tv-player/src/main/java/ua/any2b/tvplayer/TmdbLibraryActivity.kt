@@ -11,6 +11,7 @@ import androidx.lifecycle.ViewModelProvider
 import ua.any2b.tvplayer.ui.AppTheme
 import ua.any2b.tvplayer.ui.TmdbLibraryScreen
 import ua.any2b.tvplayer.ui.TmdbLibraryViewModel
+import ua.any2b.tvplayer.data.TmdbWatchHistoryStore
 
 class TmdbLibraryActivity : ComponentActivity() {
     private val viewModel: TmdbLibraryViewModel by viewModels {
@@ -45,13 +46,75 @@ class TmdbLibraryActivity : ComponentActivity() {
                     onSettings = {
                         startActivity(Intent(this, SettingsActivity::class.java))
                     },
+                    onRemoveFromHistory = viewModel::removeFromHistory,
+                    onSelectWatchlistSeason = viewModel::selectWatchlistSeason,
+                    onOpenEpisode = ::openWatchlistPlayback,
+                    onContinueWatchlist = ::openWatchlistPlayback,
                     onBack = ::finish)
             }
         }
+
     }
 
     override fun onResume() {
         super.onResume()
         viewModel.refreshPersonalLists()
+    }
+
+    private fun openWatchlistPlayback(title: ua.any2b.core.tmdb.TmdbTitle,
+        episode: ua.any2b.core.tmdb.TmdbEpisode?) {
+        val history = TmdbWatchHistoryStore(this)
+        val progress = history.episodeProgress(title.type, title.id)
+        val selection = history.playbackSelection(title.type, title.id)
+            ?: history.inferredPlaybackSelection(title.type, title.id)
+        val source = selection?.source?.name
+        val playbackSeason = episode?.seasonNumber ?: title.matchedSeasonNumber
+            ?: progress?.seasonNumber ?: selection?.anitubeSeasonNumber
+        val requestedEpisode = episode?.episodeNumber ?: progress?.let {
+            if (it.progress >= 0.95f) it.episodeNumber + 1 else it.episodeNumber
+        } ?: if (title.type == ua.any2b.core.tmdb.TmdbMediaType.TV && selection != null) 1 else null
+        val cachedEpisode = if (episode == null && playbackSeason != null && requestedEpisode != null)
+            ua.any2b.tvplayer.data.TmdbWatchlistStore(this)
+                .cachedEpisodes(title.id, playbackSeason)
+                ?.firstOrNull { candidate ->
+                    candidate.episodeNumber >= requestedEpisode && candidate.airDate?.let {
+                        runCatching { java.time.LocalDate.parse(it) }.getOrNull()
+                    }?.let { !it.isAfter(java.time.LocalDate.now()) } == true
+                } else null
+        val episodeNumber = episode?.episodeNumber ?: cachedEpisode?.episodeNumber ?: requestedEpisode
+        val targetTitle = title.copy(matchedSeasonNumber = playbackSeason)
+        val movieAniTubeStart = title.type == ua.any2b.core.tmdb.TmdbMediaType.MOVIE &&
+            selection?.source == ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.ANITUBE
+        startActivity(TvNavigation.details(this, targetTitle,
+            torrentsOnly = selection?.source ==
+                ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.TORRENT).apply {
+            if (episodeNumber != null && title.type == ua.any2b.core.tmdb.TmdbMediaType.TV) {
+                putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_EPISODE, episodeNumber)
+                playbackSeason?.let { putExtra(TmdbDetailsActivity.EXTRA_TMDB_SEASON, it) }
+            } else if (movieAniTubeStart) {
+                putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_EPISODE, 1)
+            }
+            source?.let { putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_SOURCE, it) }
+            selection?.topicId?.let {
+                putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_TORRENT_TOPIC, it)
+            }
+            if (title.type == ua.any2b.core.tmdb.TmdbMediaType.MOVIE &&
+                selection?.source == ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.TORRENT) {
+                selection.fileId?.let {
+                    putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_TORRENT_FILE, it)
+                }
+            }
+            selection?.anitubeReleaseId?.let {
+                putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_ANITUBE_RELEASE, it)
+            }
+            selection?.anitubeSeasonNumber?.let {
+                putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_ANITUBE_SEASON, it)
+            }
+            putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_ANITUBE_VOICE,
+                selection?.voiceIndex ?: 0)
+            selection?.voiceName?.let {
+                putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_ANITUBE_VOICE_NAME, it)
+            }
+        })
     }
 }

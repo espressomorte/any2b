@@ -45,6 +45,7 @@ data class TmdbTitle(
     val matchedSeasonTitle: String? = null,
     val matchedSeasonYear: Int? = null,
     val matchedSeasonNumber: Int? = null,
+    val backdropUrl: String? = null,
 ) {
     fun searchNames(query: String): List<String> {
         val original = originalTitle?.takeIf { originalLanguage != "en" && originalLanguage != "uk" }
@@ -85,6 +86,18 @@ fun TmdbDetails.trailerSearchUrl(): String {
 }
 
 data class TmdbSeason(val number: Int, val name: String?, val year: Int?, val episodeCount: Int? = null)
+
+data class TmdbEpisode(
+    val id: Int,
+    val seasonNumber: Int,
+    val episodeNumber: Int,
+    val name: String,
+    val overview: String?,
+    val stillUrl: String?,
+    val airDate: String?,
+)
+
+data class TmdbSeasonDetails(val season: TmdbSeason, val episodes: List<TmdbEpisode>)
 
 data class TmdbTrailer(val videoId: String, val name: String, val language: String?) {
     val youtubeUrl: String get() = "https://www.youtube.com/watch?v=$videoId"
@@ -365,6 +378,39 @@ class TmdbClient(
         )
     }
 
+    suspend fun seasonDetails(
+        seriesId: Int,
+        seasonNumber: Int,
+        token: String,
+        language: String = "uk-UA",
+    ): TmdbSeasonDetails {
+        require(seriesId > 0 && seasonNumber >= 0) { "Некоректний TMDB сезон" }
+        val json = request(listOf("tv", seriesId.toString(), "season", seasonNumber.toString()),
+            token, language)
+        val episodes = json.optJSONArray("episodes")?.let { array ->
+            (0 until array.length()).mapNotNull { index ->
+                val episode = array.optJSONObject(index) ?: return@mapNotNull null
+                val number = episode.optInt("episode_number").takeIf { it > 0 }
+                    ?: return@mapNotNull null
+                TmdbEpisode(
+                    id = episode.optInt("id"),
+                    seasonNumber = episode.optInt("season_number", seasonNumber),
+                    episodeNumber = number,
+                    name = episode.optionalString("name") ?: "Серія $number",
+                    overview = episode.optionalString("overview"),
+                    stillUrl = episode.optionalString("still_path")
+                        ?.let { "https://image.tmdb.org/t/p/w780$it" },
+                    airDate = episode.optionalString("air_date"),
+                )
+            }
+        }.orEmpty()
+        return TmdbSeasonDetails(
+            season = TmdbSeason(seasonNumber, json.optionalString("name"),
+                json.optionalString("air_date")?.take(4)?.toIntOrNull(), episodes.size),
+            episodes = episodes,
+        )
+    }
+
     private suspend fun request(
         segments: List<String>, token: String, language: String, vararg parameters: Pair<String, String>,
     ): JSONObject {
@@ -450,6 +496,8 @@ private fun JSONObject.toTitle(type: TmdbMediaType, language: String): TmdbTitle
         originCountries = optJSONArray("origin_country")?.let { array ->
             (0 until array.length()).mapNotNull { array.optString(it).takeIf(String::isNotBlank) }.toSet()
         }.orEmpty(),
+        backdropUrl = optionalString("backdrop_path")?.takeIf { it.startsWith("/") }
+            ?.let { "https://image.tmdb.org/t/p/w1280$it" },
     )
 }
 

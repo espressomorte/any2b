@@ -3,8 +3,11 @@ package ua.any2b.tvplayer
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.result.ActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
@@ -18,14 +21,18 @@ import ua.any2b.tvplayer.data.SettingsManager
 import ua.any2b.tvplayer.data.TorrServerAuthStore
 import ua.any2b.tvplayer.data.TolokaPlaybackStore
 import ua.any2b.tvplayer.data.TmdbWatchHistoryStore
+import ua.any2b.tvplayer.data.TmdbPlaybackSelection
+import ua.any2b.tvplayer.data.AnitubeState
 import ua.any2b.tvplayer.ui.AppTheme
 import ua.any2b.tvplayer.ui.TmdbDetailsScreen
 import ua.any2b.tvplayer.ui.TmdbDetailsViewModel
 import ua.any2b.tvplayer.ui.TolokaSearchViewModel
 import ua.any2b.tvplayer.ui.TolokaSearchState
 import ua.any2b.tvplayer.ui.TmdbDetailsState
+import ua.any2b.tvplayer.ui.TolokaTransferState
 import ua.any2b.tvplayer.ui.tmdbTorrentQueryOptions
 import ua.any2b.core.matcher.SeriesTitleSearch
+import ua.any2b.core.toloka.TolokaReleaseMetadataParser
 import ua.any2b.tvplayer.ui.FanartDayTheme
 import ua.any2b.tvplayer.ui.FanartArtworkKey
 import ua.any2b.tvplayer.ui.FanartArtworkState
@@ -42,6 +49,14 @@ class TmdbDetailsActivity : ComponentActivity() {
         const val EXTRA_ORIGINAL_TITLE = "ORIGINAL_TITLE"
         const val EXTRA_FAVORITES_LAYOUT = "FAVORITES_LAYOUT"
         const val EXTRA_TORRENTS_ONLY = "TORRENTS_ONLY"
+        const val EXTRA_AUTO_PLAY_EPISODE = "AUTO_PLAY_EPISODE"
+        const val EXTRA_AUTO_PLAY_SOURCE = "AUTO_PLAY_SOURCE"
+        const val EXTRA_AUTO_PLAY_TORRENT_TOPIC = "AUTO_PLAY_TORRENT_TOPIC"
+        const val EXTRA_AUTO_PLAY_TORRENT_FILE = "AUTO_PLAY_TORRENT_FILE"
+        const val EXTRA_AUTO_PLAY_ANITUBE_RELEASE = "AUTO_PLAY_ANITUBE_RELEASE"
+        const val EXTRA_AUTO_PLAY_ANITUBE_SEASON = "AUTO_PLAY_ANITUBE_SEASON"
+        const val EXTRA_AUTO_PLAY_ANITUBE_VOICE = "AUTO_PLAY_ANITUBE_VOICE"
+        const val EXTRA_AUTO_PLAY_ANITUBE_VOICE_NAME = "AUTO_PLAY_ANITUBE_VOICE_NAME"
     }
 
     private val detailsViewModel: TmdbDetailsViewModel by viewModels()
@@ -54,9 +69,82 @@ class TmdbDetailsActivity : ComponentActivity() {
     private var selectedTopicId: String? = null
     private var tmdbId = -1
     private var tmdbType = ""
+    private var autoPlaybackStarted = false
+    private var autoPlaybackFailed = false
+    private var autoReleaseRequested = false
+    private var autoSavedReleaseLookupStarted = false
+    private var autoTargetAniTubeReleaseId: Int? = null
+    private var pendingVimuPlayback: PendingVimuPlayback? = null
+
+    private data class PendingVimuPlayback(
+        val title: ua.any2b.core.tmdb.TmdbTitle,
+        val source: TmdbPlaybackSelection.Source,
+        val topicId: String? = null,
+        val fileId: Int? = null,
+        val episodeNumber: Int? = null,
+        val seasonNumber: Int? = null,
+        val voiceIndex: Int = 0,
+        val episodeIndex: Int = 0,
+    )
+
+    private val vimuPlayerLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult(), ::onVimuPlayerResult)
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        pendingVimuPlayback?.let { pending ->
+            outState.putBoolean("vimu_pending", true)
+            outState.putInt("vimu_title_id", pending.title.id)
+            outState.putString("vimu_title_type", pending.title.type.path)
+            outState.putString("vimu_title_name", pending.title.title)
+            outState.putString("vimu_original_title", pending.title.originalTitle)
+            outState.putInt("vimu_year", pending.title.year ?: 0)
+            outState.putString("vimu_poster", pending.title.posterUrl)
+            outState.putDouble("vimu_rating", pending.title.rating ?: Double.NaN)
+            outState.putIntArray("vimu_genres", pending.title.genreIds.toIntArray())
+            outState.putString("vimu_source", pending.source.name)
+            outState.putString("vimu_topic", pending.topicId)
+            outState.putInt("vimu_file", pending.fileId ?: -1)
+            outState.putInt("vimu_episode", pending.episodeNumber ?: -1)
+            outState.putInt("vimu_season", pending.seasonNumber ?: -1)
+            outState.putInt("vimu_voice", pending.voiceIndex)
+            outState.putInt("vimu_episode_index", pending.episodeIndex)
+        }
+        super.onSaveInstanceState(outState)
+    }
+
+    private val autoPlayEpisode: Int
+        get() = intent.getIntExtra(EXTRA_AUTO_PLAY_EPISODE, -1)
+    private val autoPlaySeason: Int
+        get() = intent.getIntExtra(EXTRA_TMDB_SEASON, 1).coerceAtLeast(1)
+    private val autoPlaySource: String?
+        get() = intent.getStringExtra(EXTRA_AUTO_PLAY_SOURCE)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        pendingVimuPlayback = savedInstanceState?.takeIf { it.getBoolean("vimu_pending") }
+            ?.let { state ->
+                val type = TmdbMediaType.entries.firstOrNull {
+                    it.path == state.getString("vimu_title_type")
+                }
+                val source = TmdbPlaybackSelection.Source.entries.firstOrNull {
+                    it.name == state.getString("vimu_source")
+                }
+                val id = state.getInt("vimu_title_id", -1)
+                val name = state.getString("vimu_title_name").orEmpty()
+                if (type == null || source == null || id <= 0 || name.isBlank()) null
+                else PendingVimuPlayback(
+                    ua.any2b.core.tmdb.TmdbTitle(id, type, name,
+                        state.getString("vimu_original_title"),
+                        state.getInt("vimu_year", 0).takeIf { it > 0 },
+                        state.getString("vimu_poster"), null,
+                        state.getDouble("vimu_rating", Double.NaN).takeIf(Double::isFinite),
+                        genreIds = state.getIntArray("vimu_genres")?.toSet().orEmpty()),
+                    source, state.getString("vimu_topic"),
+                    state.getInt("vimu_file", -1).takeIf { it > 0 },
+                    state.getInt("vimu_episode", -1).takeIf { it > 0 },
+                    state.getInt("vimu_season", -1).takeIf { it > 0 },
+                    state.getInt("vimu_voice", 0), state.getInt("vimu_episode_index", 0))
+            }
         val id = intent.getIntExtra(EXTRA_TMDB_ID, -1)
         val type = TmdbMediaType.entries.firstOrNull { it.path == intent.getStringExtra(EXTRA_TMDB_TYPE) }
         if (id <= 0 || type == null) {
@@ -72,6 +160,10 @@ class TmdbDetailsActivity : ComponentActivity() {
         val seasonNumber = intent.getIntExtra(EXTRA_TMDB_SEASON, -1).takeIf { it >= 0 }
         val favoritesLayout = intent.getBooleanExtra(EXTRA_FAVORITES_LAYOUT, false)
         val torrentsOnly = intent.getBooleanExtra(EXTRA_TORRENTS_ONLY, false)
+        if (autoPlaySource == TmdbPlaybackSelection.Source.TORRENT.name) {
+            selectedTopicId = intent.getStringExtra(EXTRA_AUTO_PLAY_TORRENT_TOPIC)
+            selectedTopicId?.let(tolokaViewModel::selectSavedTopic)
+        }
         val experimental = SettingsManager(this).isExperimentalAppearanceEnabled()
         detailsViewModel.load(type, id, query, preferredTitle, originalLanguage, originalTitle,
             torrentsOnly = torrentsOnly, seasonNumber = seasonNumber)
@@ -99,6 +191,38 @@ class TmdbDetailsActivity : ComponentActivity() {
                     ?.takeIf { it.key == artworkKey }
                 val activePalette = if (experimental) readyArtwork?.palette else null
                 LaunchedEffect(tolokaState.search) { refreshPlaybackMarks() }
+                LaunchedEffect(anitubeState, tolokaState.transfer, autoPlayEpisode,
+                    autoPlaySource, autoPlaySeason,
+                    intent.getIntExtra(EXTRA_AUTO_PLAY_TORRENT_FILE, -1),
+                    readyDetails?.title?.id) {
+                    val savedFileId = intent.getIntExtra(EXTRA_AUTO_PLAY_TORRENT_FILE, -1)
+                        .takeIf { it > 0 }
+                    if (autoPlaybackStarted || (autoPlayEpisode <= 0 && savedFileId == null) ||
+                        readyDetails == null)
+                        return@LaunchedEffect
+                    when (autoPlaySource) {
+                        TmdbPlaybackSelection.Source.TORRENT.name -> {
+                            if (tolokaState.transfer is TolokaTransferState.Files) {
+                                val fileId = savedFileId?.takeIf {
+                                    tolokaViewModel.playbackUrl(it) != null
+                                } ?: autoPlayEpisode.takeIf { it > 0 }?.let {
+                                    tolokaViewModel.playbackFileId(autoPlaySeason, it)
+                                }
+                                if (fileId != null) {
+                                    autoPlaybackStarted = true
+                                    openFile(fileId)
+                                } else if (!autoPlaybackFailed) {
+                                    autoPlaybackFailed = true
+                                    Toast.makeText(this@TmdbDetailsActivity,
+                                        "У вибраному torrent не знайдено цю серію",
+                                        Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        }
+                        TmdbPlaybackSelection.Source.ANITUBE.name ->
+                            continueWatchlistAnitubeEpisode(anitubeState)
+                    }
+                }
                 LaunchedEffect(readyDetails?.title?.type, readyDetails?.title?.id,
                     readyDetails?.title?.englishTitle) {
                     val details = readyDetails ?: return@LaunchedEffect
@@ -154,6 +278,7 @@ class TmdbDetailsActivity : ComponentActivity() {
                     onSelectAnitubeEpisode = detailsViewModel::selectAnitubeEpisode,
                     onPlayAnitube = ::playAnitube,
                     onToggleFavorite = detailsViewModel::toggleFavorite,
+                    onToggleWatchlist = detailsViewModel::addToWatchlist,
                     onTrailer = {
                         val details = (detailsViewModel.state.value as?
                             ua.any2b.tvplayer.ui.TmdbDetailsState.Ready)?.details
@@ -207,6 +332,124 @@ class TmdbDetailsActivity : ComponentActivity() {
         }.orEmpty()
     }
 
+    private fun continueWatchlistAnitubeEpisode(state: AnitubeState) {
+        if (autoPlaybackStarted || autoPlaybackFailed || autoPlayEpisode <= 0) return
+        val savedSeason = intent.getIntExtra(EXTRA_AUTO_PLAY_ANITUBE_SEASON, -1)
+            .takeIf { it > 0 }
+        val requestedRelease = intent.getIntExtra(EXTRA_AUTO_PLAY_ANITUBE_RELEASE, -1)
+            .takeIf { it > 0 }
+            ?.takeIf { savedSeason == null || savedSeason == autoPlaySeason }
+        if (autoTargetAniTubeReleaseId == null) autoTargetAniTubeReleaseId = requestedRelease
+        when (state) {
+            is AnitubeState.Catalog -> {
+                val seasonCandidate = if (tmdbType == TmdbMediaType.MOVIE.path) {
+                    state.resolution.confidentBest
+                } else state.resolution.candidates.firstOrNull {
+                    it.seasonNumber == autoPlaySeason
+                } ?: state.resolution.seasons.firstOrNull {
+                    it.number == autoPlaySeason
+                }?.releases?.firstOrNull()
+                val candidate = autoTargetAniTubeReleaseId?.let { releaseId ->
+                    state.resolution.candidates.firstOrNull { it.release.newsId == releaseId }
+                } ?: seasonCandidate
+                if (candidate != null) {
+                    autoTargetAniTubeReleaseId = candidate.release.newsId
+                    autoReleaseRequested = true
+                    detailsViewModel.selectAnitubeRelease(candidate.release)
+                } else failWatchlistPlayback("Не знайдено реліз AniTube для цього сезону")
+            }
+            is AnitubeState.Found -> {
+                if (autoTargetAniTubeReleaseId == null) {
+                    autoTargetAniTubeReleaseId = if (tmdbType == TmdbMediaType.MOVIE.path) {
+                        state.catalog?.confidentBest?.release?.newsId
+                    } else state.catalog?.candidates?.firstOrNull {
+                        it.seasonNumber == autoPlaySeason
+                    }?.release?.newsId
+                }
+                val targetReleaseId = autoTargetAniTubeReleaseId
+                val currentSeason = state.catalog?.candidates?.firstOrNull {
+                    it.release.newsId == state.release.newsId
+                }?.seasonNumber
+                if (tmdbType != TmdbMediaType.MOVIE.path && targetReleaseId == null && currentSeason != null &&
+                    currentSeason != autoPlaySeason) {
+                    failWatchlistPlayback("Не знайдено реліз AniTube для цього сезону")
+                    return
+                }
+                if (targetReleaseId != null && state.release.newsId != targetReleaseId) {
+                    val candidate = state.catalog?.candidates?.firstOrNull {
+                        it.release.newsId == targetReleaseId
+                    }
+                    if (candidate != null && !autoReleaseRequested) {
+                        autoReleaseRequested = true
+                        detailsViewModel.selectAnitubeRelease(candidate.release)
+                    } else if (candidate == null) {
+                        failWatchlistPlayback("Збережений реліз AniTube більше не знайдено")
+                    }
+                    return
+                }
+                val savedVoiceName = intent.getStringExtra(EXTRA_AUTO_PLAY_ANITUBE_VOICE_NAME)
+                val voiceIndex = if (savedVoiceName != null) {
+                    state.voices.indexOfFirst { it.name.equals(savedVoiceName, ignoreCase = true) }
+                } else intent.getIntExtra(EXTRA_AUTO_PLAY_ANITUBE_VOICE, 0)
+                if (voiceIndex !in state.voices.indices) {
+                    failWatchlistPlayback("Збережену озвучку AniTube більше не знайдено")
+                    return
+                }
+                detailsViewModel.selectAnitubeVoice(voiceIndex)
+                val selected = detailsViewModel.anitubeState.value as? AnitubeState.Found
+                    ?: return
+                val episodeIndex = selected.voices[voiceIndex].episodes.indexOfFirst {
+                    it.episodeNumber == autoPlayEpisode
+                }.takeIf { it >= 0 } ?: if (tmdbType == TmdbMediaType.MOVIE.path)
+                    selected.voices[voiceIndex].episodes.indices.firstOrNull() ?: -1 else -1
+                if (episodeIndex < 0) {
+                    failWatchlistPlayback("У вибраній озвучці не знайдено цю серію")
+                    return
+                }
+                detailsViewModel.selectAnitubeEpisode(episodeIndex)
+                val tmdbTitle = (detailsViewModel.state.value as? TmdbDetailsState.Ready)
+                    ?.details?.title ?: return
+                val savedProgress = TmdbWatchHistoryStore(this).episodeProgress(
+                    tmdbTitle.type, tmdbTitle.id)
+                if (savedProgress?.voiceIndex == voiceIndex &&
+                    savedProgress.episodeNumber == autoPlayEpisode &&
+                    savedProgress.seasonNumber == autoPlaySeason) {
+                    detailsViewModel.restoreAnitubeProgress(savedProgress)
+                }
+                autoPlaybackStarted = true
+                playAnitube()
+            }
+            is AnitubeState.NotFound -> failWatchlistPlayback("Не знайдено відео на AniTube")
+            is AnitubeState.Error -> {
+                val savedReleaseId = autoTargetAniTubeReleaseId
+                    ?: intent.getIntExtra(EXTRA_AUTO_PLAY_ANITUBE_RELEASE, -1)
+                        .takeIf { it > 0 }
+                val details = (detailsViewModel.state.value as? TmdbDetailsState.Ready)?.details
+                if (savedReleaseId != null && details != null &&
+                    !autoSavedReleaseLookupStarted) {
+                    autoSavedReleaseLookupStarted = true
+                    Log.w("WatchlistPlayback", "AniList lookup failed; loading saved AniTube release directly " +
+                        "tmdb=${details.title.type.path}:${details.title.id} release=$savedReleaseId")
+                    detailsViewModel.loadSavedAnitubeRelease(savedReleaseId,
+                        savedSeason ?: autoPlaySeason,
+                        listOfNotNull(details.title.ukrainianTitle, details.title.title,
+                            details.title.englishTitle, details.title.originalTitle),
+                        if (details.title.type == TmdbMediaType.MOVIE) "MOVIE" else "TV")
+                } else {
+                    Log.e("WatchlistPlayback", "AniTube autoplay failed: ${state.message}")
+                    failWatchlistPlayback(state.message)
+                }
+            }
+            AnitubeState.Idle, AnitubeState.Searching -> Unit
+        }
+    }
+
+    private fun failWatchlistPlayback(message: String) {
+        if (autoPlaybackFailed) return
+        autoPlaybackFailed = true
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+    }
+
     private fun openFile(fileId: Int) {
         if (launchingPlayer) return
         val url = tolokaViewModel.playbackUrl(fileId)
@@ -216,6 +459,7 @@ class TmdbDetailsActivity : ComponentActivity() {
             return
         }
         launchingPlayer = true
+        val fileName = tolokaViewModel.playbackFileName(fileId)
         tolokaViewModel.reportPlaybackStatus("URL потоку сформовано для індексу $fileId. Відкриваємо плеєр…")
         val title = (detailsViewModel.state.value as? TmdbDetailsState.Ready)?.details?.title
         val selectedPackage = SettingsManager(this).selectedPlayerPackage()
@@ -224,11 +468,44 @@ class TmdbDetailsActivity : ComponentActivity() {
             val externalIntent = ExternalVideoPlayers(this).intentForVideo(url, selectedPackage)
             if (externalIntent != null) {
                 try {
-                    startActivity(externalIntent)
+                    val history = TmdbWatchHistoryStore(this)
                     selectedTopicId?.let { topicId ->
                         TolokaPlaybackStore(this).markTmdbOpened(tmdbType, tmdbId, topicId, fileId)
                     }
-                    title?.let { TmdbWatchHistoryStore(this).record(it) }
+                    title?.let {
+                        history.record(it)
+                        selectedTopicId?.let { topicId ->
+                            history.savePlaybackSelection(it.type, it.id,
+                                TmdbPlaybackSelection(TmdbPlaybackSelection.Source.TORRENT,
+                                    topicId = topicId, fileId = fileId, fileName = fileName))
+                        }
+                        if (it.type == TmdbMediaType.TV) {
+                            val episode = fileName?.let(TolokaReleaseMetadataParser::parse)
+                                ?.takeIf { meta -> meta.episodeStart != null &&
+                                    (meta.episodeEnd == null || meta.episodeEnd == meta.episodeStart) }
+                            val episodeNumber = episode?.episodeStart
+                            if (episodeNumber != null) {
+                                history.saveEpisodeProgress(it, 0, episodeNumber - 1,
+                                    episodeNumber, 0f,
+                                    episode.season ?: it.matchedSeasonNumber ?: 1)
+                            } else {
+                                ua.any2b.tvplayer.data.TmdbWatchlistStore(this)
+                                    .onPlaybackStarted(it)
+                            }
+                        }
+                    }
+                    val episode = fileName?.let(TolokaReleaseMetadataParser::parse)
+                        ?.takeIf { meta -> meta.episodeStart != null &&
+                            (meta.episodeEnd == null || meta.episodeEnd == meta.episodeStart) }
+                    val torrentContext = title?.let {
+                        PendingVimuPlayback(it, TmdbPlaybackSelection.Source.TORRENT,
+                            selectedTopicId, fileId, episode?.episodeStart,
+                            episode?.season ?: it.matchedSeasonNumber)
+                    }
+                    launchExternalPlayer(externalIntent, selectedPackage,
+                            selectedTopicId?.let { topicId -> title?.let {
+                                history.torrentProgress(it.type, it.id, topicId, fileId)?.positionMs
+                            } } ?: 0L, torrentContext)
                     refreshPlaybackMarks()
                     tolokaViewModel.reportPlaybackStatus("URL передано зовнішньому плеєру. Результат відтворення перевіряйте в ньому")
                     return
@@ -249,6 +526,7 @@ class TmdbDetailsActivity : ComponentActivity() {
                 putExtra(PlayerActivity.EXTRA_SOURCE_TYPE, PlayerActivity.SOURCE_TOLOKA)
                 selectedTopicId?.let { putExtra(PlayerActivity.EXTRA_TOLOKA_TOPIC_ID, it) }
                 putExtra(PlayerActivity.EXTRA_TOLOKA_FILE_ID, fileId)
+                fileName?.let { putExtra(PlayerActivity.EXTRA_TOLOKA_FILE_NAME, it) }
                 title?.let {
                     val resumePosition = selectedTopicId?.let { topicId ->
                         TmdbWatchHistoryStore(this@TmdbDetailsActivity)
@@ -263,8 +541,16 @@ class TmdbDetailsActivity : ComponentActivity() {
                     putExtra(PlayerActivity.EXTRA_TMDB_POSTER_URL, it.posterUrl)
                     putExtra(PlayerActivity.EXTRA_TMDB_RATING, it.rating ?: Double.NaN)
                     putExtra(PlayerActivity.EXTRA_TMDB_GENRE_IDS, it.genreIds.toIntArray())
+                    it.matchedSeasonNumber?.let {
+                        putExtra(PlayerActivity.EXTRA_TMDB_SEASON, it)
+                    }
                 }
             })
+            title?.let { selectedTopicId?.let { topicId ->
+                TmdbWatchHistoryStore(this).savePlaybackSelection(it.type, it.id,
+                    TmdbPlaybackSelection(TmdbPlaybackSelection.Source.TORRENT,
+                        topicId = topicId, fileId = fileId, fileName = fileName))
+            } }
             tolokaViewModel.reportPlaybackStatus("URL передано вбудованому плеєру")
         } catch (_: Exception) {
             launchingPlayer = false
@@ -282,14 +568,42 @@ class TmdbDetailsActivity : ComponentActivity() {
             onSuccess = { url, voiceIndex, episodeIndex, episodeNumber, resumeProgress, backups ->
                 if (launchingPlayer) return@playAnitube
                 launchingPlayer = true
+                val selectedRelease = (detailsViewModel.anitubeState.value as?
+                    ua.any2b.tvplayer.data.AnitubeState.Found)?.release?.newsId
+                val found = detailsViewModel.anitubeState.value as?
+                    ua.any2b.tvplayer.data.AnitubeState.Found
+                val selectedSeason = found?.catalog?.candidates?.firstOrNull {
+                    it.release.newsId == selectedRelease
+                }?.seasonNumber ?: title.matchedSeasonNumber
+                TmdbWatchHistoryStore(this).savePlaybackSelection(title.type, title.id,
+                    TmdbPlaybackSelection(TmdbPlaybackSelection.Source.ANITUBE,
+                        anitubeReleaseId = selectedRelease,
+                        anitubeSeasonNumber = selectedSeason,
+                        voiceIndex = voiceIndex,
+                        voiceName = found?.voices?.getOrNull(voiceIndex)?.name))
                 val selectedPackage = SettingsManager(this).selectedPlayerPackage()
                 if (selectedPackage != null) {
                     val externalIntent = ExternalVideoPlayers(this).intentFor(url, selectedPackage)
                     if (externalIntent != null) {
                         try {
-                            startActivity(externalIntent)
-                            TmdbWatchHistoryStore(this).saveEpisodeProgress(title,
-                                voiceIndex, episodeIndex, episodeNumber, resumeProgress)
+                            val history = TmdbWatchHistoryStore(this)
+                            val storedProgress = history.episodeProgress(title.type, title.id)
+                                ?.takeIf { it.voiceIndex == voiceIndex &&
+                                    it.episodeNumber == episodeNumber &&
+                                    (selectedSeason == null || it.seasonNumber == selectedSeason) }
+                            val positionMs = storedProgress?.positionMs?.takeIf { it > 0L }
+                                ?: if (storedProgress != null && storedProgress.durationMs > 0L)
+                                    (storedProgress.durationMs * resumeProgress).toLong() else 0L
+                            val vimuContext = PendingVimuPlayback(title,
+                                TmdbPlaybackSelection.Source.ANITUBE,
+                                episodeNumber = episodeNumber, seasonNumber = selectedSeason,
+                                voiceIndex = voiceIndex, episodeIndex = episodeIndex)
+                            launchExternalPlayer(externalIntent, selectedPackage,
+                                positionMs, vimuContext)
+                            history.saveEpisodeProgress(title, voiceIndex, episodeIndex,
+                                episodeNumber, resumeProgress, selectedSeason ?: 1,
+                                storedProgress?.positionMs ?: 0L,
+                                storedProgress?.durationMs ?: 0L)
                             returningFromAnitubePlayer = true
                             return@playAnitube
                         } catch (_: ActivityNotFoundException) {
@@ -330,5 +644,63 @@ class TmdbDetailsActivity : ComponentActivity() {
                 }
             },
         )
+    }
+
+    private fun launchExternalPlayer(
+        playerIntent: Intent,
+        packageName: String,
+        resumePositionMs: Long,
+        context: PendingVimuPlayback?,
+    ) {
+        val players = ExternalVideoPlayers(this)
+        if (players.isVimu(packageName)) {
+            players.applyVimuResume(playerIntent, resumePositionMs)
+            context?.title?.let { ua.any2b.tvplayer.data.TmdbWatchlistStore(this)
+                .onPlaybackStarted(it) }
+            pendingVimuPlayback = context
+            vimuPlayerLauncher.launch(playerIntent)
+        } else {
+            startActivity(playerIntent)
+        }
+    }
+
+    private fun onVimuPlayerResult(result: ActivityResult) {
+        launchingPlayer = false
+        returningFromAnitubePlayer = false
+        val pending = pendingVimuPlayback ?: return
+        pendingVimuPlayback = null
+        val history = TmdbWatchHistoryStore(this)
+        when (result.resultCode) {
+            0 -> {
+                val data = result.data ?: return
+                val position = data.getIntExtra("position", -1).toLong()
+                val duration = data.getIntExtra("duration", -1).toLong()
+                if (position < 0L || duration <= 0L) return
+                if (pending.source == TmdbPlaybackSelection.Source.TORRENT) {
+                    val topicId = pending.topicId ?: return
+                    val fileId = pending.fileId ?: return
+                    history.saveTorrentProgress(pending.title, topicId, fileId,
+                        position, duration, pending.episodeNumber, pending.seasonNumber)
+                } else {
+                    history.saveEpisodeProgress(pending.title, pending.voiceIndex,
+                        pending.episodeIndex, pending.episodeNumber ?: 1,
+                        (position.toFloat() / duration).coerceIn(0f, 1f),
+                        pending.seasonNumber ?: 1, position, duration)
+                }
+            }
+            1 -> {
+                if (pending.source == TmdbPlaybackSelection.Source.TORRENT) {
+                    pending.topicId?.let { topic -> pending.fileId?.let { file ->
+                        history.completeTorrentPlayback(pending.title, topic, file,
+                            pending.episodeNumber, pending.seasonNumber)
+                    } }
+                } else {
+                    history.saveEpisodeProgress(pending.title, pending.voiceIndex,
+                        pending.episodeIndex, pending.episodeNumber ?: 1, 1f,
+                        pending.seasonNumber ?: 1)
+                }
+            }
+            else -> Unit // Vimu reports playback errors with result code 4.
+        }
     }
 }
