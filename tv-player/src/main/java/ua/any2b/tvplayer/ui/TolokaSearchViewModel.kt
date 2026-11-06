@@ -267,10 +267,25 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
         if (_state.value.transfer is TolokaTransferState.Loading) return
         val results = _state.value.search as? TolokaSearchState.Results ?: return
         if ((results.hits + results.weakHits + results.rejectedHits).none { it.id == topicId }) return
-        val serverUrl = settings.torrServerUrl()
-        val cached = uploadedTorrent?.takeIf { uploadedTopicId == topicId }
         _state.value = _state.value.copy(
             search = results.copy(selectedId = topicId), playbackStatus = null)
+        loadTopic(topicId)
+    }
+
+    fun selectSavedTopic(topicId: String) {
+        if (topicId.isBlank() || _state.value.transfer is TolokaTransferState.Loading) return
+        val results = _state.value.search as? TolokaSearchState.Results
+        if (results != null && (results.hits + results.weakHits + results.rejectedHits)
+                .any { it.id == topicId }) {
+            _state.value = _state.value.copy(
+                search = results.copy(selectedId = topicId), playbackStatus = null)
+        }
+        loadTopic(topicId)
+    }
+
+    private fun loadTopic(topicId: String) {
+        val serverUrl = settings.torrServerUrl()
+        val cached = uploadedTorrent?.takeIf { uploadedTopicId == topicId }
         if (serverUrl.isBlank() || (cached == null && !TolokaConnections.configured(getApplication()))) {
             _state.value = _state.value.copy(transfer = TolokaTransferState.Error(
                 "Налаштуйте Toloka і TorrServer у розділі «Інтеграції»"))
@@ -348,6 +363,23 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
         val file = files.torrent.videoFiles.firstOrNull { it.id == fileId } ?: return null
         return try { server.playbackUrl(settings.torrServerUrl(), files.torrent, file) }
         catch (_: Exception) { null }
+    }
+
+    fun playbackFileName(fileId: Int): String? {
+        val files = _state.value.transfer as? TolokaTransferState.Files ?: return null
+        return files.torrent.videoFiles.firstOrNull { it.id == fileId }?.name
+    }
+
+    fun playbackFileId(seasonNumber: Int, episodeNumber: Int): Int? {
+        val files = (_state.value.transfer as? TolokaTransferState.Files)
+            ?.torrent?.videoFiles.orEmpty()
+        return files.firstOrNull { file ->
+            val metadata = ua.any2b.core.toloka.TolokaReleaseMetadataParser.parse(file.name)
+            val start = metadata.episodeStart ?: return@firstOrNull false
+            val end = metadata.episodeEnd ?: start
+            (metadata.season == null || metadata.season == seasonNumber) &&
+                episodeNumber in start..end
+        }?.id
     }
 
     fun reportPlaybackStatus(message: String) {

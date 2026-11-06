@@ -1,19 +1,17 @@
 package ua.any2b.tvplayer
 
-import android.content.ActivityNotFoundException
-import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.KeyEvent
 import android.view.ViewGroup
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.widget.Button
 import android.widget.LinearLayout
-import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.CancellationException
@@ -33,17 +31,28 @@ class TrailerActivity : ComponentActivity() {
     }
 
     private lateinit var webView: WebView
-    private lateinit var status: TextView
-    private lateinit var externalButton: Button
     private var trailers: List<TmdbTrailer> = emptyList()
     private var trailerIndex = 0
-    private var allFailed = false
+    private var fallbackOpened = false
+    private var usingEmbeddedPlayer = false
+    private var fallbackSearchPage = false
+    private var currentVideoId: String? = null
+    private val handler = Handler(Looper.getMainLooper())
+    private val playbackTimeout = Runnable { fallbackToYouTube() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val type = TmdbMediaType.entries.firstOrNull { it.path == intent.getStringExtra(EXTRA_TYPE) }
         val id = intent.getIntExtra(EXTRA_ID, -1)
         if (type == null || id <= 0) { finish(); return }
+
+        @Suppress("DEPRECATION")
+        window.decorView.systemUiVisibility = (android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
+            or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+            or android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+            or android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+            or android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+            or android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE)
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -63,47 +72,44 @@ class TrailerActivity : ComponentActivity() {
                     val url = request.url
                     if (url.scheme == "any2b-trailer") {
                         when (url.host) {
-                            "ready" -> status.text = "Готово до відтворення"
-                            "error" -> nextTrailerOrError(url.getQueryParameter("code"))
-                            "blocked" -> status.text = "Автозапуск заблоковано. Натисніть «Відтворити»."
+                            "ready" -> handler.removeCallbacks(playbackTimeout)
+                            "error", "blocked" -> fallbackToYouTube()
+                            "search-result" -> {
+                                val videoId = url.getQueryParameter("id")
+                                    ?.takeIf { it.matches(Regex("[A-Za-z0-9_-]{11}")) }
+                                if (videoId != null) {
+                                    currentVideoId = videoId
+                                    fallbackSearchPage = false
+                                    fallbackOpened = false
+                                    loadPlayer(videoId)
+                                }
+                            }
                         }
                         return true
                     }
                     if (url.scheme == "http" || url.scheme == "https") {
-                        openUrl(url)
-                        return true
+                        return false
                     }
                     return true
                 }
+            override fun onPageFinished(view: WebView, url: String?) {
+                super.onPageFinished(view, url)
+                if (fallbackSearchPage) view.evaluateJavascript(
+                    """(function(){
+                      var attempts=0;
+                      var timer=setInterval(function(){
+                        var links=Array.from(document.querySelectorAll('a#video-title[href],a[href*="/watch?v="]'));
+                        var link=links.find(function(a){return /\/watch\?v=[A-Za-z0-9_-]{11}/.test(a.href)});
+                        var id=link?new URL(link.href).searchParams.get('v'):null;
+                        if(id){clearInterval(timer);location.href='any2b-trailer://search-result?id='+encodeURIComponent(id)}
+                        else if(++attempts>=15)clearInterval(timer);
+                      },700);
+                    })()""", null)
+            }
             }
         }
         root.addView(webView, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        status = TextView(this).apply {
-            text = "Шукаємо трейлер у TMDB…"
-            setTextColor(Color.WHITE)
-            textSize = 18f
-            setPadding(16.dp, 8.dp, 16.dp, 8.dp)
-        }
-        root.addView(status)
-        val controls = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(16.dp, 0, 16.dp, 12.dp)
-        }
-        controls.addView(Button(this).apply {
-            text = "Назад"
-            setOnClickListener { finish() }
-        })
-        controls.addView(Button(this).apply {
-            text = "Відтворити / пауза"
-            setOnClickListener { togglePlayback() }
-        })
-        externalButton = Button(this).apply {
-            text = "Відкрити в YouTube"
-            setOnClickListener { openExternal() }
-        }
-        controls.addView(externalButton)
-        root.addView(controls)
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         setContentView(root)
 
         lifecycleScope.launch {
@@ -112,49 +118,50 @@ class TrailerActivity : ComponentActivity() {
                 trailers = connection?.client?.trailers(type, id, connection.accessKey,
                     intent.getIntExtra(EXTRA_SEASON, -1).takeIf { it >= 0 }).orEmpty()
                 if (trailers.isEmpty()) {
-                    allFailed = true
-                    status.text = "Офіційного трейлера в TMDB не знайдено. Можна відкрити пошук YouTube."
-                    externalButton.text = "Пошук на YouTube"
+                    fallbackToYouTube()
                 } else loadTrailer()
             } catch (error: CancellationException) {
                 throw error
             } catch (_: Exception) {
-                allFailed = true
-                status.text = "Не вдалося отримати трейлер із TMDB. Можна відкрити пошук YouTube."
-                externalButton.text = "Пошук на YouTube"
+                fallbackToYouTube()
             }
         }
     }
 
     private fun loadTrailer() {
         val video = trailers[trailerIndex]
-        status.text = "Завантаження: ${video.name}"
-        // A non-null HTTPS base gives YouTube's iframe an origin and HTTP referrer.
-        webView.loadDataWithBaseURL("https://appassets.androidplatform.net/",
-            playerHtml(video.videoId), "text/html", "UTF-8", null)
-        webView.requestFocus()
+        currentVideoId = video.videoId
+        loadPlayer(video.videoId)
     }
 
-    private fun nextTrailerOrError(code: String?) {
-        if (trailerIndex + 1 < trailers.size) {
-            trailerIndex++
-            status.text = "Трейлер недоступний ($code). Пробуємо наступний…"
-            loadTrailer()
+    private fun loadPlayer(videoId: String) {
+        usingEmbeddedPlayer = true
+        // A non-null HTTPS base gives YouTube's iframe an origin and HTTP referrer.
+        webView.loadDataWithBaseURL("https://appassets.androidplatform.net/",
+            playerHtml(videoId), "text/html", "UTF-8", null)
+        webView.requestFocus()
+        handler.removeCallbacks(playbackTimeout)
+        handler.postDelayed(playbackTimeout, 20_000)
+    }
+
+    private fun fallbackToYouTube() {
+        if (fallbackOpened || isFinishing) return
+        fallbackOpened = true
+        usingEmbeddedPlayer = false
+        handler.removeCallbacks(playbackTimeout)
+        val url = currentVideoId?.let { "https://www.youtube.com/watch?v=$it" }
+        if (url != null) {
+            // Keep playback in our WebView. ACTION_VIEW may route to the unsupported TV app.
+            webView.loadUrl(url)
         } else {
-            allFailed = true
-            status.text = "Вбудовані трейлери недоступні ($code). Відкрийте пошук YouTube."
-            externalButton.text = "Пошук на YouTube"
+            fallbackSearchPage = true
+            webView.loadUrl(youtubeSearchUrl().toString())
         }
     }
 
-    private fun togglePlayback() {
-        webView.evaluateJavascript(
-            "if(window.player){var s=player.getPlayerState();if(s===1){player.pauseVideo()}else{player.playVideo()}}",
-            null)
-    }
-
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        if (event.action == KeyEvent.ACTION_DOWN && ::webView.isInitialized && webView.hasFocus()) {
+        if (event.action == KeyEvent.ACTION_DOWN && usingEmbeddedPlayer &&
+            ::webView.isInitialized && webView.hasFocus()) {
             val seconds = when (event.keyCode) {
                 KeyEvent.KEYCODE_DPAD_LEFT -> -10
                 KeyEvent.KEYCODE_DPAD_RIGHT -> 10
@@ -166,30 +173,14 @@ class TrailerActivity : ComponentActivity() {
                     null)
                 return true
             }
-            if (event.keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) {
-                togglePlayback()
-                return true
-            }
         }
         return super.dispatchKeyEvent(event)
     }
 
-    private fun openExternal() {
-        val url = if (!allFailed && trailers.isNotEmpty()) trailers[trailerIndex].youtubeUrl
-            else "https://www.youtube.com/results?search_query=" + Uri.encode(
-                listOfNotNull(intent.getStringExtra(EXTRA_TITLE),
-                    intent.getIntExtra(EXTRA_YEAR, 0).takeIf { it > 0 }?.toString(), "trailer")
-                    .joinToString(" "))
-        openUrl(Uri.parse(url))
-    }
-
-    private fun openUrl(url: Uri) {
-        try {
-            startActivity(Intent(Intent.ACTION_VIEW, url))
-        } catch (_: ActivityNotFoundException) {
-            status.text = "Немає застосунку для відкриття YouTube"
-        }
-    }
+    private fun youtubeSearchUrl(): Uri = Uri.parse("https://www.youtube.com/results?search_query=" +
+        Uri.encode(listOfNotNull(intent.getStringExtra(EXTRA_TITLE),
+            intent.getIntExtra(EXTRA_YEAR, 0).takeIf { it > 0 }?.toString(), "trailer")
+            .joinToString(" ")))
 
     override fun onPause() {
         if (::webView.isInitialized) webView.onPause()
@@ -202,6 +193,7 @@ class TrailerActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        handler.removeCallbacks(playbackTimeout)
         if (::webView.isInitialized) {
             (webView.parent as? ViewGroup)?.removeView(webView)
             webView.destroy()

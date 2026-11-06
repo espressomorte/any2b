@@ -1,6 +1,7 @@
 package ua.any2b.tvplayer.data
 
 import android.content.Context
+import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -112,6 +113,48 @@ class AnitubeController(
             loadVoices((request ?: current).let { lookup ->
                 if (selectedFormat != null) lookup.copy(format = selectedFormat) else lookup
             }, release, catalog)
+        }
+    }
+
+    /** Loads the user's previously selected AniTube release without requiring AniList lookup. */
+    fun loadSavedRelease(
+        newsId: Int,
+        type: TmdbMediaType,
+        tmdbId: Int,
+        season: Int?,
+        names: List<String>,
+        format: String,
+        resumeProgress: TmdbEpisodeProgress?,
+    ) {
+        if (newsId <= 0) return
+        val lookup = Lookup(type, tmdbId, season, names, format, resumeProgress)
+        request = lookup
+        job?.cancel()
+        _state.value = AnitubeState.Searching
+        job = scope.launch {
+            var release: AnitubeSearchResult? = null
+            var lastError: Exception? = null
+            for (name in names.map(String::trim).filter(String::isNotBlank).distinctBy(String::lowercase)) {
+                try {
+                    release = withContext(Dispatchers.IO) { anitube.search(name) }
+                        .firstOrNull { it.newsId == newsId }
+                    if (release != null) break
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    lastError = error
+                }
+            }
+            val saved = release
+            if (saved == null) {
+                Log.w(TAG, "Saved AniTube release lookup failed newsId=$newsId tmdbId=$tmdbId",
+                    lastError)
+                _state.value = AnitubeState.Error(lastError?.message
+                    ?: "Не вдалося знайти збережений реліз AniTube #$newsId за назвами TMDB")
+            } else {
+                Log.i(TAG, "Loaded saved AniTube release newsId=$newsId tmdbId=$tmdbId")
+                loadVoices(lookup, saved)
+            }
         }
     }
 
@@ -273,4 +316,6 @@ class AnitubeController(
         val format: String,
         val resumeProgress: TmdbEpisodeProgress?,
     )
+
+    private companion object { const val TAG = "AnitubeController" }
 }

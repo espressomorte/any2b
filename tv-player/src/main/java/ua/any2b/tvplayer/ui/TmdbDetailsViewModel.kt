@@ -16,6 +16,7 @@ import ua.any2b.core.tmdb.TmdbTitle
 import ua.any2b.tvplayer.data.TmdbSearchHistoryStore
 import ua.any2b.tvplayer.data.TmdbFavoritesStore
 import ua.any2b.tvplayer.data.TmdbWatchHistoryStore
+import ua.any2b.tvplayer.data.TmdbWatchlistStore
 import ua.any2b.tvplayer.data.AnitubeController
 import ua.any2b.tvplayer.data.AniListAvailability
 import ua.any2b.tvplayer.data.TmdbEpisodeProgress
@@ -28,6 +29,7 @@ sealed interface TmdbDetailsState {
     data class Ready(
         val details: TmdbDetails,
         val isFavorite: Boolean,
+        val isWatchlisted: Boolean = false,
         val related: TmdbRelatedState = TmdbRelatedState.Loading,
         val activePanel: Panel = Panel.TORRENT,
     ) : TmdbDetailsState
@@ -44,6 +46,7 @@ class TmdbDetailsViewModel(application: Application) : AndroidViewModel(applicat
     private val history = TmdbSearchHistoryStore(application)
     private val watchHistory = TmdbWatchHistoryStore(application)
     private val favorites = TmdbFavoritesStore(application)
+    private val watchlist = TmdbWatchlistStore(application)
     private val explicitRelated = ExplicitRelatedCatalog(application)
     private val _state = MutableStateFlow<TmdbDetailsState>(TmdbDetailsState.Loading)
     val state: StateFlow<TmdbDetailsState> = _state
@@ -72,6 +75,16 @@ class TmdbDetailsViewModel(application: Application) : AndroidViewModel(applicat
         val ready = _state.value as? TmdbDetailsState.Ready ?: return
         val selected = favorites.toggle(ready.details.title)
         _state.value = ready.copy(isFavorite = selected)
+    }
+
+    fun addToWatchlist() {
+        val ready = _state.value as? TmdbDetailsState.Ready ?: return
+        if (ready.details.title.type == TmdbMediaType.TV)
+            watchlist.saveSeasons(ready.details.title.id, ready.details.seasonEntries)
+        watchlist.saveLogo(ready.details.title.type, ready.details.title.id,
+            ready.details.logoUrl)
+        watchlist.addManual(ready.details.title)
+        _state.value = ready.copy(isWatchlisted = true)
     }
 
     fun retryRelated() {
@@ -134,6 +147,7 @@ class TmdbDetailsViewModel(application: Application) : AndroidViewModel(applicat
                 val connection = workerTmdbConnection(getApplication())
                     ?: throw TmdbFailure.MissingToken()
                 val fetched = connection.client.details(type, id, connection.accessKey)
+                if (type == TmdbMediaType.TV) watchlist.saveSeasons(id, fetched.seasonEntries)
                 val selectedSeason = fetched.seasonEntries.firstOrNull {
                     it.number == seasonNumber
                 }
@@ -165,7 +179,7 @@ class TmdbDetailsViewModel(application: Application) : AndroidViewModel(applicat
                 history.recordSelectedTitle(
                     localizedCollection ?: details.collectionName ?: preferredTitle ?: details.title.title)
                 _state.value = TmdbDetailsState.Ready(details,
-                    favorites.contains(type, id))
+                    favorites.contains(type, id), watchlist.contains(type, id))
                 relatedJob = viewModelScope.launch { loadRelated(details) }
                 englishTitleJob = viewModelScope.launch {
                     try {
@@ -216,6 +230,17 @@ class TmdbDetailsViewModel(application: Application) : AndroidViewModel(applicat
     fun selectAnitubeVoice(index: Int) = anitubeController.selectVoice(index)
 
     fun selectAnitubeEpisode(index: Int) = anitubeController.selectEpisode(index)
+
+    fun loadSavedAnitubeRelease(
+        releaseId: Int,
+        seasonNumber: Int?,
+        names: List<String>,
+        format: String,
+    ) {
+        val title = (_state.value as? TmdbDetailsState.Ready)?.details?.title ?: return
+        anitubeController.loadSavedRelease(releaseId, title.type, title.id, seasonNumber,
+            names, format, watchHistory.episodeProgress(title.type, title.id))
+    }
 
     fun restoreAnitubeProgress(progress: TmdbEpisodeProgress?) =
         anitubeController.restoreProgress(progress)

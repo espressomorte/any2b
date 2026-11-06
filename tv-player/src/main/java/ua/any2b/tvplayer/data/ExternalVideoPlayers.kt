@@ -59,7 +59,17 @@ class ExternalVideoPlayers(private val context: Context) {
             .setComponent(ComponentName(info.packageName, info.name))
     }
 
+    fun isVimu(packageName: String): Boolean = packageName == VIMU_PACKAGE
+
+    fun applyVimuResume(intent: Intent, positionMs: Long) {
+        if (positionMs > 0L) {
+            intent.putExtra("startfrom", positionMs.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
+            intent.putExtra("forceresume", true)
+        }
+    }
+
     private companion object {
+        const val VIMU_PACKAGE = "net.gtvbox.videoplayer"
         val MIME_TYPES = listOf("application/vnd.apple.mpegurl", "application/x-mpegURL", "video/*")
     }
 }
