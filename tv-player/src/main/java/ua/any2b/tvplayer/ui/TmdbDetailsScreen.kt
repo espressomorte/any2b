@@ -106,9 +106,9 @@ fun TmdbDetailsScreen(
     onOpenRelated: (TmdbTitle) -> Unit,
     onBack: () -> Unit,
 ) {
-    Box(Modifier.fillMaxSize().background(if (experimentalArtwork != null)
-        experimentalPalette?.background ?: AppColors.BackgroundDark else AppColors.BackgroundDark)
-        .padding(32.dp)) {
+    val pageBackground = if (experimentalArtwork != null)
+        experimentalPalette?.background ?: AppColors.BackgroundDark else AppColors.BackgroundDark
+    Box(Modifier.fillMaxSize().background(pageBackground).padding(32.dp)) {
         when (state) {
             TmdbDetailsState.Loading -> Text("Завантаження деталей TMDB…",
                 modifier = Modifier.align(Alignment.Center), color = AppColors.AccentLight)

@@ -47,7 +47,16 @@ class TmdbLibraryActivity : ComponentActivity() {
                         startActivity(Intent(this, SettingsActivity::class.java))
                     },
                     onRemoveFromHistory = viewModel::removeFromHistory,
-                    onSelectWatchlistSeason = viewModel::selectWatchlistSeason,
+                    onSelectWatchlistSeason = { title, seasonNumber ->
+                        if (viewModel.hasPlayableWatchlistSeason(title, seasonNumber)) {
+                            viewModel.selectWatchlistSeason(title, seasonNumber)
+                        } else {
+                            startActivity(TvNavigation.details(this,
+                                title.copy(matchedSeasonNumber = seasonNumber)).apply {
+                                putExtra(TmdbDetailsActivity.EXTRA_RETURN_TO_WATCHLIST, true)
+                            })
+                        }
+                    },
                     onOpenEpisode = ::openWatchlistPlayback,
                     onContinueWatchlist = ::openWatchlistPlayback,
                     onBack = ::finish)
@@ -88,6 +97,7 @@ class TmdbLibraryActivity : ComponentActivity() {
         startActivity(TvNavigation.details(this, targetTitle,
             torrentsOnly = selection?.source ==
                 ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.TORRENT).apply {
+            putExtra(TmdbDetailsActivity.EXTRA_RETURN_TO_WATCHLIST, true)
             if (episodeNumber != null && title.type == ua.any2b.core.tmdb.TmdbMediaType.TV) {
                 putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_EPISODE, episodeNumber)
                 playbackSeason?.let { putExtra(TmdbDetailsActivity.EXTRA_TMDB_SEASON, it) }

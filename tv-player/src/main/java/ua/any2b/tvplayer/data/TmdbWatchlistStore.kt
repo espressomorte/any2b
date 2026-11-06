@@ -103,6 +103,39 @@ class TmdbWatchlistStore(context: Context) {
         }.toString()).apply()
     }
 
+    /** Caches the episode numbers available in a source playlist already loaded by Details. */
+    fun savePlayableEpisodes(
+        type: TmdbMediaType,
+        titleId: Int,
+        playlistKey: String,
+        seasonEpisodes: Map<Int, Set<Int>>,
+    ) = synchronized(lock) {
+        if (titleId <= 0 || playlistKey.isBlank()) return@synchronized
+        prefs.edit().putString(playableEpisodesKey(type, titleId, playlistKey),
+            JSONObject().apply {
+                seasonEpisodes.filterKeys { it > 0 }.forEach { (season, episodes) ->
+                    put(season.toString(), JSONArray().apply {
+                        episodes.filter { it > 0 }.sorted().forEach { episode -> put(episode) }
+                    })
+                }
+            }.toString()).apply()
+    }
+
+    fun cachedPlayableEpisodes(
+        type: TmdbMediaType,
+        titleId: Int,
+        playlistKey: String,
+        seasonNumber: Int,
+    ): Set<Int>? = synchronized(lock) {
+        if (titleId <= 0 || playlistKey.isBlank() || seasonNumber <= 0) return@synchronized null
+        val array = prefs.getString(playableEpisodesKey(type, titleId, playlistKey), null)
+            ?.let { runCatching { JSONObject(it) }.getOrNull() }
+            ?.optJSONArray(seasonNumber.toString()) ?: return@synchronized null
+        (0 until array.length()).mapNotNull { index ->
+            array.optInt(index).takeIf { it > 0 }
+        }.toSet()
+    }
+
     fun cachedSeasons(seriesId: Int): List<TmdbSeason>? = synchronized(lock) {
         val json = prefs.getString(seasonKey(seriesId), null) ?: return@synchronized null
         try {
@@ -186,6 +219,8 @@ class TmdbWatchlistStore(context: Context) {
 
     private fun clearTitleCache(type: TmdbMediaType, id: Int) {
         prefs.edit().remove(logoKey(type, id)).apply()
+        prefs.all.keys.filter { it.startsWith("playable_${type.path}_${id}_") }
+            .forEach { prefs.edit().remove(it).apply() }
         if (type != TmdbMediaType.TV) return
         val prefix = "episodes_${id}_"
         val editor = prefs.edit()
@@ -259,6 +294,8 @@ class TmdbWatchlistStore(context: Context) {
     private fun episodeKey(seriesId: Int, seasonNumber: Int) = "episodes_${seriesId}_$seasonNumber"
     private fun seasonKey(seriesId: Int) = "seasons_$seriesId"
     private fun logoKey(type: TmdbMediaType, id: Int) = "logo_${type.path}_$id"
+    private fun playableEpisodesKey(type: TmdbMediaType, id: Int, playlistKey: String) =
+        "playable_${type.path}_${id}_$playlistKey"
 
     private companion object {
         const val ENTRIES_KEY = "entries"

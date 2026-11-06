@@ -72,7 +72,11 @@ data class TmdbWatchlistHomeItem(
     val episodesLoading: Boolean = false,
 )
 
-data class TmdbEpisodeHomeCard(val episode: TmdbEpisode, val cachedImagePath: String?)
+data class TmdbEpisodeHomeCard(
+    val episode: TmdbEpisode,
+    val cachedImagePath: String?,
+    val watched: Boolean = false,
+)
 
 class TmdbLibraryViewModel(application: Application,
     private val animationOnly: Boolean = false) : AndroidViewModel(application) {
@@ -190,11 +194,24 @@ class TmdbLibraryViewModel(application: Application,
         _state.value = _state.value.copy(
             watchlist = watchlist.all().filter {
                 animationOnly || visibleInCurrentCatalog(it.title)
-            }.map {
-                TmdbWatchlistHomeItem(it, logoUrl = watchlist.cachedLogo(it.title.type, it.title.id),
-                    seasons = if (it.title.type == TmdbMediaType.TV)
-                        watchlist.cachedSeasons(it.title.id).orEmpty() else emptyList(),
-                    episodesLoading = it.title.type == TmdbMediaType.TV)
+            }.map { entry ->
+                val previous = _state.value.watchlist.firstOrNull {
+                    it.entry.title.type == entry.title.type && it.entry.title.id == entry.title.id
+                }
+                val progressSeason = history.episodeProgress(entry.title.type,
+                    entry.title.id)?.seasonNumber
+                TmdbWatchlistHomeItem(entry,
+                    logoUrl = watchlist.cachedLogo(entry.title.type, entry.title.id),
+                    seasons = if (entry.title.type == TmdbMediaType.TV)
+                        watchlist.cachedSeasons(entry.title.id).orEmpty() else emptyList(),
+                    selectedSeasonNumber = when {
+                        previous == null -> null
+                        progressSeason != null &&
+                            previous.selectedSeasonNumber != progressSeason -> progressSeason
+                        else -> previous.selectedSeasonNumber
+                    },
+                    nextEpisodes = previous?.nextEpisodes.orEmpty(),
+                    episodesLoading = entry.title.type == TmdbMediaType.TV)
             },
             history = watched.filter(::visibleInCurrentCatalog),
             favorites = saved.filter(::visibleInCurrentCatalog),
@@ -269,6 +286,20 @@ class TmdbLibraryViewModel(application: Application,
         })
     }
 
+    fun hasPlayableWatchlistSeason(title: TmdbTitle, seasonNumber: Int): Boolean {
+        val selection = history.playbackSelection(title.type, title.id)
+            ?: history.inferredPlaybackSelection(title.type, title.id)
+            ?: return true
+        val playlistKey = when (selection.source) {
+            ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.TORRENT ->
+                selection.topicId?.let { "torrent_$it" }
+            ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.ANITUBE ->
+                selection.anitubeReleaseId?.let { "anitube_${it}_${selection.voiceIndex}" }
+        } ?: return false
+        return watchlist.cachedPlayableEpisodes(title.type, title.id, playlistKey,
+            seasonNumber)?.isNotEmpty() == true
+    }
+
     fun removeFromHistory(title: TmdbTitle) {
         history.removeFromHistory(title)
         refreshPersonalLists()
@@ -324,8 +355,25 @@ class TmdbLibraryViewModel(application: Application,
                             }
                     var season = seasons.firstOrNull { it.number == seasonNumber }
                     var episodes = season?.let { seasonEpisodes(it.number) }.orEmpty()
-                    var upcoming = episodes.filter { it.episodeNumber >= episodeNumber && it.hasAired() }
-                    if (upcoming.isEmpty()) {
+                    val selection = history.playbackSelection(title.type, title.id)
+                        ?: history.inferredPlaybackSelection(title.type, title.id)
+                    val playlistKey = when (selection?.source) {
+                        ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.TORRENT ->
+                            selection.topicId?.let { "torrent_$it" }
+                        ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.ANITUBE ->
+                            selection.anitubeReleaseId?.let {
+                                "anitube_${it}_${selection.voiceIndex}"
+                            }
+                        null -> null
+                    }
+                    var playableEpisodes = playlistKey?.let {
+                        watchlist.cachedPlayableEpisodes(title.type, title.id, it, seasonNumber)
+                    }
+                    var upcoming = episodes.filter {
+                        it.episodeNumber >= episodeNumber && it.hasAired() &&
+                            playableEpisodes?.contains(it.episodeNumber) != false
+                    }
+                    if (upcoming.isEmpty() && selectedSeason == null) {
                         for (candidate in seasons.filter { it.number > 0 }
                             .sortedByDescending { it.number }) {
                             val released = seasonEpisodes(candidate.number).filter { it.hasAired() }
@@ -334,6 +382,14 @@ class TmdbLibraryViewModel(application: Application,
                                 seasonNumber = candidate.number
                                 episodes = released
                                 upcoming = released.take(1)
+                                playableEpisodes = playlistKey?.let {
+                                    watchlist.cachedPlayableEpisodes(title.type, title.id, it,
+                                        seasonNumber)
+                                }
+                                if (playableEpisodes != null)
+                                    upcoming = upcoming.filter {
+                                        playableEpisodes?.contains(it.episodeNumber) == true
+                                    }
                                 break
                             }
                         }
@@ -346,11 +402,22 @@ class TmdbLibraryViewModel(application: Application,
                     val airedCount = episodes.count { it.hasAired() }
                     updateWatchlistSeasonCounts(title, airedCount,
                         season?.episodeCount ?: episodes.size)
-                    upcoming = upcoming.take(12)
-                    watchlist.cacheStills(title.id, upcoming)
-                    updateWatchlistEpisodes(title, upcoming.map { episode ->
+                    val progressSeason = progress?.seasonNumber
+                    val watchedEpisodes = episodes.filter { episode ->
+                        episode.hasAired() && (progressSeason != null &&
+                            (seasonNumber < progressSeason || seasonNumber == progressSeason &&
+                                (episode.episodeNumber < (progress?.episodeNumber ?: 1) ||
+                                    episode.episodeNumber == progress.episodeNumber &&
+                                    (progress?.progress ?: 0f) >= 0.95f)))
+                    }.filter { playableEpisodes?.contains(it.episodeNumber) != false }
+                    val visibleUpcoming = upcoming.take(12)
+                    val visibleEpisodes = (watchedEpisodes + visibleUpcoming)
+                        .distinctBy { it.episodeNumber }
+                    watchlist.cacheStills(title.id, visibleUpcoming + watchedEpisodes)
+                    updateWatchlistEpisodes(title, visibleEpisodes.map { episode ->
                         TmdbEpisodeHomeCard(episode,
-                            watchlist.cachedStill(title.id, episode)?.absolutePath)
+                            watchlist.cachedStill(title.id, episode)?.absolutePath,
+                            watched = episode in watchedEpisodes)
                     }, false)
                 } catch (error: CancellationException) {
                     throw error
