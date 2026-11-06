@@ -1,6 +1,7 @@
 package ua.any2b.tvplayer.data
 
 import android.content.Context
+import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 import ua.any2b.core.tmdb.TmdbMediaType
@@ -112,6 +113,13 @@ class TmdbWatchHistoryStore(context: Context) {
             put("updatedAt", System.currentTimeMillis())
         })
         prefs.edit().putString("episode_progress", values.toString()).apply()
+        val now = System.currentTimeMillis()
+        if (progress >= 0.98f || now - lastProgressLogAt >= 30_000L) {
+            lastProgressLogAt = now
+            Log.d("WatchlistPlayback", "Progress saved tmdb=${title.type.path}:${title.id} " +
+                "season=$seasonNumber episode=$episodeNumber voice=$voiceIndex " +
+                "progress=${progress.coerceIn(0f, 1f)} positionMs=$positionMs durationMs=$durationMs")
+        }
     }
 
     fun episodeProgress(type: TmdbMediaType, id: Int): TmdbEpisodeProgress? = synchronized(lock) {
@@ -189,6 +197,10 @@ class TmdbWatchHistoryStore(context: Context) {
                 put("updatedAt", System.currentTimeMillis())
             })
             prefs.edit().putString("playback_selection", values.toString()).apply()
+            Log.i("WatchlistPlayback", "Playback source saved tmdb=${type.path}:$id " +
+                "source=${selection.source} release=${selection.anitubeReleaseId} " +
+                "season=${selection.anitubeSeasonNumber} voice=${selection.voiceIndex} " +
+                "topic=${selection.topicId} file=${selection.fileId}")
         }
 
     fun playbackSelection(type: TmdbMediaType, id: Int): TmdbPlaybackSelection? =
@@ -316,5 +328,6 @@ class TmdbWatchHistoryStore(context: Context) {
         const val MIN_MOVIE_PROGRESS_MS = 15_000L
         const val MOVIE_FINISH_GUARD_MS = 30_000L
         val lock = Any()
+        var lastProgressLogAt = 0L
     }
 }

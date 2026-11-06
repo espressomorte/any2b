@@ -451,8 +451,11 @@ private fun WatchlistHomeSection(
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         Button(onClick = {
+                            val resumeEpisode = selected.nextEpisodes
+                                .firstOrNull { !it.watched }?.episode
+                                ?: selected.nextEpisodes.firstOrNull()?.episode
                             onContinue(title.copy(matchedSeasonNumber = selected.selectedSeasonNumber),
-                                selected.nextEpisodes.firstOrNull()?.episode)
+                                resumeEpisode)
                         }, modifier = Modifier
                             .then(continueFocusRequester?.let(Modifier::focusRequester) ?: Modifier)
                             .focusProperties { settingsFocusRequester?.let { up = it } }) {

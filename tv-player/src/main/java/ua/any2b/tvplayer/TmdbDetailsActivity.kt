@@ -38,6 +38,7 @@ import ua.any2b.tvplayer.ui.FanartDayTheme
 import ua.any2b.tvplayer.ui.FanartArtworkKey
 import ua.any2b.tvplayer.ui.FanartArtworkState
 import ua.any2b.tvplayer.ui.FanartArtworkViewModel
+import ua.any2b.tvplayer.ui.WatchlistPlaybackScreen
 
 class TmdbDetailsActivity : ComponentActivity() {
     companion object {
@@ -59,6 +60,7 @@ class TmdbDetailsActivity : ComponentActivity() {
         const val EXTRA_AUTO_PLAY_ANITUBE_VOICE = "AUTO_PLAY_ANITUBE_VOICE"
         const val EXTRA_AUTO_PLAY_ANITUBE_VOICE_NAME = "AUTO_PLAY_ANITUBE_VOICE_NAME"
         const val EXTRA_RETURN_TO_WATCHLIST = "RETURN_TO_WATCHLIST"
+        const val EXTRA_PLAYBACK_ONLY = "PLAYBACK_ONLY"
     }
 
     private val detailsViewModel: TmdbDetailsViewModel by viewModels()
@@ -162,6 +164,13 @@ class TmdbDetailsActivity : ComponentActivity() {
         val seasonNumber = intent.getIntExtra(EXTRA_TMDB_SEASON, -1).takeIf { it >= 0 }
         val favoritesLayout = intent.getBooleanExtra(EXTRA_FAVORITES_LAYOUT, false)
         val torrentsOnly = intent.getBooleanExtra(EXTRA_TORRENTS_ONLY, false)
+        if (intent.getBooleanExtra(EXTRA_RETURN_TO_WATCHLIST, false)) {
+            Log.i("WatchlistPlayback", "Playback resolver started tmdb=$tmdbType:$tmdbId " +
+                "source=$autoPlaySource season=${intent.getIntExtra(EXTRA_TMDB_SEASON, -1)} " +
+                "episode=$autoPlayEpisode release=" +
+                "${intent.getIntExtra(EXTRA_AUTO_PLAY_ANITUBE_RELEASE, -1)} " +
+                "voice=${intent.getIntExtra(EXTRA_AUTO_PLAY_ANITUBE_VOICE, 0)}")
+        }
         if (autoPlaySource == TmdbPlaybackSelection.Source.TORRENT.name) {
             selectedTopicId = intent.getStringExtra(EXTRA_AUTO_PLAY_TORRENT_TOPIC)
             selectedTopicId?.let(tolokaViewModel::selectSavedTopic)
@@ -193,6 +202,12 @@ class TmdbDetailsActivity : ComponentActivity() {
                     ?.takeIf { it.key == artworkKey }
                 val activePalette = if (experimental) readyArtwork?.palette else null
                 LaunchedEffect(tolokaState.search) { refreshPlaybackMarks() }
+                LaunchedEffect(detailsState, intent.getBooleanExtra(EXTRA_PLAYBACK_ONLY, false)) {
+                    if (intent.getBooleanExtra(EXTRA_PLAYBACK_ONLY, false) &&
+                        detailsState is TmdbDetailsState.Error) {
+                        failWatchlistPlayback((detailsState as TmdbDetailsState.Error).message)
+                    }
+                }
                 LaunchedEffect(tolokaState.transfer, selectedTopicId, readyDetails?.title?.id) {
                     val details = readyDetails ?: return@LaunchedEffect
                     val topicId = selectedTopicId ?: return@LaunchedEffect
@@ -295,6 +310,9 @@ class TmdbDetailsActivity : ComponentActivity() {
                     tolokaViewModel.searchAutomatically(details, initial, english)
                 }
                 FanartDayTheme(activePalette?.light == true) {
+                if (intent.getBooleanExtra(EXTRA_PLAYBACK_ONLY, false)) {
+                    WatchlistPlaybackScreen()
+                } else {
                 TmdbDetailsScreen(
                     state = detailsState,
                     favoritesLayout = favoritesLayout,
@@ -355,8 +373,9 @@ class TmdbDetailsActivity : ComponentActivity() {
                     onOpenRelated = { related ->
                         startActivity(TvNavigation.details(this, related, torrentsOnly = torrentsOnly))
                     },
-                    onBack = ::finish,
+                    onBack = ::handleDetailsBack,
                 )
+                }
                 }
             }
         }
@@ -376,6 +395,26 @@ class TmdbDetailsActivity : ComponentActivity() {
         }
     }
 
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        Log.i("WatchlistPlayback", "Playback flow cancelled by system back tmdb=$tmdbType:$tmdbId " +
+            "autoplayStarted=$autoPlaybackStarted")
+        cancelWatchlistAutoplay()
+        super.onBackPressed()
+    }
+
+    private fun handleDetailsBack() {
+        Log.i("WatchlistPlayback", "Playback flow cancelled by back tmdb=$tmdbType:$tmdbId " +
+            "autoplayStarted=$autoPlaybackStarted")
+        cancelWatchlistAutoplay()
+        finish()
+    }
+
+    private fun cancelWatchlistAutoplay() {
+        if (intent.getBooleanExtra(EXTRA_RETURN_TO_WATCHLIST, false))
+            autoPlaybackFailed = true
+    }
+
     private fun refreshPlaybackMarks() {
         val store = TolokaPlaybackStore(this)
         val results = tolokaViewModel.state.value.search as? TolokaSearchState.Results
@@ -390,6 +429,8 @@ class TmdbDetailsActivity : ComponentActivity() {
 
     private fun continueWatchlistAnitubeEpisode(state: AnitubeState) {
         if (autoPlaybackStarted || autoPlaybackFailed || autoPlayEpisode <= 0) return
+        Log.i("WatchlistPlayback", "AniTube autoplay state=${state.javaClass.simpleName} " +
+            "tmdb=$tmdbType:$tmdbId season=$autoPlaySeason episode=$autoPlayEpisode")
         val savedSeason = intent.getIntExtra(EXTRA_AUTO_PLAY_ANITUBE_SEASON, -1)
             .takeIf { it > 0 }
         val requestedRelease = intent.getIntExtra(EXTRA_AUTO_PLAY_ANITUBE_RELEASE, -1)
@@ -504,6 +545,7 @@ class TmdbDetailsActivity : ComponentActivity() {
         if (autoPlaybackFailed) return
         autoPlaybackFailed = true
         Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+        if (intent.getBooleanExtra(EXTRA_PLAYBACK_ONLY, false)) finish()
     }
 
     private fun openFile(fileId: Int) {
@@ -625,7 +667,11 @@ class TmdbDetailsActivity : ComponentActivity() {
         detailsViewModel.playAnitube(
             onError = { message -> Toast.makeText(this, message, Toast.LENGTH_LONG).show() },
             onSuccess = { url, voiceIndex, episodeIndex, episodeNumber, resumeProgress, backups ->
-                if (launchingPlayer) return@playAnitube
+                if (launchingPlayer || autoPlaybackFailed || isFinishing || isDestroyed)
+                    return@playAnitube
+                Log.i("WatchlistPlayback", "AniTube playback launch tmdb=$tmdbType:$tmdbId " +
+                    "season=$autoPlaySeason episode=$episodeNumber voice=$voiceIndex " +
+                    "resumeProgress=$resumeProgress")
                 launchingPlayer = true
                 val selectedRelease = (detailsViewModel.anitubeState.value as?
                     ua.any2b.tvplayer.data.AnitubeState.Found)?.release?.newsId

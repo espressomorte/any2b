@@ -2,6 +2,7 @@ package ua.any2b.tvplayer
 
 import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
@@ -14,6 +15,7 @@ import ua.any2b.tvplayer.ui.TmdbLibraryViewModel
 import ua.any2b.tvplayer.data.TmdbWatchHistoryStore
 
 class TmdbLibraryActivity : ComponentActivity() {
+    companion object { private const val TAG = "WatchlistPlayback" }
     private val viewModel: TmdbLibraryViewModel by viewModels {
         object : ViewModelProvider.Factory {
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -92,12 +94,18 @@ class TmdbLibraryActivity : ComponentActivity() {
                 } else null
         val episodeNumber = episode?.episodeNumber ?: cachedEpisode?.episodeNumber ?: requestedEpisode
         val targetTitle = title.copy(matchedSeasonNumber = playbackSeason)
+        Log.i(TAG, "Continue requested tmdb=${title.type.path}:${title.id} " +
+            "episode=${playbackSeason ?: 0}x${episodeNumber ?: 0} " +
+            "progress=${progress?.progress} positionMs=${progress?.positionMs} " +
+            "source=$source release=${selection?.anitubeReleaseId} " +
+            "voice=${selection?.voiceIndex} topic=${selection?.topicId} file=${selection?.fileId}")
         val movieAniTubeStart = title.type == ua.any2b.core.tmdb.TmdbMediaType.MOVIE &&
             selection?.source == ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.ANITUBE
         startActivity(TvNavigation.details(this, targetTitle,
             torrentsOnly = selection?.source ==
                 ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.TORRENT).apply {
             putExtra(TmdbDetailsActivity.EXTRA_RETURN_TO_WATCHLIST, true)
+            putExtra(TmdbDetailsActivity.EXTRA_PLAYBACK_ONLY, selection != null)
             if (episodeNumber != null && title.type == ua.any2b.core.tmdb.TmdbMediaType.TV) {
                 putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_EPISODE, episodeNumber)
                 playbackSeason?.let { putExtra(TmdbDetailsActivity.EXTRA_TMDB_SEASON, it) }
