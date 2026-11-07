@@ -29,9 +29,9 @@ The shared TV interface palette is defined in `tv-player/src/main/java/ua/any2b/
 
 The legacy settings screen also declares a separate blue palette in `SettingsScreen.kt` (`#0000AA`, `#FFFFFF`, `#AAAAAA`, `#C0C0C0`).
 
-## Proposed palette: `cyan-cyberpunk`
+## Cyan-cyberpunk base palette
 
-Saved for a later design pass. This palette is documented only and is **not applied** to the app yet.
+This is the base accent palette for the player redesign. The shared tokens are defined in `AppColors`; existing screens can adopt them as their UI is updated.
 
 ### Base theme
 

@@ -37,12 +37,19 @@ import ua.any2b.tvplayer.R
 import ua.any2b.tvplayer.data.FavoritesManager
 
 object AppColors {
+    val AbyssBlack = Color(0xFF01010A)
     val BackgroundDark = Color(0xFF0A0B0E)
     val SurfaceApp = Color(0xFF0F1115)
     val SurfaceDark = Color(0xFF15171E)
+    val MidnightBlue = Color(0xFF051935)
+    val DeepTeal = Color(0xFF093B54)
+    val OceanSteel = Color(0xFF0D5B70)
     val SurfaceCard = Color(0xFF20232D)
     val SurfaceCardHover = Color(0xFF1E222D)
+    val NeonAqua = Color(0xFF1CDDE2)
     val NeonCyan = Color(0xFF80F5FF)
+    val IceWhite = Color(0xFFE9FCFF)
+    val BlueGray = Color(0xFF93B3BF)
     val PrimaryPurple = Color(0xFFA855F7)
     val AccentPurple = Color(0xFF4F378B)
     val AccentPurpleAlpha50 = Color(0xFF4F378B).copy(alpha = 0.5f)

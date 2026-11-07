@@ -341,7 +341,6 @@ private fun WatchlistHomeSection(
     }.takeIf { it >= 0 } ?: 0
     val selected = items[selectedIndex]
     val title = selected.entry.title
-    var showSeasonPicker by remember { mutableStateOf(false) }
     val darkFill = Color(0xFF090B0F)
     BoxWithConstraints(modifier.fillMaxWidth().focusGroup().onFocusChanged {
         if (it.hasFocus) onSectionFocus()
@@ -377,7 +376,7 @@ private fun WatchlistHomeSection(
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Box(Modifier.fillMaxWidth().height(watchlistViewportHeight * 0.58f)) {
                 if (items.size > 1) {
-                    Row(Modifier.align(Alignment.TopEnd).padding(top = 72.dp, end = 24.dp),
+                    Row(Modifier.align(Alignment.TopStart).padding(top = 18.dp, start = 24.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FloatingIconButton("‹", "Попередній тайтл", onClick = {
                             val previous = (selectedIndex - 1 + items.size) % items.size
@@ -422,9 +421,7 @@ private fun WatchlistHomeSection(
                         fontWeight = FontWeight.Bold, maxLines = 1,
                         overflow = TextOverflow.Ellipsis)
                     Text(listOfNotNull(title.year?.toString(),
-                        if (title.type == TmdbMediaType.TV) "Серіал" else "Фільм",
-                        if (selected.entry.source == ua.any2b.tvplayer.data.TmdbWatchlistEntry.Source.IN_PROGRESS)
-                            "Продовжити перегляд" else "Заплановано")
+                        if (title.type == TmdbMediaType.TV) "Серіал" else "Фільм")
                         .joinToString(" · "), color = AppColors.TextSecondary,
                         style = MaterialTheme.typography.labelMedium, maxLines = 1,
                         overflow = TextOverflow.Ellipsis)
@@ -433,22 +430,13 @@ private fun WatchlistHomeSection(
                             .getDisplayCountry(Locale.forLanguageTag("uk"))
                             .takeIf(String::isNotBlank)
                     }
-                    val season = selected.seasons.firstOrNull {
-                        it.number == selected.selectedSeasonNumber
-                    }
-                    val seasonStatus = if (title.type == TmdbMediaType.TV && season != null) {
-                        val aired = selected.airedEpisodeCount
-                        val count = selected.selectedSeasonEpisodeCount ?: season.episodeCount
-                        if (aired != null && count != null)
-                            "Сезон ${season.number} · $aired з $count в етері"
-                        else "Сезон ${season.number}"
-                    } else null
-                    val titleFacts = (countryNames + listOfNotNull(seasonStatus)).joinToString(" · ")
+                    val titleFacts = countryNames.joinToString(" · ")
                     if (titleFacts.isNotBlank()) {
                         Text(titleFacts, color = AppColors.TextSecondary,
                             style = MaterialTheme.typography.labelMedium, maxLines = 1,
                             overflow = TextOverflow.Ellipsis)
                     }
+                    Spacer(Modifier.height(8.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         Button(onClick = {
                             val resumeEpisode = selected.nextEpisodes
@@ -456,18 +444,14 @@ private fun WatchlistHomeSection(
                                 ?: selected.nextEpisodes.firstOrNull()?.episode
                             onContinue(title.copy(matchedSeasonNumber = selected.selectedSeasonNumber),
                                 resumeEpisode)
-                        }, modifier = Modifier
+                        }, contentPadding = PaddingValues(horizontal = 18.dp, vertical = 4.dp),
+                            modifier = Modifier.height(48.dp)
                             .then(continueFocusRequester?.let(Modifier::focusRequester) ?: Modifier)
                             .focusProperties { settingsFocusRequester?.let { up = it } }) {
-                            Text("Продовжити перегляд")
-                        }
-                        if (title.type == TmdbMediaType.TV && selected.seasons.isNotEmpty()) {
-                            OutlinedButton(onClick = { showSeasonPicker = true },
-                                modifier = Modifier.focusProperties {
-                                    settingsFocusRequester?.let { up = it }
-                                }) {
-                                Text("Сезон ${selected.selectedSeasonNumber}", maxLines = 1)
-                            }
+                            Text(if (selected.entry.source ==
+                                ua.any2b.tvplayer.data.TmdbWatchlistEntry.Source.IN_PROGRESS)
+                                "Продовжити перегляд" else "Дивитись",
+                                style = MaterialTheme.typography.labelLarge)
                         }
                     }
                 }
@@ -475,6 +459,26 @@ private fun WatchlistHomeSection(
             if (title.type == TmdbMediaType.TV) Spacer(Modifier.weight(1f))
             if (title.type == TmdbMediaType.TV) {
                 Column(Modifier.fillMaxWidth()) {
+                    Box(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                        selected.selectedSeasonNumber?.let { seasonNumber ->
+                            Text("Сезон $seasonNumber", color = Color.White,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.align(Alignment.CenterStart)
+                                    .padding(start = 4.dp))
+                        }
+                        if (items.size > 1) {
+                            Row(Modifier.align(Alignment.Center),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically) {
+                                items.forEachIndexed { index, _ ->
+                                    Box(Modifier.size(if (index == selectedIndex) 7.dp else 5.dp)
+                                        .background(if (index == selectedIndex) Color.White
+                                            else Color.White.copy(alpha = 0.42f), CircleShape))
+                                }
+                            }
+                        }
+                    }
                     if (selected.episodesLoading) {
                         Text("Завантаження серій…", color = AppColors.TextSecondary,
                             modifier = Modifier.padding(horizontal = 4.dp))
@@ -486,6 +490,10 @@ private fun WatchlistHomeSection(
                             selected.nextEpisodes) {
                             if (firstUnwatched > 0) episodeListState.scrollToItem(firstUnwatched)
                         }
+                        val nextSeason = selected.seasons
+                            .filter { it.number > (selected.selectedSeasonNumber ?: 0) &&
+                                (it.episodeCount ?: 0) > 0 }
+                            .minByOrNull { it.number }
                         LazyRow(state = episodeListState,
                             horizontalArrangement = Arrangement.spacedBy(14.dp),
                             contentPadding = PaddingValues(horizontal = 4.dp)) {
@@ -524,30 +532,32 @@ private fun WatchlistHomeSection(
                                     }
                                 }
                             }
+                            if (nextSeason != null) item(key = "next-season-${nextSeason.number}") {
+                                Column(Modifier.width(204.dp).height(204.dp)
+                                    .background(AppColors.SurfaceDark, RoundedCornerShape(10.dp))
+                                    .padding(16.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center) {
+                                    Text("Перейти до наступного сезону",
+                                        color = Color.White,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis)
+                                    Spacer(Modifier.height(12.dp))
+                                    Button(onClick = {
+                                        onSelectSeason(title, nextSeason.number)
+                                    }, modifier = Modifier.size(52.dp),
+                                        contentPadding = PaddingValues(0.dp)) {
+                                        Text(">", fontSize = 28.sp, lineHeight = 30.sp)
+                                    }
+                                }
+                            }
                         }
                     } else {
                         Text("Немає доступних даних про наступні серії",
                             color = AppColors.TextSecondary,
                             modifier = Modifier.padding(horizontal = 4.dp))
-                    }
-                }
-            }
-        }
-        if (showSeasonPicker) Dialog(onDismissRequest = { showSeasonPicker = false }) {
-            Column(Modifier.width(520.dp).background(AppColors.SurfaceCard,
-                RoundedCornerShape(16.dp)).padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Оберіть сезон", style = MaterialTheme.typography.titleLarge,
-                    color = Color.White)
-                LazyColumn(contentPadding = PaddingValues(vertical = 4.dp)) {
-                    items(selected.seasons.filter { it.number > 0 }, key = { it.number }) { season ->
-                        Button(onClick = {
-                            showSeasonPicker = false
-                            onSelectSeason(title, season.number)
-                        }, modifier = Modifier.fillMaxWidth()) {
-                            Text(season.name ?: "Сезон ${season.number}",
-                                maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
                     }
                 }
             }

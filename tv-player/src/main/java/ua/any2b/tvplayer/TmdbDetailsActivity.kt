@@ -641,7 +641,25 @@ class TmdbDetailsActivity : ComponentActivity() {
                     putExtra(PlayerActivity.EXTRA_TMDB_POSTER_URL, it.posterUrl)
                     putExtra(PlayerActivity.EXTRA_TMDB_RATING, it.rating ?: Double.NaN)
                     putExtra(PlayerActivity.EXTRA_TMDB_GENRE_IDS, it.genreIds.toIntArray())
-                    it.matchedSeasonNumber?.let {
+                    fileName?.let { name ->
+                        val release = TolokaReleaseMetadataParser.parse(name)
+                        release.episodeStart?.let {
+                            putExtra(PlayerActivity.EXTRA_TMDB_EPISODE, it)
+                            if (it == release.episodeEnd || release.episodeEnd == null) {
+                                val season = release.season ?: title.matchedSeasonNumber
+                                val nextFileId = season?.let { seasonNumber ->
+                                    tolokaViewModel.playbackFileId(seasonNumber, it + 1)
+                                }
+                                nextFileId?.let(tolokaViewModel::playbackUrl)?.let { nextUrl ->
+                                    putExtra(PlayerActivity.EXTRA_NEXT_STREAM_URL, nextUrl)
+                                }
+                            }
+                        }
+                        (release.season ?: it.matchedSeasonNumber)?.let { season ->
+                            putExtra(PlayerActivity.EXTRA_TMDB_SEASON, season)
+                        }
+                    }
+                    if (!hasExtra(PlayerActivity.EXTRA_TMDB_SEASON)) it.matchedSeasonNumber?.let {
                         putExtra(PlayerActivity.EXTRA_TMDB_SEASON, it)
                     }
                 }
@@ -738,6 +756,16 @@ class TmdbDetailsActivity : ComponentActivity() {
                     putExtra(PlayerActivity.EXTRA_TMDB_RATING, title.rating ?: Double.NaN)
                     putExtra(PlayerActivity.EXTRA_TMDB_GENRE_IDS, title.genreIds.toIntArray())
                     putExtra(PlayerActivity.EXTRA_TMDB_RESUME_PROGRESS, resumeProgress)
+                    (selectedSeason ?: title.matchedSeasonNumber)?.let {
+                        putExtra(PlayerActivity.EXTRA_TMDB_SEASON, it)
+                    }
+                    putExtra(PlayerActivity.EXTRA_TMDB_EPISODE, episodeNumber)
+                    selectedRelease?.let {
+                        putExtra(PlayerActivity.EXTRA_TMDB_ANITUBE_RELEASE, it)
+                    }
+                    found?.voices?.getOrNull(voiceIndex)?.name?.let {
+                        putExtra(PlayerActivity.EXTRA_TMDB_ANITUBE_VOICE_NAME, it)
+                    }
                     putStringArrayListExtra(PlayerActivity.EXTRA_BACKUP_EMBED_URLS,
                         ArrayList(backups.map { it.embedUrl }))
                     putExtra(PlayerActivity.EXTRA_BACKUP_VOICE_INDICES,
