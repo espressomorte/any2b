@@ -48,6 +48,7 @@ class PlayerControlsController(
     private var isScrubbing = false
 
     private val hideControls = Runnable {
+        controls.collapseTrackActions(returnFocus = false)
         controls.visibility = View.GONE
         onHidden()
     }
@@ -88,6 +89,7 @@ class PlayerControlsController(
 
     fun hideImmediately() {
         handler.removeCallbacks(hideControls)
+        controls.collapseTrackActions(returnFocus = false)
         controls.visibility = View.GONE
         onHidden()
     }
@@ -99,6 +101,20 @@ class PlayerControlsController(
         if (event.action != KeyEvent.ACTION_DOWN) return false
         val current = transport ?: return false
         if (controls.visibility == View.VISIBLE) scheduleHide()
+
+        if (event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN &&
+            controls.visibility == View.VISIBLE && seekBar.hasFocus() &&
+            controls.expandTrackActions()) {
+            scheduleHide()
+            return true
+        }
+        if (event.keyCode == KeyEvent.KEYCODE_DPAD_UP &&
+            controls.visibility == View.VISIBLE && controls.areTrackActionsExpanded() &&
+            controls.hasTrackActionFocus()) {
+            controls.collapseTrackActions()
+            scheduleHide()
+            return true
+        }
 
         when (event.keyCode) {
             KeyEvent.KEYCODE_MEDIA_PLAY -> current.play()
@@ -120,11 +136,13 @@ class PlayerControlsController(
                 scrubBy(SCRUB_INCREMENT_SECONDS)
             }
             KeyEvent.KEYCODE_DPAD_LEFT -> {
+                if (!seekBar.hasFocus()) return false
                 show()
                 scrubBy(-SCRUB_INCREMENT_SECONDS)
                 return true
             }
             KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                if (!seekBar.hasFocus()) return false
                 show()
                 scrubBy(SCRUB_INCREMENT_SECONDS)
                 return true
