@@ -487,7 +487,8 @@ private fun WatchlistHomeSection(
                                 ?: selected.nextEpisodes.firstOrNull()?.episode
                             onContinue(title.copy(matchedSeasonNumber = selected.selectedSeasonNumber),
                                 resumeEpisode)
-                        }, modifier = Modifier
+                        }, contentPadding = PaddingValues(horizontal = 18.dp, vertical = 4.dp),
+                            modifier = Modifier.height(48.dp)
                             .then(continueFocusRequester?.let(Modifier::focusRequester) ?: Modifier)
                             .focusProperties {
                                 up = detailsFocusRequester
@@ -527,6 +528,10 @@ private fun WatchlistHomeSection(
                             selected.nextEpisodes) {
                             if (firstUnwatched > 0) episodeListState.scrollToItem(firstUnwatched)
                         }
+                        val nextSeason = selected.seasons
+                            .filter { it.number > (selected.selectedSeasonNumber ?: 0) &&
+                                (it.episodeCount ?: 0) > 0 }
+                            .minByOrNull { it.number }
                         LazyRow(state = episodeListState,
                             modifier = Modifier.fillMaxWidth().weight(1f),
                             horizontalArrangement = Arrangement.spacedBy(14.dp),

@@ -1,6 +1,8 @@
 package ua.any2b.tvplayer
 
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.View
 import androidx.annotation.OptIn
@@ -10,7 +12,11 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.cache.CacheDataSource
+import androidx.media3.datasource.cache.CacheWriter
 import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
@@ -22,11 +28,16 @@ import ua.any2b.tvplayer.data.SettingsManager
 import ua.any2b.tvplayer.data.TorrServerAuthStore
 import ua.any2b.tvplayer.data.TolokaPlaybackStore
 import ua.any2b.tvplayer.data.TmdbWatchHistoryStore
+import ua.any2b.tvplayer.data.PlayerMediaCache
 import ua.any2b.core.tmdb.TmdbMediaType
 import ua.any2b.core.tmdb.TmdbTitle
+import ua.any2b.core.tmdb.IntroDbClient
+import ua.any2b.core.tmdb.IntroDbSegments
 import ua.any2b.core.toloka.TolokaReleaseMetadataParser
 import ua.any2b.core.extractor.StreamResolver
 import ua.any2b.tvplayer.data.AnitubeStreamFallback
+import ua.any2b.tvplayer.ui.Media3PlayerTransport
+import ua.any2b.tvplayer.ui.PlayerControlsController
 import ua.any2b.tvplayer.databinding.ActivityPlayerBinding
 import java.util.concurrent.TimeUnit
 
@@ -35,6 +46,13 @@ class PlayerActivity : FragmentActivity() {
 
     companion object {
         private const val TAG = "TvPlayer"
+        private const val MIN_BUFFER_MS = 50_000
+        private const val MAX_BUFFER_MS = 120_000
+        private const val BUFFER_FOR_PLAYBACK_MS = 2_500
+        private const val BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 5_000
+        private const val NEXT_EPISODE_PRELOAD_LEAD_MS = 20_000L
+        private const val NEXT_EPISODE_PREFETCH_BYTES = 2L * 1024L * 1024L
+        private const val PLAYER_PROMPT_TIMEOUT_MS = 13_000L
         const val EXTRA_STREAM_URL = "STREAM_URL"
         const val EXTRA_VOICE_INDEX = "VOICE_INDEX"
         const val EXTRA_EPISODE_INDEX = "EPISODE_INDEX"
@@ -54,6 +72,10 @@ class PlayerActivity : FragmentActivity() {
         const val EXTRA_TMDB_RATING = "TMDB_RATING"
         const val EXTRA_TMDB_GENRE_IDS = "TMDB_GENRE_IDS"
         const val EXTRA_TMDB_SEASON = "TMDB_SEASON"
+        const val EXTRA_TMDB_EPISODE = "TMDB_EPISODE"
+        const val EXTRA_NEXT_STREAM_URL = "NEXT_STREAM_URL"
+        const val EXTRA_TMDB_ANITUBE_RELEASE = "TMDB_ANITUBE_RELEASE"
+        const val EXTRA_TMDB_ANITUBE_VOICE_NAME = "TMDB_ANITUBE_VOICE_NAME"
         const val EXTRA_TMDB_RESUME_PROGRESS = "TMDB_RESUME_PROGRESS"
         const val EXTRA_TORRENT_RESUME_POSITION_MS = "TORRENT_RESUME_POSITION_MS"
         const val EXTRA_BACKUP_EMBED_URLS = "BACKUP_EMBED_URLS"
@@ -63,6 +85,31 @@ class PlayerActivity : FragmentActivity() {
 
     private lateinit var binding: ActivityPlayerBinding
     private var player: ExoPlayer? = null
+    private var controlsController: PlayerControlsController? = null
+    private val introDbClient = IntroDbClient()
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var introSegments: IntroDbSegments = IntroDbSegments(emptyList(), emptyList())
+    private var introLookupStarted = false
+    private var introPromptDismissed = false
+    private var nextEpisodePromptDismissed = false
+    private var nextEpisodePreloadStarted = false
+    private var activePlayerPrompt: PlayerPrompt? = null
+    private var promptDismissRunnable: Runnable? = null
+    private var nextEpisodePreloadJob: Job? = null
+    private var nextEpisodeCacheWriter: CacheWriter? = null
+    private val mediaDataSourceFactory by lazy {
+        CacheDataSource.Factory()
+            .setCache(PlayerMediaCache.get(this))
+            .setUpstreamDataSourceFactory(OkHttpDataSource.Factory(okHttpClient))
+    }
+    private val updateIntroSkip = object : Runnable {
+        override fun run() {
+            updateSkipIntroButton()
+            if (!isFinishing && !isDestroyed) mainHandler.postDelayed(this, 200L)
+        }
+    }
+
+    private enum class PlayerPrompt { SKIP_INTRO, NEXT_EPISODE }
 
     private var voiceIndex: Int = 0
     private var episodeIndex: Int = 0
@@ -122,13 +169,17 @@ class PlayerActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityPlayerBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        controlsController = PlayerControlsController(binding.playerControls)
+        binding.btnSkipIntro.setOnClickListener { confirmActivePrompt() }
 
         val url = intent.getStringExtra(EXTRA_STREAM_URL)
         voiceIndex = intent.getIntExtra(EXTRA_VOICE_INDEX, 0)
         episodeIndex = intent.getIntExtra(EXTRA_EPISODE_INDEX, 0)
-        episodeNumber = intent.getIntExtra(EXTRA_EPISODE_NUMBER, episodeIndex + 1)
+        episodeNumber = intent.getIntExtra(EXTRA_TMDB_EPISODE,
+            intent.getIntExtra(EXTRA_EPISODE_NUMBER, episodeIndex + 1))
         isToloka = intent.getStringExtra(EXTRA_SOURCE_TYPE) == SOURCE_TOLOKA
         isTmdbAnitube = intent.getStringExtra(EXTRA_SOURCE_TYPE) == SOURCE_ANITUBE_TMDB
+        configureNowPlayingLabel()
         tmdbResumeProgress = intent.getFloatExtra(EXTRA_TMDB_RESUME_PROGRESS, 0f)
         torrentResumePositionMs = intent.getLongExtra(EXTRA_TORRENT_RESUME_POSITION_MS, 0L)
         if (isTmdbAnitube) {
@@ -155,22 +206,34 @@ class PlayerActivity : FragmentActivity() {
     }
 
     private fun initPlayer(url: String) {
-        val dataSourceFactory = OkHttpDataSource.Factory(okHttpClient)
         val mediaSource = if (isToloka) {
-            ProgressiveMediaSource.Factory(dataSourceFactory).createMediaSource(MediaItem.fromUri(url))
+            ProgressiveMediaSource.Factory(mediaDataSourceFactory).createMediaSource(MediaItem.fromUri(url))
         } else {
-            HlsMediaSource.Factory(dataSourceFactory).createMediaSource(MediaItem.fromUri(url))
+            HlsMediaSource.Factory(mediaDataSourceFactory).createMediaSource(MediaItem.fromUri(url))
         }
 
-        player = ExoPlayer.Builder(this).build().also { exo ->
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                MIN_BUFFER_MS,
+                MAX_BUFFER_MS,
+                BUFFER_FOR_PLAYBACK_MS,
+                BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS,
+            )
+            .build()
+
+        player = ExoPlayer.Builder(this)
+            .setLoadControl(loadControl)
+            .build().also { exo ->
             binding.playerView.player = exo
+            controlsController?.attach(Media3PlayerTransport(exo))
 
             exo.addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(state: Int) {
                     Log.d("Player", "state=$state") // 1 IDLE, 2 BUFFERING, 3 READY, 4 ENDED
                     when (state) {
                         Player.STATE_READY   -> {
-                            showStatus("▶ Відтворення", if (isToloka) "" else url)
+                            hideBufferingIndicator()
+                            binding.statusOverlay.visibility = View.GONE
                             if (isToloka) {
                                 if (!torrentResumeApplied && torrentResumePositionMs > 0 && exo.duration > 0) {
                                     exo.seekTo(torrentResumePositionMs.coerceAtMost(exo.duration - 1))
@@ -183,9 +246,13 @@ class PlayerActivity : FragmentActivity() {
                                 }
                             }
                             startProgressReporting()
+                            lookupIntroSegments(exo)
+                            mainHandler.removeCallbacks(updateIntroSkip)
+                            mainHandler.post(updateIntroSkip)
                         }
-                        Player.STATE_BUFFERING -> showStatus("⏳ Буферизація…", if (isToloka) "" else url)
+                        Player.STATE_BUFFERING -> showBufferingIndicator()
                         Player.STATE_ENDED   -> {
+                            hideBufferingIndicator()
                             val current = exo.currentPosition
                             val duration = exo.duration
                             if (duration > 0 && current >= duration - 3000) {
@@ -310,6 +377,177 @@ class PlayerActivity : FragmentActivity() {
         }
     }
 
+    private fun lookupIntroSegments(exo: ExoPlayer) {
+        if (introLookupStarted) return
+        val type = TmdbMediaType.entries.firstOrNull {
+            it.path == intent.getStringExtra(EXTRA_TMDB_TYPE)
+        } ?: return
+        val tmdbId = intent.getIntExtra(EXTRA_TMDB_ID, -1).takeIf { it > 0 } ?: return
+        val durationMs = exo.duration.takeIf { it > 0L } ?: return
+        val season = intent.getIntExtra(EXTRA_TMDB_SEASON, -1).takeIf { it >= 0 }
+        val episode = intent.getIntExtra(EXTRA_TMDB_EPISODE, -1).takeIf { it >= 0 }
+        if (type == TmdbMediaType.TV && (season == null || episode == null)) return
+
+        introLookupStarted = true
+        lifecycleScope.launch {
+            introSegments = introDbClient.findSegments(tmdbId, type, durationMs, season, episode)
+            updateSkipIntroButton()
+        }
+    }
+
+    private fun configureNowPlayingLabel() {
+        val type = intent.getStringExtra(EXTRA_TMDB_TYPE)
+        if (type != TmdbMediaType.TV.path) return
+        val title = intent.getStringExtra(EXTRA_TMDB_TITLE)?.takeIf(String::isNotBlank) ?: return
+        val season = intent.getIntExtra(EXTRA_TMDB_SEASON, -1).takeIf { it >= 0 }
+        val episode = intent.getIntExtra(EXTRA_TMDB_EPISODE, episodeNumber)
+        val episodeLabel = if (season != null) {
+            "$season сезон · $episode серія"
+        } else {
+            "$episode серія"
+        }
+        binding.playerControls.nowPlayingLabel.text = "$title  •  $episodeLabel"
+        binding.playerControls.nowPlayingLabel.visibility = View.VISIBLE
+    }
+
+    private fun updateSkipIntroButton() {
+        val position = player?.currentPosition ?: return
+        val isTv = intent.getStringExtra(EXTRA_TMDB_TYPE) == TmdbMediaType.TV.path
+        val creditsStartMs = if (isTv) introSegments.credits.minOfOrNull { it.startMs }
+            ?.takeIf { it > 0L } else null
+        if (!nextEpisodePreloadStarted && creditsStartMs != null &&
+            position >= (creditsStartMs - NEXT_EPISODE_PRELOAD_LEAD_MS).coerceAtLeast(0L)) {
+            nextEpisodePreloadStarted = true
+            prefetchNextEpisodeChunk()
+        }
+
+        val intro = introSegments.intros.firstOrNull {
+            position >= it.startMs && position < it.endMs
+        }
+        val nextSeason = intent.getIntExtra(EXTRA_TMDB_SEASON, -1)
+        val nextEpisode = intent.getIntExtra(EXTRA_TMDB_EPISODE, -1)
+        val canGoNext = isTv && nextSeason > 0 && nextEpisode > 0 &&
+            (isToloka && !intent.getStringExtra(EXTRA_TOLOKA_TOPIC_ID).isNullOrBlank() ||
+                isTmdbAnitube)
+        when {
+            intro != null && !introPromptDismissed -> showPlayerPrompt(PlayerPrompt.SKIP_INTRO)
+            creditsStartMs != null && position >= creditsStartMs && canGoNext &&
+                !nextEpisodePromptDismissed -> showPlayerPrompt(PlayerPrompt.NEXT_EPISODE)
+            else -> hidePlayerPrompt()
+        }
+    }
+
+    private fun showPlayerPrompt(prompt: PlayerPrompt) {
+        if (activePlayerPrompt == prompt) return
+        hidePlayerPrompt()
+        activePlayerPrompt = prompt
+        binding.btnSkipIntro.text = when (prompt) {
+            PlayerPrompt.SKIP_INTRO -> "ПРОПУСТИТИ ІНТРО"
+            PlayerPrompt.NEXT_EPISODE -> "Перейти до наступної"
+        }
+        binding.btnSkipIntro.visibility = View.VISIBLE
+        binding.btnSkipIntro.requestFocus()
+        val timeout = Runnable {
+            when (activePlayerPrompt) {
+                PlayerPrompt.SKIP_INTRO -> introPromptDismissed = true
+                PlayerPrompt.NEXT_EPISODE -> nextEpisodePromptDismissed = true
+                null -> Unit
+            }
+            hidePlayerPrompt()
+        }
+        promptDismissRunnable = timeout
+        mainHandler.postDelayed(timeout, PLAYER_PROMPT_TIMEOUT_MS)
+    }
+
+    private fun hidePlayerPrompt() {
+        promptDismissRunnable?.let(mainHandler::removeCallbacks)
+        promptDismissRunnable = null
+        if (binding.btnSkipIntro.visibility == View.VISIBLE) binding.playerView.requestFocus()
+        binding.btnSkipIntro.visibility = View.GONE
+        activePlayerPrompt = null
+    }
+
+    private fun confirmActivePrompt() {
+        when (activePlayerPrompt) {
+            PlayerPrompt.SKIP_INTRO -> {
+                val position = player?.currentPosition ?: return
+                val segment = introSegments.intros.firstOrNull {
+                    position >= it.startMs && position < it.endMs
+                } ?: return
+                introPromptDismissed = true
+                hidePlayerPrompt()
+                player?.seekTo(segment.endMs)
+            }
+            PlayerPrompt.NEXT_EPISODE -> launchNextEpisode()
+            null -> Unit
+        }
+    }
+
+    private fun prefetchNextEpisodeChunk() {
+        if (!isToloka) return
+        val url = intent.getStringExtra(EXTRA_NEXT_STREAM_URL)?.takeIf(String::isNotBlank) ?: return
+        nextEpisodePreloadJob = lifecycleScope.launch(Dispatchers.IO) {
+            val writer = CacheWriter(
+                mediaDataSourceFactory.createDataSource(),
+                DataSpec.Builder().setUri(url).setPosition(0L).setLength(NEXT_EPISODE_PREFETCH_BYTES).build(),
+                ByteArray(64 * 1024),
+                null,
+            )
+            nextEpisodeCacheWriter = writer
+            try {
+                writer.cache()
+            } catch (error: Exception) {
+                if (error !is CancellationException)
+                    Log.d(TAG, "Next episode prefetch unavailable", error)
+            } finally {
+                nextEpisodeCacheWriter = null
+            }
+        }
+    }
+
+    private fun launchNextEpisode() {
+        val tmdbId = intent.getIntExtra(EXTRA_TMDB_ID, -1).takeIf { it > 0 } ?: return
+        val type = intent.getStringExtra(EXTRA_TMDB_TYPE)
+            ?.takeIf { it == TmdbMediaType.TV.path } ?: return
+        val nextEpisode = (intent.getIntExtra(EXTRA_TMDB_EPISODE, episodeNumber) + 1)
+        val season = intent.getIntExtra(EXTRA_TMDB_SEASON, -1).takeIf { it > 0 } ?: return
+        val source = when {
+            isToloka -> ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.TORRENT
+            isTmdbAnitube -> ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.ANITUBE
+            else -> return
+        }
+        val nextIntent = android.content.Intent(this, TmdbDetailsActivity::class.java).apply {
+            putExtra(TmdbDetailsActivity.EXTRA_TMDB_ID, tmdbId)
+            putExtra(TmdbDetailsActivity.EXTRA_TMDB_TYPE, type)
+            putExtra(TmdbDetailsActivity.EXTRA_TMDB_SEASON, season)
+            putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_EPISODE, nextEpisode)
+            putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_SOURCE, source.name)
+            putExtra(TmdbDetailsActivity.EXTRA_RETURN_TO_WATCHLIST, true)
+            putExtra(TmdbDetailsActivity.EXTRA_PLAYBACK_ONLY, true)
+            if (source == ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.TORRENT) {
+                intent.getStringExtra(EXTRA_TOLOKA_TOPIC_ID)?.let {
+                    putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_TORRENT_TOPIC, it)
+                }
+            } else {
+                putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_ANITUBE_SEASON, season)
+                putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_ANITUBE_RELEASE,
+                    intent.getIntExtra(EXTRA_TMDB_ANITUBE_RELEASE, -1))
+                putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_ANITUBE_VOICE, voiceIndex)
+                intent.getStringExtra(EXTRA_TMDB_ANITUBE_VOICE_NAME)?.let {
+                    putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_ANITUBE_VOICE_NAME, it)
+                }
+            }
+        }
+        try {
+            startActivity(nextIntent)
+            finish()
+        } catch (error: Exception) {
+            Log.e(TAG, "Could not open next episode", error)
+            nextEpisodePromptDismissed = true
+            hidePlayerPrompt()
+        }
+    }
+
     private fun saveTmdbAnitubeProgress(
         progress: Float,
         positionMs: Long = 0L,
@@ -366,26 +604,59 @@ class PlayerActivity : FragmentActivity() {
     }
 
     private fun showStatus(status: String, url: String) {
+        hideBufferingIndicator()
         Log.i(TAG, status)
         binding.statusOverlay.visibility = View.VISIBLE
         binding.tvStatus.text = status
         binding.tvUrl.text = if (url.length > 80) "…${url.takeLast(60)}" else url
     }
 
+    private fun showBufferingIndicator() {
+        binding.statusOverlay.visibility = View.GONE
+        binding.bufferingIndicator.visibility = View.VISIBLE
+    }
+
+    private fun hideBufferingIndicator() {
+        if (::binding.isInitialized) binding.bufferingIndicator.visibility = View.GONE
+    }
+
     override fun onPause() {
+        mainHandler.removeCallbacks(updateIntroSkip)
         saveCurrentProgress()
         super.onPause()
         player?.pause()
     }
 
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        if (binding.btnSkipIntro.visibility == View.VISIBLE && binding.btnSkipIntro.hasFocus() &&
+            event.action == android.view.KeyEvent.ACTION_DOWN &&
+            event.keyCode in setOf(android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+                android.view.KeyEvent.KEYCODE_ENTER, android.view.KeyEvent.KEYCODE_NUMPAD_ENTER)) {
+            binding.btnSkipIntro.performClick()
+            return true
+        }
+        if (controlsController?.onRemoteKey(event) == true) return true
+        return super.dispatchKeyEvent(event)
+    }
+
     override fun onResume() {
         super.onResume()
         player?.play()
+        if (introSegments.intros.isNotEmpty() || introSegments.credits.isNotEmpty()) {
+            mainHandler.removeCallbacks(updateIntroSkip)
+            mainHandler.post(updateIntroSkip)
+        }
     }
 
     override fun onDestroy() {
+        mainHandler.removeCallbacks(updateIntroSkip)
+        promptDismissRunnable?.let(mainHandler::removeCallbacks)
+        nextEpisodeCacheWriter?.cancel()
+        nextEpisodePreloadJob?.cancel()
         saveCurrentProgress()
         progressJob?.cancel()
+        controlsController?.release()
+        controlsController = null
         super.onDestroy()
         player?.release()
         player = null
