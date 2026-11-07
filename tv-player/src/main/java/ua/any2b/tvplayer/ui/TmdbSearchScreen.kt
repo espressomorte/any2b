@@ -41,6 +41,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.onPreviewKeyEvent
@@ -214,7 +215,8 @@ private fun TmdbSearchActionIcon(icon: String, label: String, enabled: Boolean,
 @Composable
 internal fun TmdbPosterCard(title: TmdbTitle, query: String = "",
     onClick: () -> Unit, onFocused: (() -> Unit)? = null,
-    focusRequester: FocusRequester? = null, onLongClick: (() -> Unit)? = null) {
+    focusRequester: FocusRequester? = null, onLongClick: (() -> Unit)? = null,
+    navigateLeftTo: FocusRequester? = null) {
     var focused by remember { mutableStateOf(false) }
     var suppressClickUntil by remember { mutableLongStateOf(0L) }
     var centerKeyDown by remember { mutableStateOf(false) }
@@ -241,6 +243,7 @@ internal fun TmdbPosterCard(title: TmdbTitle, query: String = "",
             shape = CardDefaults.shape(RoundedCornerShape(12.dp)),
             modifier = Modifier.fillMaxWidth().aspectRatio(2f / 3f)
                 .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+                .focusProperties { navigateLeftTo?.let { left = it } }
                 .onPreviewKeyEvent { event ->
                     val native = event.nativeKeyEvent
                     val isCenter = native.keyCode == AndroidKeyEvent.KEYCODE_DPAD_CENTER ||
