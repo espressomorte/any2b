@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -30,6 +29,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,19 +40,19 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.blur
-import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.BorderStroke
 import androidx.tv.material3.Border
@@ -138,7 +138,7 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
             if (animationOnly) {
                 if (state.watchlist.isNotEmpty()) item(key = "watchlist") {
                     WatchlistHomeSection(state.watchlist, onSelectWatchlistSeason,
-                        onOpenEpisode, onContinueWatchlist,
+                        onOpenEpisode, onContinueWatchlist, onOpen,
                         onSectionFocus = restoreWatchlist,
                         modifier = Modifier.height(watchlistViewportHeight),
                         settingsFocusRequester = settingsFocusRequester,
@@ -196,7 +196,7 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
             } else {
                 if (state.watchlist.isNotEmpty()) item(key = "watchlist") {
                     WatchlistHomeSection(state.watchlist, onSelectWatchlistSeason,
-                        onOpenEpisode, onContinueWatchlist,
+                        onOpenEpisode, onContinueWatchlist, onOpen,
                         onSectionFocus = { alignSection("watchlist") })
                 }
                 if (state.history.isNotEmpty()) item(key = "history") {
@@ -250,13 +250,12 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
             FloatingIconButton(FaIcons.COG, "Налаштування", onClick = onSettings,
                 modifier = Modifier.align(Alignment.TopEnd).padding(top = 18.dp, end = 28.dp),
                 focusRequester = settingsFocusRequester,
-                navigateDownTo = if (state.watchlist.isEmpty()) null
-                    else if (state.watchlist.size > 1) watchlistArrowFocusRequester
-                    else continueFocusRequester)
+                navigateLeftTo = if (state.watchlist.size > 1)
+                    watchlistArrowFocusRequester else null,
+                navigateDownTo = if (state.watchlist.size == 1) continueFocusRequester else null)
         }
     }
 }
-
 @OptIn(ExperimentalFoundationApi::class)
 private object MinimumBringIntoViewSpec : BringIntoViewSpec {
     override fun calculateScrollDistance(
@@ -285,6 +284,8 @@ private fun FloatingIconButton(
     focusRequester: FocusRequester? = null,
     navigateUpTo: FocusRequester? = null,
     navigateDownTo: FocusRequester? = null,
+    navigateLeftTo: FocusRequester? = null,
+    navigateRightTo: FocusRequester? = null,
 ) {
     var focused by remember { mutableStateOf(false) }
     Surface(
@@ -294,6 +295,8 @@ private fun FloatingIconButton(
             .focusProperties {
                 navigateUpTo?.let { up = it }
                 navigateDownTo?.let { down = it }
+                navigateLeftTo?.let { left = it }
+                navigateRightTo?.let { right = it }
             }
             .size(50.dp).semantics { contentDescription = description }
             .onFocusChanged { focused = it.isFocused },
@@ -327,6 +330,7 @@ private fun WatchlistHomeSection(
     onSelectSeason: (TmdbTitle, Int) -> Unit,
     onOpenEpisode: (TmdbTitle, TmdbEpisode) -> Unit,
     onContinue: (TmdbTitle, TmdbEpisode?) -> Unit,
+    onOpenDetails: (TmdbTitle) -> Unit,
     onSectionFocus: () -> Unit,
     modifier: Modifier = Modifier,
     settingsFocusRequester: FocusRequester? = null,
@@ -341,7 +345,37 @@ private fun WatchlistHomeSection(
     }.takeIf { it >= 0 } ?: 0
     val selected = items[selectedIndex]
     val title = selected.entry.title
+    val detailsFocusRequester = remember(title.type, title.id) { FocusRequester() }
+    var detailsFocused by remember(title.type, title.id) { mutableStateOf(false) }
+    val detailsFocusProgress by animateFloatAsState(
+        targetValue = if (detailsFocused) 1f else 0f,
+        animationSpec = androidx.compose.animation.core.tween(durationMillis = 220),
+        label = "watchlistDetailsFocus",
+    )
     val darkFill = Color(0xFF090B0F)
+    val displayTitle = title.matchedSeasonTitle?.takeIf(String::isNotBlank)
+        ?: title.ukrainianTitle?.takeIf(String::isNotBlank) ?: title.title
+    val countryNames = title.originCountries.mapNotNull { code ->
+        Locale.forLanguageTag("und-${code.uppercase(Locale.ROOT)}")
+            .getDisplayCountry(Locale.forLanguageTag("uk"))
+            .takeIf(String::isNotBlank)
+    }
+    val titleMetadata = listOfNotNull(
+        title.year?.toString(),
+        if (title.type == TmdbMediaType.TV) "Серіал" else "Фільм",
+        countryNames.joinToString(", ").takeIf(String::isNotBlank),
+        title.rating?.let { "TMDB: ${String.format(Locale.US, "%.1f", it)}" },
+    ).joinToString(" · ")
+    val continueLabel = if (selected.entry.source ==
+        ua.any2b.tvplayer.data.TmdbWatchlistEntry.Source.IN_PROGRESS) {
+        "Продовжити перегляд"
+    } else "Дивитись"
+    val season = selected.seasons.firstOrNull {
+        it.number == selected.selectedSeasonNumber
+    }
+    val nextSeason = selected.seasons
+        .filter { it.number > (selected.selectedSeasonNumber ?: 0) }
+        .minByOrNull { it.number }
     BoxWithConstraints(modifier.fillMaxWidth().focusGroup().onFocusChanged {
         if (it.hasFocus) onSectionFocus()
     }) {
@@ -376,67 +410,76 @@ private fun WatchlistHomeSection(
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Box(Modifier.fillMaxWidth().height(watchlistViewportHeight * 0.58f)) {
                 if (items.size > 1) {
-                    Row(Modifier.align(Alignment.TopStart).padding(top = 18.dp, start = 24.dp),
+                    Row(Modifier.align(Alignment.TopStart).padding(top = 18.dp, start = 28.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FloatingIconButton("‹", "Попередній тайтл", onClick = {
                             val previous = (selectedIndex - 1 + items.size) % items.size
                             selectedKey = "${items[previous].entry.title.type}:${items[previous].entry.title.id}"
                             onSectionFocus()
-                        }, glyphSize = 30.sp, navigateUpTo = settingsFocusRequester)
+                        }, glyphSize = 30.sp, navigateDownTo = detailsFocusRequester)
                         FloatingIconButton("›", "Наступний тайтл", onClick = {
                             val next = (selectedIndex + 1) % items.size
                             selectedKey = "${items[next].entry.title.type}:${items[next].entry.title.id}"
                             onSectionFocus()
                         }, glyphSize = 30.sp, focusRequester = arrowFocusRequester,
-                            navigateUpTo = settingsFocusRequester)
+                            navigateDownTo = detailsFocusRequester,
+                            navigateRightTo = settingsFocusRequester)
                     }
                 }
                 Column(Modifier.align(Alignment.BottomStart).fillMaxWidth(0.36f)
                     .padding(start = 40.dp, end = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                    if (selected.logoUrl != null) {
-                        var verticalLogo by remember(selected.logoUrl) { mutableStateOf(false) }
-                        // Keep the logo inside the left information column so it never
-                        // overlaps the confined backdrop on narrower TV layouts.
-                        val logoWidth = if (verticalLogo) 114.dp else 300.dp
-                        val logoHeight = if (verticalLogo) 140.dp else 86.dp
-                        Box(Modifier.width(logoWidth).height(logoHeight),
-                            contentAlignment = Alignment.Center) {
-                            AsyncImage(model = selected.logoUrl, contentDescription = null,
-                                contentScale = ContentScale.Fit,
-                                colorFilter = ColorFilter.tint(AppColors.PrimaryPurple.copy(alpha = 0.44f)),
-                                modifier = Modifier.offset(x = 1.dp, y = 2.dp)
-                                    .blur(3.dp).fillMaxSize())
-                            AsyncImage(model = selected.logoUrl, contentDescription = title.title,
-                                contentScale = ContentScale.Fit,
-                                onSuccess = { result ->
-                                    val image = result.result.drawable
-                                    verticalLogo = image.intrinsicHeight > image.intrinsicWidth
-                                },
-                                modifier = Modifier.fillMaxSize())
+                    Surface(
+                        onClick = {
+                            onOpenDetails(title.copy(matchedSeasonNumber = selected.selectedSeasonNumber))
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                            .focusRequester(detailsFocusRequester)
+                            .semantics { contentDescription = "Відкрити деталі: $displayTitle" }
+                            .onFocusChanged { detailsFocused = it.isFocused },
+                        scale = ClickableSurfaceDefaults.scale(scale = 1f, focusedScale = 1.03f),
+                        border = ClickableSurfaceDefaults.border(
+                            border = Border.None,
+                            focusedBorder = Border.None),
+                        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(10.dp)),
+                        colors = ClickableSurfaceDefaults.colors(
+                            containerColor = Color.Transparent,
+                            focusedContainerColor = Color.Transparent),
+                    ) {
+                        Column(Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                            if (selected.logoUrl != null) {
+                                var verticalLogo by remember(selected.logoUrl) { mutableStateOf(false) }
+                                // Keep the logo inside the left information column so it never
+                                // overlaps the confined backdrop on narrower TV layouts.
+                                val logoWidth = if (verticalLogo) 114.dp else 300.dp
+                                val logoHeight = if (verticalLogo) 140.dp else 86.dp
+                                Box(Modifier.width(logoWidth).height(logoHeight),
+                                    contentAlignment = Alignment.Center) {
+                                    AsyncImage(model = selected.logoUrl, contentDescription = title.title,
+                                        contentScale = ContentScale.Fit,
+                                        onSuccess = { result ->
+                                            val image = result.result.drawable
+                                            verticalLogo = image.intrinsicHeight > image.intrinsicWidth
+                                        },
+                                        modifier = Modifier.fillMaxSize())
+                                }
+                            }
+                            val titleAccentProgress = if (selected.logoUrl == null)
+                                detailsFocusProgress else 0f
+                            Text(displayTitle,
+                                style = MaterialTheme.typography.titleLarge.copy(
+                                    shadow = Shadow(AppColors.NeonCyan.copy(
+                                        alpha = 0.34f * titleAccentProgress), blurRadius = 10f)),
+                                color = lerp(Color(0xFFD1D5DB), Color.White, detailsFocusProgress),
+                                fontWeight = FontWeight.Bold, maxLines = 1,
+                                overflow = TextOverflow.Ellipsis)
+                            Text(titleMetadata, color = lerp(AppColors.TextSecondary,
+                                Color.White, detailsFocusProgress),
+                                style = MaterialTheme.typography.labelMedium, maxLines = 2,
+                                overflow = TextOverflow.Ellipsis)
                         }
                     }
-                    Text(title.ukrainianTitle?.takeIf(String::isNotBlank) ?: title.title,
-                        style = MaterialTheme.typography.titleLarge, color = Color.White,
-                        fontWeight = FontWeight.Bold, maxLines = 1,
-                        overflow = TextOverflow.Ellipsis)
-                    Text(listOfNotNull(title.year?.toString(),
-                        if (title.type == TmdbMediaType.TV) "Серіал" else "Фільм")
-                        .joinToString(" · "), color = AppColors.TextSecondary,
-                        style = MaterialTheme.typography.labelMedium, maxLines = 1,
-                        overflow = TextOverflow.Ellipsis)
-                    val countryNames = title.originCountries.mapNotNull { code ->
-                        Locale.forLanguageTag("und-${code.uppercase(Locale.ROOT)}")
-                            .getDisplayCountry(Locale.forLanguageTag("uk"))
-                            .takeIf(String::isNotBlank)
-                    }
-                    val titleFacts = countryNames.joinToString(" · ")
-                    if (titleFacts.isNotBlank()) {
-                        Text(titleFacts, color = AppColors.TextSecondary,
-                            style = MaterialTheme.typography.labelMedium, maxLines = 1,
-                            overflow = TextOverflow.Ellipsis)
-                    }
-                    Spacer(Modifier.height(8.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         Button(onClick = {
                             val resumeEpisode = selected.nextEpisodes
@@ -447,42 +490,37 @@ private fun WatchlistHomeSection(
                         }, contentPadding = PaddingValues(horizontal = 18.dp, vertical = 4.dp),
                             modifier = Modifier.height(48.dp)
                             .then(continueFocusRequester?.let(Modifier::focusRequester) ?: Modifier)
-                            .focusProperties { settingsFocusRequester?.let { up = it } }) {
-                            Text(if (selected.entry.source ==
-                                ua.any2b.tvplayer.data.TmdbWatchlistEntry.Source.IN_PROGRESS)
-                                "Продовжити перегляд" else "Дивитись",
-                                style = MaterialTheme.typography.labelLarge)
+                            .focusProperties {
+                                up = detailsFocusRequester
+                            }) {
+                            Text(continueLabel)
                         }
                     }
                 }
             }
-            if (title.type == TmdbMediaType.TV) Spacer(Modifier.weight(1f))
-            if (title.type == TmdbMediaType.TV) {
-                Column(Modifier.fillMaxWidth()) {
-                    Box(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
-                        selected.selectedSeasonNumber?.let { seasonNumber ->
-                            Text("Сезон $seasonNumber", color = Color.White,
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.align(Alignment.CenterStart)
-                                    .padding(start = 4.dp))
-                        }
-                        if (items.size > 1) {
-                            Row(Modifier.align(Alignment.Center),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically) {
-                                items.forEachIndexed { index, _ ->
-                                    Box(Modifier.size(if (index == selectedIndex) 7.dp else 5.dp)
-                                        .background(if (index == selectedIndex) Color.White
-                                            else Color.White.copy(alpha = 0.42f), CircleShape))
-                                }
-                            }
-                        }
+            Spacer(Modifier.weight(1f))
+            Row(Modifier.fillMaxWidth().height(34.dp).padding(horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                    if (title.type == TmdbMediaType.TV) {
+                        Text(season?.name?.takeIf(String::isNotBlank)
+                            ?: "Сезон ${selected.selectedSeasonNumber}",
+                            color = Color.White, style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold, maxLines = 1,
+                            overflow = TextOverflow.Ellipsis)
                     }
+                }
+                Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                    WatchlistPositionIndicator(items.size, selectedIndex)
+                }
+                Spacer(Modifier.weight(1f))
+            }
+            if (title.type == TmdbMediaType.TV) {
+                Column(Modifier.fillMaxWidth().height(210.dp)) {
                     if (selected.episodesLoading) {
                         Text("Завантаження серій…", color = AppColors.TextSecondary,
                             modifier = Modifier.padding(horizontal = 4.dp))
-                    } else if (selected.nextEpisodes.isNotEmpty()) {
+                    } else if (selected.nextEpisodes.isNotEmpty() || nextSeason != null) {
                         val firstUnwatched = selected.nextEpisodes.indexOfFirst { !it.watched }
                             .coerceAtLeast(0)
                         val episodeListState = rememberLazyListState()
@@ -495,6 +533,7 @@ private fun WatchlistHomeSection(
                                 (it.episodeCount ?: 0) > 0 }
                             .minByOrNull { it.number }
                         LazyRow(state = episodeListState,
+                            modifier = Modifier.fillMaxWidth().weight(1f),
                             horizontalArrangement = Arrangement.spacedBy(14.dp),
                             contentPadding = PaddingValues(horizontal = 4.dp)) {
                             items(selected.nextEpisodes, key = {
@@ -508,7 +547,7 @@ private fun WatchlistHomeSection(
                                         focusedContainerColor = if (card.watched) AppColors.AccentPurple
                                             else AppColors.SkeletonBg),
                                     shape = CardDefaults.shape(RoundedCornerShape(10.dp)),
-                                    modifier = Modifier.width(204.dp)) {
+                                    modifier = Modifier.width(204.dp).height(204.dp)) {
                                     Column {
                                         AsyncImage(model = card.cachedImagePath?.let(::File)
                                             ?: card.episode.stillUrl,
@@ -533,23 +572,23 @@ private fun WatchlistHomeSection(
                                 }
                             }
                             if (nextSeason != null) item(key = "next-season-${nextSeason.number}") {
-                                Column(Modifier.width(204.dp).height(204.dp)
-                                    .background(AppColors.SurfaceDark, RoundedCornerShape(10.dp))
-                                    .padding(16.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.Center) {
-                                    Text("Перейти до наступного сезону",
-                                        color = Color.White,
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Medium,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis)
-                                    Spacer(Modifier.height(12.dp))
-                                    Button(onClick = {
-                                        onSelectSeason(title, nextSeason.number)
-                                    }, modifier = Modifier.size(52.dp),
-                                        contentPadding = PaddingValues(0.dp)) {
-                                        Text(">", fontSize = 28.sp, lineHeight = 30.sp)
+                                Card(onClick = { onSelectSeason(title, nextSeason.number) },
+                                    scale = CardDefaults.scale(scale = 1f, focusedScale = 1f),
+                                    colors = CardDefaults.colors(
+                                        containerColor = AppColors.SurfaceDark,
+                                        focusedContainerColor = AppColors.AccentPurple),
+                                    shape = CardDefaults.shape(RoundedCornerShape(10.dp)),
+                                    modifier = Modifier.width(204.dp).height(204.dp)) {
+                                    Column(Modifier.fillMaxSize().padding(16.dp),
+                                        verticalArrangement = Arrangement.Center,
+                                        horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Text("Перейти до наступного сезону",
+                                            color = Color.White, fontWeight = FontWeight.Medium,
+                                            maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                        Text("Сезон ${nextSeason.number}  ›",
+                                            color = AppColors.NeonCyan,
+                                            style = MaterialTheme.typography.labelLarge,
+                                            modifier = Modifier.padding(top = 8.dp))
                                     }
                                 }
                             }
@@ -560,7 +599,36 @@ private fun WatchlistHomeSection(
                             modifier = Modifier.padding(horizontal = 4.dp))
                     }
                 }
+            } else {
+                Box(Modifier.fillMaxWidth().height(210.dp).padding(horizontal = 40.dp),
+                    contentAlignment = Alignment.CenterStart) {
+                    title.overview?.takeIf(String::isNotBlank)?.let { overview ->
+                        Text(overview,
+                            modifier = Modifier.fillMaxWidth(0.75f),
+                            color = Color(0xFFD1D5DB),
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 5,
+                            overflow = TextOverflow.Ellipsis)
+                    }
+                }
             }
+        }
+    }
+}
+
+@Composable
+private fun WatchlistPositionIndicator(itemCount: Int, selectedIndex: Int) {
+    val visibleCount = itemCount.coerceAtMost(9)
+    val firstIndex = if (itemCount <= visibleCount) 0 else
+        (selectedIndex - visibleCount / 2).coerceIn(0, itemCount - visibleCount)
+    Row(Modifier.semantics {
+        contentDescription = "Тайтл ${selectedIndex + 1} з $itemCount"
+    }, horizontalArrangement = Arrangement.spacedBy(7.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        repeat(visibleCount) { dotIndex ->
+            val active = firstIndex + dotIndex == selectedIndex
+            Box(Modifier.size(if (active) 8.dp else 6.dp)
+                .background(if (active) Color.White else Color(0xFF69717D), CircleShape))
         }
     }
 }

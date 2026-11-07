@@ -38,6 +38,7 @@ local.properties
 .gradle/
 .kotlin/
 .DS_Store
+/.local/
 
 # Keystore files & Signing properties
 *.jks

@@ -110,8 +110,7 @@ fun TmdbDetailsScreen(
         experimentalPalette?.background ?: AppColors.BackgroundDark else AppColors.BackgroundDark
     Box(Modifier.fillMaxSize().background(pageBackground).padding(32.dp)) {
         when (state) {
-            TmdbDetailsState.Loading -> Text("Завантаження деталей TMDB…",
-                modifier = Modifier.align(Alignment.Center), color = AppColors.AccentLight)
+            TmdbDetailsState.Loading -> TmdbDetailsPreparingScreen("Завантаження деталей TMDB…")
             is TmdbDetailsState.Error -> Column(
                 modifier = Modifier.align(Alignment.Center),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -158,6 +157,14 @@ fun TmdbDetailsScreen(
                 onBack = onBack,
             )
         }
+    }
+}
+
+@Composable
+internal fun TmdbDetailsPreparingScreen(message: String = "Підготовка оформлення…") {
+    Box(Modifier.fillMaxSize().background(AppColors.BackgroundDark),
+        contentAlignment = Alignment.Center) {
+        Text(message, color = AppColors.AccentLight)
     }
 }
 
@@ -239,7 +246,9 @@ private fun TmdbDetailsContent(
             Box(Modifier.fillMaxWidth().aspectRatio(2f / 3f)
                 .then(if (experimentalArtwork == null)
                     Modifier.clip(RoundedCornerShape(16.dp)) else Modifier)
-                .background(AppColors.SurfaceCard)) {
+                .background(if (experimentalArtwork != null)
+                    experimentalPalette?.background ?: AppColors.BackgroundDark
+                else AppColors.SurfaceCard)) {
                 if (experimentalArtwork != null && !favoritesLayout) {
                     FanartPoster(experimentalArtwork, title.title,
                         experimentalPalette?.background ?: AppColors.BackgroundDark,
@@ -283,6 +292,7 @@ private fun TmdbDetailsContent(
             if (experimentalArtwork != null) {
                 val metadata = listOfNotNull(
                     title.year?.toString(),
+                    if (title.type == TmdbMediaType.MOVIE) "Фільм" else "Серіал",
                     countries.joinToString(", ").takeIf(String::isNotBlank),
                     title.rating?.let { "TMDB: ${String.format(Locale.US, "%.1f", it)}" },
                 ).joinToString("  ·  ")
@@ -339,7 +349,8 @@ private fun TmdbDetailsContent(
                         contentScale = ContentScale.Fit,
                         modifier = Modifier.widthIn(max = 460.dp).height(82.dp))
                 } else {
-                    Text(title.title, modifier = Modifier.weight(1f, fill = false),
+                    Text(title.matchedSeasonTitle ?: title.ukrainianTitle ?: title.title,
+                        modifier = Modifier.weight(1f, fill = false),
                         style = MaterialTheme.typography.headlineLarge,
                         color = surfaceColors.text,
                         fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)

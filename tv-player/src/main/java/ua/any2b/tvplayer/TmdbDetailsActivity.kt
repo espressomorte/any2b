@@ -14,6 +14,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.core.tween
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ua.any2b.core.tmdb.TmdbMediaType
 import ua.any2b.tvplayer.data.ExternalVideoPlayers
@@ -26,6 +29,7 @@ import ua.any2b.tvplayer.data.TmdbPlaybackSelection
 import ua.any2b.tvplayer.data.AnitubeState
 import ua.any2b.tvplayer.ui.AppTheme
 import ua.any2b.tvplayer.ui.TmdbDetailsScreen
+import ua.any2b.tvplayer.ui.TmdbDetailsPreparingScreen
 import ua.any2b.tvplayer.ui.TmdbDetailsViewModel
 import ua.any2b.tvplayer.ui.TolokaSearchViewModel
 import ua.any2b.tvplayer.ui.TolokaSearchState
@@ -201,6 +205,8 @@ class TmdbDetailsActivity : ComponentActivity() {
                 val readyArtwork = (artworkState as? FanartArtworkState.Ready)
                     ?.takeIf { it.key == artworkKey }
                 val activePalette = if (experimental) readyArtwork?.palette else null
+                val waitForArtwork = experimental && readyDetails != null &&
+                    tmdbArtwork != null && readyArtwork == null
                 LaunchedEffect(tolokaState.search) { refreshPlaybackMarks() }
                 LaunchedEffect(detailsState, intent.getBooleanExtra(EXTRA_PLAYBACK_ONLY, false)) {
                     if (intent.getBooleanExtra(EXTRA_PLAYBACK_ONLY, false) &&
@@ -312,13 +318,16 @@ class TmdbDetailsActivity : ComponentActivity() {
                 FanartDayTheme(activePalette?.light == true) {
                 if (intent.getBooleanExtra(EXTRA_PLAYBACK_ONLY, false)) {
                     WatchlistPlaybackScreen()
+                } else if (waitForArtwork) {
+                    TmdbDetailsPreparingScreen()
                 } else {
+                AnimatedVisibility(visible = true, enter = fadeIn(tween(220))) {
                 TmdbDetailsScreen(
                     state = detailsState,
                     favoritesLayout = favoritesLayout,
                     torrentsOnly = torrentsOnly,
                     experimentalPalette = activePalette,
-                    experimentalArtwork = if (experimental) tmdbArtwork else null,
+                    experimentalArtwork = if (experimental) readyArtwork?.artwork else null,
                     fanartNotice = null,
                     toloka = tolokaState,
                     anitube = anitubeState,
@@ -357,7 +366,7 @@ class TmdbDetailsActivity : ComponentActivity() {
                         val details = (detailsViewModel.state.value as?
                             ua.any2b.tvplayer.ui.TmdbDetailsState.Ready)?.details
                         if (details != null) {
-                            startActivity(Intent(this, TrailerActivity::class.java).apply {
+                            startActivity(Intent(this@TmdbDetailsActivity, TrailerActivity::class.java).apply {
                                 putExtra(TrailerActivity.EXTRA_TYPE, details.title.type.path)
                                 putExtra(TrailerActivity.EXTRA_ID, details.title.id)
                                 putExtra(TrailerActivity.EXTRA_TITLE, details.title.originalTitle
@@ -371,10 +380,12 @@ class TmdbDetailsActivity : ComponentActivity() {
                     },
                     onRetryRelated = detailsViewModel::retryRelated,
                     onOpenRelated = { related ->
-                        startActivity(TvNavigation.details(this, related, torrentsOnly = torrentsOnly))
+                        startActivity(TvNavigation.details(this@TmdbDetailsActivity, related,
+                            torrentsOnly = torrentsOnly))
                     },
                     onBack = ::handleDetailsBack,
                 )
+                }
                 }
                 }
             }
