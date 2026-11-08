@@ -41,7 +41,7 @@ class MainActivity : ComponentActivity() {
                         startActivity(TvNavigation.details(this, title))
                     },
                     onOpenFavorite = { title ->
-                        startActivity(TvNavigation.details(this, title, favoritesLayout = true))
+                        startActivity(TvNavigation.details(this, title))
                     },
                     onRetry = viewModel::refreshPopular,
                     onMore = { category ->

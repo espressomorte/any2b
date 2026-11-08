@@ -53,7 +53,6 @@ class TmdbDetailsActivity : ComponentActivity() {
         const val EXTRA_PREFERRED_TITLE = "PREFERRED_TITLE"
         const val EXTRA_ORIGINAL_LANGUAGE = "ORIGINAL_LANGUAGE"
         const val EXTRA_ORIGINAL_TITLE = "ORIGINAL_TITLE"
-        const val EXTRA_FAVORITES_LAYOUT = "FAVORITES_LAYOUT"
         const val EXTRA_TORRENTS_ONLY = "TORRENTS_ONLY"
         const val EXTRA_AUTO_PLAY_EPISODE = "AUTO_PLAY_EPISODE"
         const val EXTRA_AUTO_PLAY_SOURCE = "AUTO_PLAY_SOURCE"
@@ -166,7 +165,6 @@ class TmdbDetailsActivity : ComponentActivity() {
         val originalLanguage = intent.getStringExtra(EXTRA_ORIGINAL_LANGUAGE)
         val originalTitle = intent.getStringExtra(EXTRA_ORIGINAL_TITLE)
         val seasonNumber = intent.getIntExtra(EXTRA_TMDB_SEASON, -1).takeIf { it >= 0 }
-        val favoritesLayout = intent.getBooleanExtra(EXTRA_FAVORITES_LAYOUT, false)
         val torrentsOnly = intent.getBooleanExtra(EXTRA_TORRENTS_ONLY, false)
         if (intent.getBooleanExtra(EXTRA_RETURN_TO_WATCHLIST, false)) {
             Log.i("WatchlistPlayback", "Playback resolver started tmdb=$tmdbType:$tmdbId " +
@@ -324,7 +322,6 @@ class TmdbDetailsActivity : ComponentActivity() {
                 AnimatedVisibility(visible = true, enter = fadeIn(tween(220))) {
                 TmdbDetailsScreen(
                     state = detailsState,
-                    favoritesLayout = favoritesLayout,
                     torrentsOnly = torrentsOnly,
                     experimentalPalette = activePalette,
                     experimentalArtwork = if (experimental) readyArtwork?.artwork else null,
@@ -361,7 +358,7 @@ class TmdbDetailsActivity : ComponentActivity() {
                     onSelectAnitubeEpisode = detailsViewModel::selectAnitubeEpisode,
                     onPlayAnitube = ::playAnitube,
                     onToggleFavorite = detailsViewModel::toggleFavorite,
-                    onToggleWatchlist = detailsViewModel::addToWatchlist,
+                    onToggleWatchlist = detailsViewModel::toggleWatchlist,
                     onTrailer = {
                         val details = (detailsViewModel.state.value as?
                             ua.any2b.tvplayer.ui.TmdbDetailsState.Ready)?.details

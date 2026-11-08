@@ -74,7 +74,6 @@ import java.util.Locale
 @Composable
 fun TmdbDetailsScreen(
     state: TmdbDetailsState,
-    favoritesLayout: Boolean = false,
     torrentsOnly: Boolean = false,
     experimentalArtwork: FanartArtwork? = null,
     experimentalPalette: FanartPalette? = null,
@@ -122,7 +121,6 @@ fun TmdbDetailsScreen(
             is TmdbDetailsState.Ready -> TmdbDetailsContent(
                 details = state.details,
                 activePanel = state.activePanel,
-                favoritesLayout = favoritesLayout,
                 torrentsOnly = torrentsOnly,
                 experimentalArtwork = experimentalArtwork,
                 experimentalPalette = experimentalPalette,
@@ -173,7 +171,6 @@ internal fun TmdbDetailsPreparingScreen(message: String = "Підготовка 
 private fun TmdbDetailsContent(
     details: TmdbDetails,
     activePanel: Panel,
-    favoritesLayout: Boolean,
     torrentsOnly: Boolean,
     experimentalArtwork: FanartArtwork?,
     experimentalPalette: FanartPalette?,
@@ -242,14 +239,14 @@ private fun TmdbDetailsContent(
     }
 
     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(36.dp)) {
-        Column(Modifier.width(220.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.width(190.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Box(Modifier.fillMaxWidth().aspectRatio(2f / 3f)
                 .then(if (experimentalArtwork == null)
                     Modifier.clip(RoundedCornerShape(16.dp)) else Modifier)
                 .background(if (experimentalArtwork != null)
                     experimentalPalette?.background ?: AppColors.BackgroundDark
                 else AppColors.SurfaceCard)) {
-                if (experimentalArtwork != null && !favoritesLayout) {
+                if (experimentalArtwork != null) {
                     FanartPoster(experimentalArtwork, title.title,
                         experimentalPalette?.background ?: AppColors.BackgroundDark,
                         Modifier.fillMaxSize())
@@ -257,7 +254,7 @@ private fun TmdbDetailsContent(
                     AsyncImage(model = title.posterUrl, contentDescription = title.title,
                         contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
                 }
-                if (experimentalArtwork == null && !favoritesLayout) title.rating?.let { score ->
+                if (experimentalArtwork == null) title.rating?.let { score ->
                     ReleaseBadge((score * 10).toInt(), Modifier.align(Alignment.TopEnd).padding(8.dp))
                 }
             }
@@ -267,7 +264,8 @@ private fun TmdbDetailsContent(
                     selected = isFavorite, modifier = Modifier.weight(1f),
                     surfaceColors = surfaceColors, onClick = onToggleFavorite)
                 TmdbDetailAction(FaIcons.EYE,
-                    if (isWatchlisted) "У плані перегляду" else "Додати в план перегляду",
+                    if (isWatchlisted) "Вилучити з плану перегляду"
+                    else "Додати в план перегляду",
                     selected = isWatchlisted, modifier = Modifier.weight(1f),
                     surfaceColors = surfaceColors, onClick = onToggleWatchlist)
                 TmdbDetailAction(FaIcons.FILM, "Відкрити трейлер",
@@ -276,18 +274,6 @@ private fun TmdbDetailsContent(
                     modifier = Modifier.weight(1f), surfaceColors = surfaceColors,
                     onClick = { showRelated = true })
             }
-            if (favoritesLayout) {
-                if (title.type == TmdbMediaType.TV) {
-                    details.seasons?.let { Text("Сезонів: $it", color = dayText) }
-                    details.episodes?.let { Text("Серій: $it", color = dayText) }
-                }
-                details.runtimeMinutes?.let { Text("Тривалість: $it хв", color = dayText) }
-                if (!title.overview.isNullOrBlank()) {
-                    TmdbInfoChip("Синопсис", surfaceColors) { infoDialog = "synopsis" }
-                    Text(title.overview.orEmpty(), color = dayText, maxLines = 5, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.clickable { infoDialog = "synopsis" })
-                }
-            } else {
             val typeLabel = if (title.type == TmdbMediaType.MOVIE) "Фільм" else "Серіал"
             if (experimentalArtwork != null) {
                 val metadata = listOfNotNull(
@@ -308,40 +294,12 @@ private fun TmdbDetailsContent(
                 Text(details.genres.joinToString(" · "), color = dayText,
                     style = MaterialTheme.typography.bodySmall)
             }
-            }
         }
 
         Column(Modifier.weight(1f).fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween) {
-                if (favoritesLayout) {
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                            if (experimentalArtwork?.logoUrl != null) {
-                                FanartLogo(experimentalArtwork, title.title,
-                                    Modifier.weight(1f, fill = false).widthIn(max = 460.dp).height(82.dp))
-                            } else if (details.logoUrl != null) {
-                                AsyncImage(model = details.logoUrl, contentDescription = title.title,
-                                    contentScale = ContentScale.Fit,
-                                    modifier = Modifier.weight(1f, fill = false).widthIn(max = 460.dp).height(82.dp))
-                            } else {
-                                Text(title.title, style = MaterialTheme.typography.headlineLarge,
-                                    color = surfaceColors.text, fontWeight = FontWeight.Bold,
-                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
-                        }
-                        Text(title.matchedSeasonTitle ?: title.ukrainianTitle ?: title.title,
-                            style = MaterialTheme.typography.titleMedium, color = AppColors.TextLight,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            title.year?.let { Text(it.toString(), color = AppColors.TextSecondary) }
-                            if (countries.isNotEmpty()) Text(countries.joinToString(", "), color = AppColors.TextSecondary)
-                            title.rating?.let { Text("TMDB: ${String.format(Locale.US, "%.1f", it)}",
-                                color = AppColors.TextSecondary) }
-                        }
-                    }
-                } else if (experimentalArtwork != null) {
+                if (experimentalArtwork != null) {
                     FanartLogo(experimentalArtwork, title.title,
                         Modifier.widthIn(max = 460.dp).height(82.dp))
                 } else if (details.logoUrl != null) {
@@ -355,7 +313,7 @@ private fun TmdbDetailsContent(
                         color = surfaceColors.text,
                         fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
-                if (!favoritesLayout) Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (!title.overview.isNullOrBlank()) {
                         TmdbInfoChip("Synopsis", surfaceColors) { infoDialog = "synopsis" }
                     }
@@ -364,7 +322,7 @@ private fun TmdbDetailsContent(
                     }
                 }
             }
-            if (!favoritesLayout) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 val secondaryTitle = title.englishTitle?.takeIf { it != title.title }
                     ?: title.originalTitle?.takeIf { it != title.title }

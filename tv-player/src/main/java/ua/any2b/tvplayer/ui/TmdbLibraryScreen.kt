@@ -39,9 +39,16 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.semantics.contentDescription
@@ -103,6 +110,7 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
     val drawerMoviesFocusRequester = remember { FocusRequester() }
     val drawerSearchFocusRequester = remember { FocusRequester() }
     val drawerSettingsFocusRequester = remember { FocusRequester() }
+    var drawerReturnFocusRequester by remember { mutableStateOf<FocusRequester?>(null) }
     var drawerOpen by remember { mutableStateOf(false) }
     val continueFocusRequester = remember { FocusRequester() }
     val scope = rememberCoroutineScope()
@@ -142,6 +150,7 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
                         onSectionFocus = restoreWatchlist,
                         modifier = Modifier.height(watchlistViewportHeight),
                         drawerFocusRequester = drawerHomeFocusRequester,
+                        onContentFocusRequester = { drawerReturnFocusRequester = it },
                         continueFocusRequester = continueFocusRequester)
                 }
                 state.mainSections.filter { it.enabled }.forEach { section ->
@@ -151,52 +160,60 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
                                 onMore = { onMore("history") },
                                 onLongClick = { historyMenuTitle = it },
                                 onSectionFocus = { alignSection("history") },
-                                drawerFocusRequester = drawerHomeFocusRequester)
+                                drawerFocusRequester = drawerHomeFocusRequester,
+                                onContentFocusRequester = { drawerReturnFocusRequester = it })
                         }
                         "favorites" -> if (state.favorites.isNotEmpty()) item(key = "favorites") {
                             TmdbLibraryRow(section.title, state.favorites, onOpenFavorite,
                                 onMore = { onMore("favorites") },
                                 onSectionFocus = { alignSection("favorites") },
-                                drawerFocusRequester = drawerHomeFocusRequester)
+                                drawerFocusRequester = drawerHomeFocusRequester,
+                                onContentFocusRequester = { drawerReturnFocusRequester = it })
                         }
                         "recommendations" -> if (state.recommendations.isNotEmpty())
                             item(key = "recommendations") {
                                 TmdbLibraryRow(section.title, state.recommendations, onOpen,
                                     onMore = { onMore("recommendations") },
                                     onSectionFocus = { alignSection("recommendations") },
-                                    drawerFocusRequester = drawerHomeFocusRequester)
+                                    drawerFocusRequester = drawerHomeFocusRequester,
+                                    onContentFocusRequester = { drawerReturnFocusRequester = it })
                             }
                         "animation_tv" -> item(key = "animation_tv") {
                             TmdbPopularRow(section.title, state.tv, onOpen,
                                 onRetry = { onRetry(TmdbMediaType.TV) },
                                 onMore = { onMore("animation_tv") },
                                 onSectionFocus = { alignSection("animation_tv") },
-                                drawerFocusRequester = drawerHomeFocusRequester)
+                                drawerFocusRequester = drawerHomeFocusRequester,
+                                onContentFocusRequester = { drawerReturnFocusRequester = it })
                         }
                         "animation_movie" -> item(key = "animation_movie") {
                             TmdbPopularRow(section.title, state.movies, onOpen,
                                 onRetry = { onRetry(TmdbMediaType.MOVIE) },
                                 onMore = { onMore("animation_movie") },
                                 onSectionFocus = { alignSection("animation_movie") },
-                                drawerFocusRequester = drawerHomeFocusRequester)
+                                drawerFocusRequester = drawerHomeFocusRequester,
+                                onContentFocusRequester = { drawerReturnFocusRequester = it })
                         }
                         "mal_top" -> item(key = "mal_top") {
                             MalTopRow(section.title, state.malTop, onOpen,
                                 onMore = { onMore("mal_top") }, onRetry = onRetryMal,
                                 onSectionFocus = { alignSection("mal_top") },
-                                drawerFocusRequester = drawerHomeFocusRequester)
+                                drawerFocusRequester = drawerHomeFocusRequester,
+                                onContentFocusRequester = { drawerReturnFocusRequester = it })
                         }
                         "trending" -> item(key = "trending") {
                             AniListHomeRow(section.title, state.trending, onOpen,
                                 onMore = { onMore("trending") }, onRetry = onRetryAniList,
                                 onSectionFocus = { alignSection("trending") },
-                                drawerFocusRequester = drawerHomeFocusRequester)
+                                drawerFocusRequester = drawerHomeFocusRequester,
+                                onContentFocusRequester = { drawerReturnFocusRequester = it })
                         }
                         "popular_season" -> item(key = "popular_season") {
                             AniListHomeRow(section.title, state.popularSeason, onOpen,
                                 onMore = { onMore("popular_season") }, onRetry = onRetryAniList,
                                 onSectionFocus = { alignSection("popular_season") },
-                                drawerFocusRequester = drawerHomeFocusRequester)
+                                drawerFocusRequester = drawerHomeFocusRequester,
+                                onContentFocusRequester = { drawerReturnFocusRequester = it })
                         }
                     }
                 }
@@ -205,32 +222,37 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
                     WatchlistHomeSection(state.watchlist, onSelectWatchlistSeason,
                         onOpenEpisode, onContinueWatchlist, onOpen,
                         onSectionFocus = { alignSection("watchlist") },
-                        drawerFocusRequester = drawerHomeFocusRequester)
+                        drawerFocusRequester = drawerHomeFocusRequester,
+                        onContentFocusRequester = { drawerReturnFocusRequester = it })
                 }
                 if (state.history.isNotEmpty()) item(key = "history") {
                     TmdbLibraryRow("Історія переглядів", state.history, onOpen,
                         onMore = { onMore("history") },
                         onLongClick = { historyMenuTitle = it },
                         onSectionFocus = { alignSection("history") },
-                        drawerFocusRequester = drawerHomeFocusRequester)
+                        drawerFocusRequester = drawerHomeFocusRequester,
+                        onContentFocusRequester = { drawerReturnFocusRequester = it })
                 }
                 item(key = "tv") {
                     TmdbPopularRow("Популярні серіали", state.tv, onOpen,
                         onRetry = { onRetry(TmdbMediaType.TV) }, onMore = { onMore("tv") },
                         onSectionFocus = { alignSection("tv") },
-                        drawerFocusRequester = drawerHomeFocusRequester)
+                        drawerFocusRequester = drawerHomeFocusRequester,
+                        onContentFocusRequester = { drawerReturnFocusRequester = it })
                 }
                 item(key = "movies") {
                     TmdbPopularRow("Популярні фільми", state.movies, onOpen,
                         onRetry = { onRetry(TmdbMediaType.MOVIE) }, onMore = { onMore("movie") },
                         onSectionFocus = { alignSection("movies") },
-                        drawerFocusRequester = drawerHomeFocusRequester)
+                        drawerFocusRequester = drawerHomeFocusRequester,
+                        onContentFocusRequester = { drawerReturnFocusRequester = it })
                 }
                 if (state.favorites.isNotEmpty()) item(key = "favorites") {
                     TmdbLibraryRow("Обрані тайтли", state.favorites, onOpenFavorite,
                         onMore = { onMore("favorites") },
                         onSectionFocus = { alignSection("favorites") },
-                        drawerFocusRequester = drawerHomeFocusRequester)
+                        drawerFocusRequester = drawerHomeFocusRequester,
+                        onContentFocusRequester = { drawerReturnFocusRequester = it })
                 }
             }
             }
@@ -263,6 +285,7 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
             moviesFocusRequester = drawerMoviesFocusRequester,
             searchFocusRequester = drawerSearchFocusRequester,
             settingsFocusRequester = drawerSettingsFocusRequester,
+            returnFocusRequester = drawerReturnFocusRequester,
             expanded = drawerOpen,
             onExpandedChange = { drawerOpen = it },
             onHome = {
@@ -286,6 +309,7 @@ private fun NavigationDrawer(
     moviesFocusRequester: FocusRequester,
     searchFocusRequester: FocusRequester,
     settingsFocusRequester: FocusRequester,
+    returnFocusRequester: FocusRequester?,
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
     onHome: () -> Unit,
@@ -310,27 +334,26 @@ private fun NavigationDrawer(
                 AppColors.BackgroundDark.copy(alpha = 0.94f),
                 AppColors.BackgroundDark.copy(alpha = 0.72f),
             )))
-            .padding(top = 20.dp, bottom = 20.dp)
-            .focusGroup(),
+            .padding(top = 20.dp, bottom = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        DrawerIcon(FaIcons.HOME, "Додому", homeFocusRequester,
+        DrawerIcon(FaIcons.HOME, "Додому", homeFocusRequester, returnFocusRequester,
             onFocus = { onExpandedChange(true) }, onClick = {
                 onExpandedChange(false)
                 onHome()
             })
-        DrawerIcon(FaIcons.FILM, "Фільми TMDB", moviesFocusRequester,
+        DrawerIcon(FaIcons.FILM, "Фільми TMDB", moviesFocusRequester, returnFocusRequester,
             onFocus = { onExpandedChange(true) }, onClick = {
                 onExpandedChange(false)
                 onMovies()
             })
-        DrawerIcon(FaIcons.SEARCH, "Пошук", searchFocusRequester,
+        DrawerIcon(FaIcons.SEARCH, "Пошук", searchFocusRequester, returnFocusRequester,
             onFocus = { onExpandedChange(true) }, onClick = {
                 onExpandedChange(false)
                 onSearch()
             })
-        DrawerIcon(FaIcons.COG, "Налаштування", settingsFocusRequester,
+        DrawerIcon(FaIcons.COG, "Налаштування", settingsFocusRequester, returnFocusRequester,
             onFocus = { onExpandedChange(true) }, onClick = {
                 onExpandedChange(false)
                 onSettings()
@@ -344,15 +367,26 @@ private fun DrawerIcon(
     glyph: String,
     description: String,
     focusRequester: FocusRequester,
+    returnFocusRequester: FocusRequester?,
     onFocus: () -> Unit,
     onClick: () -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
     Surface(
         onClick = onClick,
         modifier = Modifier
             .size(50.dp)
             .focusRequester(focusRequester)
+            .focusProperties { returnFocusRequester?.let { right = it } }
+            .onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionRight) {
+                    if (returnFocusRequester != null) {
+                        returnFocusRequester.requestFocus()
+                        true
+                    } else focusManager.moveFocus(FocusDirection.Right)
+                } else false
+            }
             .semantics { contentDescription = description }
             .onFocusChanged {
                 focused = it.isFocused
@@ -404,6 +438,7 @@ private fun FloatingIconButton(
     navigateDownTo: FocusRequester? = null,
     navigateLeftTo: FocusRequester? = null,
     navigateRightTo: FocusRequester? = null,
+    onFocused: ((FocusRequester) -> Unit)? = null,
 ) {
     var focused by remember { mutableStateOf(false) }
     Surface(
@@ -417,7 +452,10 @@ private fun FloatingIconButton(
                 navigateRightTo?.let { right = it }
             }
             .size(50.dp).semantics { contentDescription = description }
-            .onFocusChanged { focused = it.isFocused },
+            .onFocusChanged {
+                focused = it.isFocused
+                if (it.isFocused) focusRequester?.let { requester -> onFocused?.invoke(requester) }
+            },
         scale = ClickableSurfaceDefaults.scale(scale = 1f, focusedScale = 1f),
         border = ClickableSurfaceDefaults.border(
             border = Border.None,
@@ -452,6 +490,7 @@ private fun WatchlistHomeSection(
     onSectionFocus: () -> Unit,
     modifier: Modifier = Modifier,
     drawerFocusRequester: FocusRequester? = null,
+    onContentFocusRequester: (FocusRequester) -> Unit = {},
     continueFocusRequester: FocusRequester? = null,
 ) {
     var selectedKey by remember {
@@ -529,12 +568,15 @@ private fun WatchlistHomeSection(
                 if (items.size > 1) {
                     Row(Modifier.align(Alignment.TopStart).padding(top = 18.dp, start = 28.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        val previousArrowFocusRequester = remember { FocusRequester() }
                         FloatingIconButton("‹", "Попередній тайтл", onClick = {
                             val previous = (selectedIndex - 1 + items.size) % items.size
                             selectedKey = "${items[previous].entry.title.type}:${items[previous].entry.title.id}"
                             onSectionFocus()
-                        }, glyphSize = 30.sp, navigateDownTo = detailsFocusRequester,
-                            navigateLeftTo = drawerFocusRequester)
+                        }, glyphSize = 30.sp, focusRequester = previousArrowFocusRequester,
+                            navigateDownTo = detailsFocusRequester,
+                            navigateLeftTo = drawerFocusRequester,
+                            onFocused = onContentFocusRequester)
                         FloatingIconButton("›", "Наступний тайтл", onClick = {
                             val next = (selectedIndex + 1) % items.size
                             selectedKey = "${items[next].entry.title.type}:${items[next].entry.title.id}"
@@ -553,7 +595,10 @@ private fun WatchlistHomeSection(
                             .focusRequester(detailsFocusRequester)
                             .focusProperties { drawerFocusRequester?.let { left = it } }
                             .semantics { contentDescription = "Відкрити деталі: $displayTitle" }
-                            .onFocusChanged { detailsFocused = it.isFocused },
+                            .onFocusChanged {
+                                detailsFocused = it.isFocused
+                                if (it.isFocused) onContentFocusRequester(detailsFocusRequester)
+                            },
                         scale = ClickableSurfaceDefaults.scale(scale = 1f, focusedScale = 1.03f),
                         border = ClickableSurfaceDefaults.border(
                             border = Border.None,
@@ -610,6 +655,9 @@ private fun WatchlistHomeSection(
                             .focusProperties {
                                 up = detailsFocusRequester
                                 drawerFocusRequester?.let { left = it }
+                            }
+                            .onFocusChanged {
+                                if (it.isFocused) continueFocusRequester?.let(onContentFocusRequester)
                             }) {
                             Text(continueLabel)
                         }
@@ -657,6 +705,7 @@ private fun WatchlistHomeSection(
                             items(selected.nextEpisodes, key = {
                                 "${it.episode.seasonNumber}:${it.episode.episodeNumber}"
                             }) { card ->
+                                val episodeFocusRequester = remember(card.episode.id) { FocusRequester() }
                                 Card(onClick = { onOpenEpisode(title, card.episode) },
                                     scale = CardDefaults.scale(scale = 1f, focusedScale = 1f),
                                     colors = CardDefaults.colors(
@@ -666,10 +715,14 @@ private fun WatchlistHomeSection(
                                             else AppColors.SkeletonBg),
                                     shape = CardDefaults.shape(RoundedCornerShape(10.dp)),
                                     modifier = Modifier.width(204.dp).height(204.dp)
+                                        .focusRequester(episodeFocusRequester)
                                         .focusProperties {
                                             if (card == selected.nextEpisodes.firstOrNull()) {
                                                 drawerFocusRequester?.let { left = it }
                                             }
+                                        }
+                                        .onFocusChanged {
+                                            if (it.isFocused) onContentFocusRequester(episodeFocusRequester)
                                         }) {
                                     Column {
                                         AsyncImage(model = card.cachedImagePath?.let(::File)
@@ -759,7 +812,8 @@ private fun WatchlistPositionIndicator(itemCount: Int, selectedIndex: Int) {
 @Composable
 private fun AniListHomeRow(title: String, state: AniListHomeState,
     onOpen: (TmdbTitle) -> Unit, onMore: () -> Unit, onRetry: () -> Unit,
-    onSectionFocus: () -> Unit, drawerFocusRequester: FocusRequester? = null) {
+    onSectionFocus: () -> Unit, drawerFocusRequester: FocusRequester? = null,
+    onContentFocusRequester: (FocusRequester) -> Unit = {}) {
     when (state) {
         AniListHomeState.Loading -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(title, style = MaterialTheme.typography.titleLarge, color = Color.White)
@@ -772,7 +826,8 @@ private fun AniListHomeRow(title: String, state: AniListHomeState,
         }
         is AniListHomeState.Results -> if (state.titles.isNotEmpty())
             TmdbLibraryRow(title, state.titles, onOpen, onMore,
-                onSectionFocus = onSectionFocus, drawerFocusRequester = drawerFocusRequester)
+                onSectionFocus = onSectionFocus, drawerFocusRequester = drawerFocusRequester,
+                onContentFocusRequester = onContentFocusRequester)
     }
 }
 
@@ -780,7 +835,8 @@ private fun AniListHomeRow(title: String, state: AniListHomeState,
 @Composable
 private fun MalTopRow(title: String, state: MalTopState, onOpen: (TmdbTitle) -> Unit,
     onMore: () -> Unit, onRetry: () -> Unit, onSectionFocus: () -> Unit = {},
-    drawerFocusRequester: FocusRequester? = null) {
+    drawerFocusRequester: FocusRequester? = null,
+    onContentFocusRequester: (FocusRequester) -> Unit = {}) {
     when (state) {
         MalTopState.Loading -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(title, style = MaterialTheme.typography.titleLarge, color = Color.White)
@@ -794,7 +850,8 @@ private fun MalTopRow(title: String, state: MalTopState, onOpen: (TmdbTitle) -> 
         is MalTopState.Results -> if (state.titles.isNotEmpty())
             TmdbLibraryRow(title, state.titles, onOpen, onMore,
                 showMore = state.hasMore || state.titles.size > 13,
-                onSectionFocus = onSectionFocus, drawerFocusRequester = drawerFocusRequester)
+                onSectionFocus = onSectionFocus, drawerFocusRequester = drawerFocusRequester,
+                onContentFocusRequester = onContentFocusRequester)
     }
 }
 
@@ -802,7 +859,8 @@ private fun MalTopRow(title: String, state: MalTopState, onOpen: (TmdbTitle) -> 
 @Composable
 private fun TmdbPopularRow(title: String, state: TmdbPopularState,
     onOpen: (TmdbTitle) -> Unit, onRetry: () -> Unit, onMore: () -> Unit,
-    onSectionFocus: () -> Unit = {}, drawerFocusRequester: FocusRequester? = null) {
+    onSectionFocus: () -> Unit = {}, drawerFocusRequester: FocusRequester? = null,
+    onContentFocusRequester: (FocusRequester) -> Unit = {}) {
     when (state) {
         TmdbPopularState.Loading -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(title, style = MaterialTheme.typography.titleLarge, color = Color.White)
@@ -815,7 +873,8 @@ private fun TmdbPopularRow(title: String, state: TmdbPopularState,
         }
         is TmdbPopularState.Results -> if (state.titles.isNotEmpty())
             TmdbLibraryRow(title, state.titles, onOpen, onMore,
-                onSectionFocus = onSectionFocus, drawerFocusRequester = drawerFocusRequester)
+                onSectionFocus = onSectionFocus, drawerFocusRequester = drawerFocusRequester,
+                onContentFocusRequester = onContentFocusRequester)
     }
 }
 
@@ -824,7 +883,8 @@ private fun TmdbLibraryRow(title: String, titles: List<TmdbTitle>,
     onOpen: (TmdbTitle) -> Unit, onMore: () -> Unit,
     showMore: Boolean = titles.size > 13, onSectionFocus: () -> Unit = {},
     onLongClick: ((TmdbTitle) -> Unit)? = null,
-    drawerFocusRequester: FocusRequester? = null) {
+    drawerFocusRequester: FocusRequester? = null,
+    onContentFocusRequester: (FocusRequester) -> Unit = {}) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(title, style = MaterialTheme.typography.titleLarge, color = Color.White,
             modifier = Modifier.padding(horizontal = 4.dp))
@@ -833,7 +893,8 @@ private fun TmdbLibraryRow(title: String, titles: List<TmdbTitle>,
             items(titles.take(13), key = { "${it.type}:${it.id}" }) { item ->
                 TmdbPosterCard(item, onClick = { onOpen(item) }, onFocused = onSectionFocus,
                     onLongClick = onLongClick?.let { callback -> { callback(item) } },
-                    navigateLeftTo = if (item == titles.firstOrNull()) drawerFocusRequester else null)
+                    navigateLeftTo = if (item == titles.firstOrNull()) drawerFocusRequester else null,
+                    onFocusTarget = if (item == titles.firstOrNull()) onContentFocusRequester else null)
             }
             if (showMore) item(key = "more") { MoreCard(onClick = onMore) }
         }

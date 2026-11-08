@@ -13,7 +13,6 @@ object TvNavigation {
         preferredTitle: String? = null,
         originalLanguage: String? = title.originalLanguage,
         originalTitle: String? = title.originalTitle,
-        favoritesLayout: Boolean = false,
         torrentsOnly: Boolean = false,
     ): Intent = Intent(context, TmdbDetailsActivity::class.java).apply {
         putExtra(TmdbDetailsActivity.EXTRA_TMDB_ID, title.id)
@@ -23,7 +22,6 @@ object TvNavigation {
         preferredTitle?.let { putExtra(TmdbDetailsActivity.EXTRA_PREFERRED_TITLE, it) }
         originalLanguage?.let { putExtra(TmdbDetailsActivity.EXTRA_ORIGINAL_LANGUAGE, it) }
         originalTitle?.let { putExtra(TmdbDetailsActivity.EXTRA_ORIGINAL_TITLE, it) }
-        if (favoritesLayout) putExtra(TmdbDetailsActivity.EXTRA_FAVORITES_LAYOUT, true)
         if (torrentsOnly) putExtra(TmdbDetailsActivity.EXTRA_TORRENTS_ONLY, true)
     }
 
@@ -35,7 +33,6 @@ object TvNavigation {
         preferredTitle: String? = null,
         originalLanguage: String? = null,
         originalTitle: String? = null,
-        favoritesLayout: Boolean = false,
         torrentsOnly: Boolean = false,
     ): Intent = Intent(context, TmdbDetailsActivity::class.java).apply {
         putExtra(TmdbDetailsActivity.EXTRA_TMDB_ID, id)
@@ -44,7 +41,6 @@ object TvNavigation {
         preferredTitle?.let { putExtra(TmdbDetailsActivity.EXTRA_PREFERRED_TITLE, it) }
         originalLanguage?.let { putExtra(TmdbDetailsActivity.EXTRA_ORIGINAL_LANGUAGE, it) }
         originalTitle?.let { putExtra(TmdbDetailsActivity.EXTRA_ORIGINAL_TITLE, it) }
-        if (favoritesLayout) putExtra(TmdbDetailsActivity.EXTRA_FAVORITES_LAYOUT, true)
         if (torrentsOnly) putExtra(TmdbDetailsActivity.EXTRA_TORRENTS_ONLY, true)
     }
 }
