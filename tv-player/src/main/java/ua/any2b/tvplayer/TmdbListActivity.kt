@@ -21,7 +21,6 @@ class TmdbListActivity : ComponentActivity() {
                 TmdbListScreen(viewModel.state.collectAsStateWithLifecycle().value,
                     onOpen = { title ->
                         startActivity(TvNavigation.details(this, title,
-                            favoritesLayout = intent.getStringExtra(EXTRA_CATEGORY) == "favorites",
                             torrentsOnly = generalCatalog))
                     },
                     onSort = viewModel::changeSort,

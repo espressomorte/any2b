@@ -15,6 +15,7 @@ private val FontAwesomeSolid = FontFamily(Font(R.font.fa_solid_900))
 object FaIcons {
     const val PENCIL = "\uf303"
     const val COG = "\uf013"
+    const val HOME = "\uf015"
     const val SEARCH = "\uf002"
     const val SEARCH_PLUS = "\uf00e"
     const val RECYCLE = "\uf1b8"

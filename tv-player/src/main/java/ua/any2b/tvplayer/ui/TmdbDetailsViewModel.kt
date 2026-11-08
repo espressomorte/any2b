@@ -77,14 +77,19 @@ class TmdbDetailsViewModel(application: Application) : AndroidViewModel(applicat
         _state.value = ready.copy(isFavorite = selected)
     }
 
-    fun addToWatchlist() {
+    fun toggleWatchlist() {
         val ready = _state.value as? TmdbDetailsState.Ready ?: return
-        if (ready.details.title.type == TmdbMediaType.TV)
-            watchlist.saveSeasons(ready.details.title.id, ready.details.seasonEntries)
-        watchlist.saveLogo(ready.details.title.type, ready.details.title.id,
-            ready.details.logoUrl)
-        watchlist.addManual(ready.details.title)
-        _state.value = ready.copy(isWatchlisted = true)
+        if (ready.isWatchlisted) {
+            watchlist.remove(ready.details.title)
+            _state.value = ready.copy(isWatchlisted = false)
+        } else {
+            if (ready.details.title.type == TmdbMediaType.TV)
+                watchlist.saveSeasons(ready.details.title.id, ready.details.seasonEntries)
+            watchlist.saveLogo(ready.details.title.type, ready.details.title.id,
+                ready.details.logoUrl)
+            watchlist.addManual(ready.details.title)
+            _state.value = ready.copy(isWatchlisted = true)
+        }
     }
 
     fun retryRelated() {

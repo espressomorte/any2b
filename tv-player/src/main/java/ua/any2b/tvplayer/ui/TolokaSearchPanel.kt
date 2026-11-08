@@ -145,11 +145,13 @@ internal fun TolokaSearchPanel(
                         }
                     }
                     if (searchState.weakHits.isNotEmpty()) {
+                        val weakHitsLabel = if (showWeak || selectedWeak)
+                            "Згорнути сумнівні збіги"
+                        else "…Показати ще ${searchState.weakHits.size} сумнівних збігів"
                         Button(onClick = { showWeak = !showWeak },
                             modifier = Modifier.fillMaxWidth()) {
-                            Text(if (showWeak || selectedWeak)
-                                "Згорнути сумнівні збіги"
-                            else "…  Показати ще ${searchState.weakHits.size} сумнівних збігів")
+                            Text(weakHitsLabel, fontSize = 14.sp, maxLines = 1,
+                                overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
                         }
                     }
                     if (searchState.rejectedHits.isNotEmpty()) {
