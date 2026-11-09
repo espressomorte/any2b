@@ -10,6 +10,8 @@ import androidx.media3.common.Player
 interface PlayerTransport {
     fun currentPositionMs(): Long
     fun durationMs(): Long
+    fun bufferedPositionMs(): Long?
+    fun bufferFillPercentage(): Int?
     fun isPlaying(): Boolean
     fun play()
     fun pause()
@@ -20,6 +22,14 @@ interface PlayerTransport {
 class Media3PlayerTransport(private val player: Player) : PlayerTransport {
     override fun currentPositionMs() = player.currentPosition
     override fun durationMs() = player.duration
+    override fun bufferedPositionMs() = player.bufferedPosition
+    override fun bufferFillPercentage(): Int =
+        (((player.bufferedPosition - player.currentPosition).coerceAtLeast(0L) * 100L) / MAX_BUFFER_MS)
+            .coerceIn(0L, 100L).toInt()
+
+    private companion object {
+        const val MAX_BUFFER_MS = 120_000L
+    }
     override fun isPlaying() = player.isPlaying
     override fun play() = player.play()
     override fun pause() = player.pause()
@@ -44,6 +54,9 @@ class PlayerControlsController(
     private val seekBar = controls.seekBar
     private val positionLabel = controls.positionLabel
     private val durationLabel = controls.durationLabel
+    private val bufferLabel = controls.bufferLabel
+    private val bufferIndicator = controls.bufferIndicator
+    private val bufferContainer = controls.bufferContainer
     private var transport: PlayerTransport? = null
     private var isScrubbing = false
 
@@ -216,6 +229,16 @@ class PlayerControlsController(
             positionLabel.text = formatTime(position)
         }
         durationLabel.text = formatTime(duration)
+        val bufferFillPercentage = current.bufferFillPercentage()?.coerceIn(0, 100)
+        bufferContainer.visibility = if (bufferFillPercentage == null) View.GONE else View.VISIBLE
+        bufferFillPercentage?.let {
+            bufferIndicator.setBufferPercentage(it)
+            bufferLabel.text = "$it%"
+        }
+        val bufferedPosition = current.bufferedPositionMs()
+        seekBar.secondaryProgress = if (durationSeconds > 0 && bufferedPosition != null) {
+            (bufferedPosition / 1_000L).coerceAtMost(durationSeconds.toLong()).toInt()
+        } else 0
     }
 
     private fun formatTime(timeMs: Long): String {

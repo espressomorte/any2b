@@ -17,6 +17,9 @@ class PlayerControlsView @JvmOverloads constructor(
     val seekBar: SeekBar
     val positionLabel: TextView
     val durationLabel: TextView
+    val bufferLabel: TextView
+    val bufferIndicator: HalftoneBufferIndicatorView
+    val bufferContainer: android.view.View
     val nowPlayingLabel: TextView
     val trackActions: LinearLayout
     val audioTrackButton: TextView
@@ -28,6 +31,9 @@ class PlayerControlsView @JvmOverloads constructor(
         seekBar = findViewById(R.id.playbackSeekBar)
         positionLabel = findViewById(R.id.tvPlaybackPosition)
         durationLabel = findViewById(R.id.tvPlaybackDuration)
+        bufferLabel = findViewById(R.id.tvPlaybackBuffer)
+        bufferIndicator = findViewById(R.id.ivPlaybackBuffer)
+        bufferContainer = findViewById(R.id.playbackBufferContainer)
         nowPlayingLabel = findViewById(R.id.tvNowPlaying)
         trackActions = findViewById(R.id.playerTrackActions)
         audioTrackButton = findViewById(R.id.btnAudioTracks)
