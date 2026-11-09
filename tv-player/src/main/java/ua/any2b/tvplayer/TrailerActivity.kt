@@ -258,6 +258,8 @@ class TrailerActivity : ComponentActivity() {
 
         override fun currentPositionMs() = positionMs
         override fun durationMs() = durationMs
+        override fun bufferedPositionMs(): Long? = null
+        override fun bufferFillPercentage(): Int? = null
         override fun isPlaying() = playerState == 1
 
         override fun play() = evaluate("if(window.player){player.playVideo()}")

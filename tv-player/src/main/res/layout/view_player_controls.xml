@@ -58,6 +58,31 @@
             android:text="00:00"
             android:textColor="#FFFFFF"
             android:textSize="14sp" />
+
+        <LinearLayout
+            android:id="@+id/playbackBufferContainer"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="12dp"
+            android:gravity="center_vertical"
+            android:orientation="vertical"
+            android:contentDescription="Буферизація відео">
+            <ua.any2b.tvplayer.ui.HalftoneBufferIndicatorView
+                android:id="@+id/ivPlaybackBuffer"
+                android:layout_width="18dp"
+                android:layout_height="18dp"
+                android:importantForAccessibility="no" />
+
+            <TextView
+                android:id="@+id/tvPlaybackBuffer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:fontFamily="@font/ibm_plex_sans_regular"
+                android:text="0%"
+                android:textColor="#C7D0D8"
+                android:textSize="10sp" />
+        </LinearLayout>
         </LinearLayout>
     </LinearLayout>
 
