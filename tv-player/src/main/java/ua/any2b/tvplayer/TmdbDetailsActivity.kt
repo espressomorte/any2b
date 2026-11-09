@@ -1,5 +1,6 @@
 package ua.any2b.tvplayer
 
+import android.app.AlertDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.os.Bundle
@@ -18,7 +19,12 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.core.tween
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 import ua.any2b.core.tmdb.TmdbMediaType
+import ua.any2b.core.toloka.TorrServerBasicAuth
+import ua.any2b.core.toloka.TorrServerProbe
 import ua.any2b.tvplayer.data.ExternalVideoPlayers
 import ua.any2b.tvplayer.data.SettingsManager
 import ua.any2b.tvplayer.data.TorrServerAuthStore
@@ -70,6 +76,7 @@ class TmdbDetailsActivity : ComponentActivity() {
     private val tolokaViewModel: TolokaSearchViewModel by viewModels()
     private val artworkViewModel: FanartArtworkViewModel by viewModels()
     private var launchingPlayer = false
+    private val torrServerProbe = TorrServerProbe()
     private var returningFromAnitubePlayer = false
     private var openedTopics by mutableStateOf(emptySet<String>())
     private var openedFiles by mutableStateOf(emptySet<Int>())
@@ -272,6 +279,12 @@ class TmdbDetailsActivity : ComponentActivity() {
                     readyDetails?.title?.id) {
                     val savedFileId = intent.getIntExtra(EXTRA_AUTO_PLAY_TORRENT_FILE, -1)
                         .takeIf { it > 0 }
+                    if (autoPlaySource == TmdbPlaybackSelection.Source.TORRENT.name &&
+                        intent.getBooleanExtra(EXTRA_PLAYBACK_ONLY, false) &&
+                        tolokaState.transfer is TolokaTransferState.Error) {
+                        failWatchlistPlayback((tolokaState.transfer as TolokaTransferState.Error).message)
+                        return@LaunchedEffect
+                    }
                     if (autoPlaybackStarted || (autoPlayEpisode <= 0 && savedFileId == null) ||
                         readyDetails == null)
                         return@LaunchedEffect
@@ -287,10 +300,7 @@ class TmdbDetailsActivity : ComponentActivity() {
                                     autoPlaybackStarted = true
                                     openFile(fileId)
                                 } else if (!autoPlaybackFailed) {
-                                    autoPlaybackFailed = true
-                                    Toast.makeText(this@TmdbDetailsActivity,
-                                        "У вибраному torrent не знайдено цю серію",
-                                        Toast.LENGTH_LONG).show()
+                                    failWatchlistPlayback("У вибраному torrent не знайдено потрібний відеофайл")
                                 }
                             }
                         }
@@ -315,7 +325,7 @@ class TmdbDetailsActivity : ComponentActivity() {
                 }
                 FanartDayTheme(activePalette?.light == true) {
                 if (intent.getBooleanExtra(EXTRA_PLAYBACK_ONLY, false)) {
-                    WatchlistPlaybackScreen()
+                    WatchlistPlaybackScreen(tolokaState.transfer)
                 } else if (waitForArtwork) {
                     TmdbDetailsPreparingScreen()
                 } else {
@@ -565,6 +575,49 @@ class TmdbDetailsActivity : ComponentActivity() {
             return
         }
         launchingPlayer = true
+        tolokaViewModel.reportPlaybackStatus("Перевіряємо доступність TorrServer…")
+        lifecycleScope.launch {
+            try {
+                val credentials = TorrServerAuthStore(this@TmdbDetailsActivity).read()
+                torrServerProbe.version(
+                    SettingsManager(this@TmdbDetailsActivity).torrServerUrl(),
+                    credentials?.let { TorrServerBasicAuth(it.username, it.password) },
+                )
+                if (!isFinishing && !isDestroyed) launchFilePlayback(fileId, url)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                launchingPlayer = false
+                if (isFinishing || isDestroyed) return@launch
+                val message = when {
+                    error is IllegalArgumentException -> "Перевірте адресу TorrServer у налаштуваннях."
+                    error is IllegalStateException && error.message?.contains("авторизац", ignoreCase = true) == true ->
+                        "TorrServer відхилив авторизацію (HTTP 401). Перевірте логін і пароль."
+                    error is IllegalStateException -> error.message ?: "TorrServer повернув помилку."
+                    error is java.io.InterruptedIOException -> "TorrServer не відповів за 8 секунд. Перевірте, чи сервер запущений."
+                    error is java.net.ConnectException -> "Не вдалося встановити з’єднання з TorrServer. Перевірте адресу та чи запущений сервер."
+                    else -> "Не вдалося з’єднатися з TorrServer. Перевірте, чи сервер запущений і доступний за цією адресою."
+                }
+                tolokaViewModel.reportPlaybackStatus("Перевірка TorrServer не пройшла: $message")
+                showTorrServerUnavailable(fileId, message)
+            }
+        }
+    }
+
+    private fun showTorrServerUnavailable(fileId: Int, message: String) {
+        if (isFinishing || isDestroyed) return
+        AlertDialog.Builder(this)
+            .setTitle("TorrServer недоступний")
+            .setMessage(message)
+            .setPositiveButton("Повторити") { _, _ -> openFile(fileId) }
+            .setNeutralButton("Налаштування") { _, _ ->
+                startActivity(Intent(this, SettingsActivity::class.java))
+            }
+            .setNegativeButton("Назад", null)
+            .show()
+    }
+
+    private fun launchFilePlayback(fileId: Int, url: String) {
         val fileName = tolokaViewModel.playbackFileName(fileId)
         tolokaViewModel.reportPlaybackStatus("URL потоку сформовано для індексу $fileId. Відкриваємо плеєр…")
         val title = (detailsViewModel.state.value as? TmdbDetailsState.Ready)?.details?.title
