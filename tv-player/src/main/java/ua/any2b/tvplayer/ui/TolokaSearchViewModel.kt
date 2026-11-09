@@ -1,6 +1,7 @@
 package ua.any2b.tvplayer.ui
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
@@ -84,7 +85,7 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
             _state.value = _state.value.copy(queryOptions =
                 listOfNotNull(aniListRomaji?.let { "AniList · ромадзі" to it }) +
                     saved.map { "Підтверджений синонім" to it })
-            searchInternal(primary, automaticEnglishTitle, details)
+            searchInternal(primary, automaticEnglishTitle, details, preserveTransfer = true)
         }
     }
 
@@ -101,7 +102,7 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
         if (result.hits.isNotEmpty() || english.equals(result.query, ignoreCase = true) ||
             english.equals(primary, ignoreCase = true)) return
         clearAutomaticSearch()
-        searchInternal(english, english, details, result.weakHits)
+        searchInternal(english, english, details, result.weakHits, preserveTransfer = true)
     }
 
     private fun clearAutomaticSearch() {
@@ -183,7 +184,7 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
     }
 
     private fun searchInternal(query: String, englishTitle: String?, details: TmdbDetails?,
-        retainedWeak: List<TolokaHit> = emptyList()) {
+        retainedWeak: List<TolokaHit> = emptyList(), preserveTransfer: Boolean = false) {
         val trimmed = query.trim()
         if (trimmed.isBlank()) {
             _state.value = _state.value.copy(search = TolokaSearchState.Error("Введіть назву для пошуку"))
@@ -196,12 +197,15 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
         }
         if (_state.value.search is TolokaSearchState.Loading && activeSearchQuery == trimmed) return
         searchJob?.cancel()
-        transferJob?.cancel()
-        uploadedTopicId = null
-        uploadedTorrent = null
+        if (!preserveTransfer) {
+            transferJob?.cancel()
+            uploadedTopicId = null
+            uploadedTorrent = null
+        }
         activeSearchQuery = trimmed
         _state.value = _state.value.copy(search = TolokaSearchState.Loading,
-            transfer = TolokaTransferState.Idle, playbackStatus = null)
+            transfer = if (preserveTransfer) _state.value.transfer else TolokaTransferState.Idle,
+            playbackStatus = null)
         searchJob = viewModelScope.launch {
             try {
                 val first = TolokaConnections.search(getApplication(), trimmed)
@@ -286,7 +290,9 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
     private fun loadTopic(topicId: String) {
         val serverUrl = settings.torrServerUrl()
         val cached = uploadedTorrent?.takeIf { uploadedTopicId == topicId }
+        Log.i("TorrentPlayback", "Preparation started topic=$topicId cached=${cached != null}")
         if (serverUrl.isBlank() || (cached == null && !TolokaConnections.configured(getApplication()))) {
+            Log.w("TorrentPlayback", "Preparation stopped: integration is not configured topic=$topicId")
             _state.value = _state.value.copy(transfer = TolokaTransferState.Error(
                 "Налаштуйте Toloka і TorrServer у розділі «Інтеграції»"))
             return
@@ -299,11 +305,20 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
             try {
                 val auth = serverAuth.read()?.let { TorrServerBasicAuth(it.username, it.password) }
                 val torrent = cached ?: run {
-                    val bytes = TolokaConnections.torrent(getApplication(), topicId)
+                    Log.i("TorrentPlayback", "Requesting torrent metadata topic=$topicId")
+                    val bytes = try {
+                        TolokaConnections.torrent(getApplication(), topicId)
+                    } catch (_: WorkerFailure.LinkExpired) {
+                        Log.i("TorrentPlayback", "Refreshing expired download link topic=$topicId")
+                        refreshExpiredTorrentLink(topicId)
+                        TolokaConnections.torrent(getApplication(), topicId)
+                    }
+                    Log.i("TorrentPlayback", "Torrent received topic=$topicId bytes=${bytes.size}")
                     lastSuccess = "Torrent отримано з Toloka"
                     _state.value = _state.value.copy(transfer = TolokaTransferState.Loading(
                         "Передавання torrent у TorrServer", lastSuccess))
                     server.upload(serverUrl, bytes, auth).also {
+                        Log.i("TorrentPlayback", "Torrent accepted by TorrServer topic=$topicId files=${it.files.size}")
                         uploadedTopicId = topicId
                         uploadedTorrent = it
                     }
@@ -312,6 +327,7 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
                 _state.value = _state.value.copy(transfer = TolokaTransferState.Loading(
                     "Читання списку файлів TorrServer", lastSuccess))
                 val withFiles = if (torrent.files.isNotEmpty()) torrent else {
+                    Log.i("TorrentPlayback", "Waiting for TorrServer file list topic=$topicId")
                     var found: TorrServerTorrent? = null
                     for (attempt in 1..30) {
                         delay(1000)
@@ -328,29 +344,58 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
                     found ?: throw TorrServerFailure.FilesUnavailable()
                 }
                 uploadedTorrent = withFiles
+                Log.i("TorrentPlayback", "Preparation complete topic=$topicId files=${withFiles.files.size} videoFiles=${withFiles.videoFiles.size}")
                 _state.value = _state.value.copy(transfer = TolokaTransferState.Files(withFiles))
             } catch (error: CancellationException) {
                 throw error
             } catch (_: WorkerFailure.LinkExpired) {
+                Log.w("TorrentPlayback", "Preparation failed topic=$topicId stage=$lastSuccess reason=link_refresh_failed")
                 _state.value = _state.value.copy(transfer = TolokaTransferState.Error(
-                    "Посилання на torrent протухло або відсутнє. Повторіть пошук Toloka.",
+                    "Не вдалося автоматично оновити посилання на роздачу. Відкрийте список роздач і виберіть її ще раз.",
                     lastSuccess = lastSuccess, repeatSearch = true))
             } catch (error: WorkerFailure.RateLimited) {
+                Log.w("TorrentPlayback", "Preparation failed topic=$topicId stage=$lastSuccess reason=rate_limited wait=${error.waitSeconds}s")
                 _state.value = _state.value.copy(transfer = TolokaTransferState.Error(
                     "Toloka обмежила запити. Повторіть через ${error.waitSeconds} с", lastSuccess))
             } catch (error: WorkerFailure) {
+                Log.w("TorrentPlayback", "Preparation failed topic=$topicId stage=$lastSuccess reason=worker_${error.javaClass.simpleName}")
                 _state.value = _state.value.copy(transfer = TolokaTransferState.Error(
                     error.message.orEmpty(), lastSuccess))
             } catch (error: TorrServerFailure) {
+                Log.w("TorrentPlayback", "Preparation failed topic=$topicId stage=$lastSuccess reason=torrserver_${error.javaClass.simpleName}")
                 _state.value = _state.value.copy(transfer = TolokaTransferState.Error(
                     error.message.orEmpty(), lastSuccess,
                     retryMetadata = uploadedTopicId == topicId))
-            } catch (_: Exception) {
+            } catch (error: Exception) {
+                Log.e("TorrentPlayback", "Preparation failed topic=$topicId stage=$lastSuccess reason=${error.javaClass.simpleName}")
                 _state.value = _state.value.copy(transfer = TolokaTransferState.Error(
                     "Помилка TorrServer. Перевірте його доступність і повторіть вручну.",
                     lastSuccess, retryMetadata = uploadedTopicId == topicId))
             }
         }
+    }
+
+    private suspend fun refreshExpiredTorrentLink(topicId: String) {
+        // Watchlist playback can request the saved topic before TMDB details finish loading.
+        for (attempt in 0 until 20) {
+            if (automaticDetails != null || currentDetails != null) break
+            delay(250)
+        }
+        val details = automaticDetails ?: currentDetails
+            ?: throw WorkerFailure.LinkExpired()
+        val queries = (listOfNotNull(automaticQuery) + tmdbTorrentQueryOptions(details).map { it.second })
+            .map(String::trim)
+            .filter(String::isNotBlank)
+            .distinctBy(String::lowercase)
+            .take(4)
+        for (query in queries) {
+            val refreshed = TolokaConnections.search(getApplication(), query)
+            if (refreshed.results.any { it.id == topicId }) {
+                Log.i("TorrentPlayback", "Download link refreshed topic=$topicId queryMatched=true")
+                return
+            }
+        }
+        throw WorkerFailure.LinkExpired()
     }
 
     fun retryMetadata() {

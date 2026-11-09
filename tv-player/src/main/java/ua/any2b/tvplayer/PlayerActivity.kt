@@ -1,5 +1,6 @@
 package ua.any2b.tvplayer
 
+import android.app.AlertDialog
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -12,6 +13,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.CacheWriter
@@ -126,6 +128,10 @@ class PlayerActivity : FragmentActivity() {
     private var tolokaPlaybackMarked: Boolean = false
     private val backupSources = ArrayDeque<AnitubeStreamFallback>()
     private var retryingBackup = false
+    private var torrentBufferingSinceMs = 0L
+    private var torrentBufferPromptShown = false
+    private var torrentBufferingWatch: Runnable? = null
+    private var estimatedBandwidthBps = 0L
     private val streamResolver = StreamResolver()
 
     private var progressJob: Job? = null
@@ -240,6 +246,9 @@ class PlayerActivity : FragmentActivity() {
                     Log.d("Player", "state=$state") // 1 IDLE, 2 BUFFERING, 3 READY, 4 ENDED
                     when (state) {
                         Player.STATE_READY   -> {
+                            torrentBufferingSinceMs = 0L
+                            torrentBufferingWatch?.let(mainHandler::removeCallbacks)
+                            torrentBufferingWatch = null
                             hideBufferingIndicator()
                             binding.statusOverlay.visibility = View.GONE
                             if (isToloka) {
@@ -258,7 +267,10 @@ class PlayerActivity : FragmentActivity() {
                             mainHandler.removeCallbacks(updateIntroSkip)
                             mainHandler.post(updateIntroSkip)
                         }
-                        Player.STATE_BUFFERING -> showBufferingIndicator()
+                        Player.STATE_BUFFERING -> {
+                            showBufferingIndicator()
+                            if (isToloka) watchTorrentBuffering(exo)
+                        }
                         Player.STATE_ENDED   -> {
                             setKeepScreenOn(false)
                             hideBufferingIndicator()
@@ -282,9 +294,15 @@ class PlayerActivity : FragmentActivity() {
 
                 override fun onPlayerError(error: PlaybackException) {
                     if (isToloka) {
-                        Log.e("Player", "TorrServer playback: ${error.errorCodeName}")
-                        setKeepScreenOn(false)
-                        showStatus("✗ Потік TorrServer недоступний (${error.errorCodeName}). Перевірте адресу сервера на цьому пристрої та стан роздачі.", "")
+                        Log.e("Player", "Torrent playback: ${error.errorCodeName} / ${error.message}", error)
+                        if (error.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED ||
+                            error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED ||
+                            error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES) {
+                            showStatus("✗ Пристрій не підтримує відеоформат цієї роздачі (можливо, HEVC). Спробуйте іншу роздачу з H.264 або зовнішній плеєр.", "")
+                        } else {
+                            torrentBufferPromptShown = true
+                            showTorrentRecoveryDialog(exo, "Помилка потоку: ${error.errorCodeName}")
+                        }
                     } else {
                         Log.e("Player", "ExoPlayer: ${error.errorCodeName} / ${error.message}", error)
                         if (retryingBackup) return
@@ -337,10 +355,72 @@ class PlayerActivity : FragmentActivity() {
                 }
             })
 
+            exo.addAnalyticsListener(object : AnalyticsListener {
+                override fun onBandwidthEstimate(
+                    eventTime: AnalyticsListener.EventTime,
+                    totalLoadTimeMs: Int,
+                    totalBytesTransferred: Long,
+                    bitrateEstimate: Long,
+                ) {
+                    estimatedBandwidthBps = bitrateEstimate.coerceAtLeast(0L)
+                }
+            })
+
             exo.setMediaSource(mediaSource)
             exo.playWhenReady = true
             exo.prepare()
         }
+    }
+
+    private fun watchTorrentBuffering(exo: ExoPlayer) {
+        if (torrentBufferingSinceMs == 0L) torrentBufferingSinceMs = android.os.SystemClock.elapsedRealtime()
+        if (torrentBufferPromptShown || torrentBufferingWatch != null) return
+        val startedAt = torrentBufferingSinceMs
+        val watch = object : Runnable {
+            override fun run() {
+                torrentBufferingWatch = null
+                if (isFinishing || isDestroyed || player !== exo || exo.playbackState != Player.STATE_BUFFERING) return
+                val elapsed = android.os.SystemClock.elapsedRealtime() - startedAt
+                val lowBandwidth = estimatedBandwidthBps in 1 until 1_500_000L
+                val threshold = if (lowBandwidth || estimatedBandwidthBps == 0L) 15_000L else 30_000L
+                if (elapsed >= threshold) {
+                    torrentBufferPromptShown = true
+                    Log.w(TAG, "Torrent buffering prolonged ${elapsed}ms estimatedBandwidth=${estimatedBandwidthBps}bps")
+                    showTorrentRecoveryDialog(exo, if (lowBandwidth) "Низька швидкість потоку" else "Потік довго буферизується")
+                } else {
+                    torrentBufferingWatch = this
+                    mainHandler.postDelayed(this, threshold - elapsed)
+                }
+            }
+        }
+        torrentBufferingWatch = watch
+        mainHandler.postDelayed(watch, 15_000L)
+    }
+
+    private fun showTorrentRecoveryDialog(exo: ExoPlayer, reason: String) {
+        if (isFinishing || isDestroyed) return
+        hideBufferingIndicator()
+        val speed = estimatedBandwidthBps.takeIf { it > 0L }
+            ?.let { "\nОцінена швидкість: %.1f Мбіт/с".format(it / 1_000_000.0) }.orEmpty()
+        AlertDialog.Builder(this)
+            .setTitle("Не вдається відтворити")
+            .setMessage("$reason.$speed\n\nМожна повторити підключення або повернутися до списку й вибрати іншу роздачу.")
+            .setPositiveButton("Повторити") { _, _ ->
+                torrentBufferingWatch?.let(mainHandler::removeCallbacks)
+                torrentBufferingWatch = null
+                torrentBufferingSinceMs = 0L
+                torrentBufferPromptShown = false
+                estimatedBandwidthBps = 0L
+                exo.stop()
+                exo.prepare()
+                exo.playWhenReady = true
+            }
+            .setNegativeButton("Змінити роздачу") { _, _ -> finish() }
+            .setOnCancelListener {
+                torrentBufferPromptShown = false
+                if (exo.playbackState == Player.STATE_BUFFERING) watchTorrentBuffering(exo)
+            }
+            .show()
     }
 
     private fun retryAnitubeBackup() {

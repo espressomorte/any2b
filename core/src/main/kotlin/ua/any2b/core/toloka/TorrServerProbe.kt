@@ -11,9 +11,9 @@ import okhttp3.Credentials
 /** /echo is TorrServer's documented health/version endpoint. Torrent API comes in a later stage. */
 class TorrServerProbe(
     private val http: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(8, TimeUnit.SECONDS)
-        .callTimeout(10, TimeUnit.SECONDS)
+        .connectTimeout(4, TimeUnit.SECONDS)
+        .readTimeout(5, TimeUnit.SECONDS)
+        .callTimeout(8, TimeUnit.SECONDS)
         .followRedirects(false)
         .build(),
 ) {
