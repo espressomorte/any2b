@@ -21,6 +21,9 @@ class PlayerControlsView @JvmOverloads constructor(
     val bufferIndicator: HalftoneBufferIndicatorView
     val bufferContainer: android.view.View
     val nowPlayingLabel: TextView
+    val trackActions: LinearLayout
+    val audioTrackButton: TextView
+    val subtitleTrackButton: TextView
 
     init {
         orientation = VERTICAL
@@ -32,5 +35,31 @@ class PlayerControlsView @JvmOverloads constructor(
         bufferIndicator = findViewById(R.id.ivPlaybackBuffer)
         bufferContainer = findViewById(R.id.playbackBufferContainer)
         nowPlayingLabel = findViewById(R.id.tvNowPlaying)
+        trackActions = findViewById(R.id.playerTrackActions)
+        audioTrackButton = findViewById(R.id.btnAudioTracks)
+        subtitleTrackButton = findViewById(R.id.btnSubtitleTracks)
     }
+
+    fun expandTrackActions(): Boolean {
+        if (audioTrackButton.visibility != VISIBLE && subtitleTrackButton.visibility != VISIBLE) return false
+        trackActions.animate().cancel()
+        trackActions.alpha = 0f
+        trackActions.translationY = -8f * resources.displayMetrics.density
+        trackActions.visibility = VISIBLE
+        trackActions.animate().alpha(1f).translationY(0f).setDuration(180L).start()
+        (if (audioTrackButton.visibility == VISIBLE) audioTrackButton else subtitleTrackButton).requestFocus()
+        return true
+    }
+
+    fun collapseTrackActions(returnFocus: Boolean = true) {
+        trackActions.animate().cancel()
+        trackActions.alpha = 1f
+        trackActions.translationY = 0f
+        trackActions.visibility = GONE
+        if (returnFocus && visibility == VISIBLE) seekBar.requestFocus()
+    }
+
+    fun areTrackActionsExpanded(): Boolean = trackActions.visibility == VISIBLE
+
+    fun hasTrackActionFocus(): Boolean = audioTrackButton.hasFocus() || subtitleTrackButton.hasFocus()
 }

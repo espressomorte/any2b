@@ -40,6 +40,7 @@ import ua.any2b.core.extractor.StreamResolver
 import ua.any2b.tvplayer.data.AnitubeStreamFallback
 import ua.any2b.tvplayer.ui.Media3PlayerTransport
 import ua.any2b.tvplayer.ui.PlayerControlsController
+import ua.any2b.tvplayer.ui.PlayerTrackSelectionMenu
 import ua.any2b.tvplayer.databinding.ActivityPlayerBinding
 import java.util.concurrent.TimeUnit
 
@@ -88,6 +89,7 @@ class PlayerActivity : FragmentActivity() {
     private lateinit var binding: ActivityPlayerBinding
     private var player: ExoPlayer? = null
     private var controlsController: PlayerControlsController? = null
+    private lateinit var trackSelectionMenu: PlayerTrackSelectionMenu
     private val introDbClient = IntroDbClient()
     private val mainHandler = Handler(Looper.getMainLooper())
     private var introSegments: IntroDbSegments = IntroDbSegments(emptyList(), emptyList())
@@ -176,6 +178,7 @@ class PlayerActivity : FragmentActivity() {
         binding = ActivityPlayerBinding.inflate(layoutInflater)
         setContentView(binding.root)
         controlsController = PlayerControlsController(binding.playerControls)
+        trackSelectionMenu = PlayerTrackSelectionMenu(this)
         binding.btnSkipIntro.setOnClickListener { confirmActivePrompt() }
 
         val url = intent.getStringExtra(EXTRA_STREAM_URL)
@@ -232,8 +235,13 @@ class PlayerActivity : FragmentActivity() {
             .build().also { exo ->
             binding.playerView.player = exo
             controlsController?.attach(Media3PlayerTransport(exo))
+            trackSelectionMenu.bind(exo, binding.playerControls)
 
             exo.addListener(object : Player.Listener {
+                override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
+                    trackSelectionMenu.update(tracks)
+                }
+
                 override fun onPlaybackStateChanged(state: Int) {
                     Log.d("Player", "state=$state") // 1 IDLE, 2 BUFFERING, 3 READY, 4 ENDED
                     when (state) {
@@ -264,6 +272,7 @@ class PlayerActivity : FragmentActivity() {
                             if (isToloka) watchTorrentBuffering(exo)
                         }
                         Player.STATE_ENDED   -> {
+                            setKeepScreenOn(false)
                             hideBufferingIndicator()
                             val current = exo.currentPosition
                             val duration = exo.duration
@@ -277,6 +286,10 @@ class PlayerActivity : FragmentActivity() {
                         }
                         Player.STATE_IDLE    -> {}
                     }
+                }
+
+                override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                    setKeepScreenOn(playWhenReady && exo.playbackState != Player.STATE_ENDED)
                 }
 
                 override fun onPlayerError(error: PlaybackException) {
@@ -298,6 +311,7 @@ class PlayerActivity : FragmentActivity() {
                             return
                         }
                         val msg = "✗ Помилка: ${error.errorCodeName} — ${error.message}"
+                        setKeepScreenOn(false)
                         showStatus(msg, url)
                     }
                 }
@@ -692,6 +706,11 @@ class PlayerActivity : FragmentActivity() {
         binding.tvUrl.text = if (url.length > 80) "…${url.takeLast(60)}" else url
     }
 
+    private fun setKeepScreenOn(keepOn: Boolean) {
+        val flag = android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+        if (keepOn) window.addFlags(flag) else window.clearFlags(flag)
+    }
+
     private fun showBufferingIndicator() {
         binding.statusOverlay.visibility = View.GONE
         binding.bufferingIndicator.visibility = View.VISIBLE
@@ -702,6 +721,7 @@ class PlayerActivity : FragmentActivity() {
     }
 
     override fun onPause() {
+        setKeepScreenOn(false)
         mainHandler.removeCallbacks(updateIntroSkip)
         saveCurrentProgress()
         super.onPause()
@@ -709,6 +729,15 @@ class PlayerActivity : FragmentActivity() {
     }
 
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        val audioButton = binding.playerControls.findViewById<View>(R.id.btnAudioTracks)
+        val subtitleButton = binding.playerControls.findViewById<View>(R.id.btnSubtitleTracks)
+        val focusedTrackAction = audioButton.hasFocus() || subtitleButton.hasFocus()
+        if (focusedTrackAction && event.action == android.view.KeyEvent.ACTION_DOWN &&
+            event.keyCode in setOf(android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+                android.view.KeyEvent.KEYCODE_ENTER, android.view.KeyEvent.KEYCODE_NUMPAD_ENTER)) {
+            (if (audioButton.hasFocus()) audioButton else subtitleButton).performClick()
+            return true
+        }
         if (binding.btnSkipIntro.visibility == View.VISIBLE && binding.btnSkipIntro.hasFocus() &&
             event.action == android.view.KeyEvent.ACTION_DOWN &&
             event.keyCode in setOf(android.view.KeyEvent.KEYCODE_DPAD_CENTER,
@@ -723,6 +752,9 @@ class PlayerActivity : FragmentActivity() {
     override fun onResume() {
         super.onResume()
         player?.play()
+        setKeepScreenOn(player?.let {
+            it.playWhenReady && it.playbackState != Player.STATE_ENDED
+        } == true)
         if (introSegments.intros.isNotEmpty() || introSegments.credits.isNotEmpty()) {
             mainHandler.removeCallbacks(updateIntroSkip)
             mainHandler.post(updateIntroSkip)
@@ -730,6 +762,7 @@ class PlayerActivity : FragmentActivity() {
     }
 
     override fun onDestroy() {
+        setKeepScreenOn(false)
         mainHandler.removeCallbacks(updateIntroSkip)
         promptDismissRunnable?.let(mainHandler::removeCallbacks)
         nextEpisodeCacheWriter?.cancel()
