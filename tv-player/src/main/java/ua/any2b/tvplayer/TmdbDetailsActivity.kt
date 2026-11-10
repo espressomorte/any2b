@@ -52,6 +52,7 @@ import ua.any2b.tvplayer.ui.WatchlistPlaybackScreen
 
 class TmdbDetailsActivity : ComponentActivity() {
     companion object {
+        private const val TORRSERVE_PACKAGE = "ru.yourok.torrserve"
         const val EXTRA_TMDB_ID = "TMDB_ID"
         const val EXTRA_TMDB_TYPE = "TMDB_TYPE"
         const val EXTRA_TMDB_SEASON = "TMDB_SEASON"
@@ -74,6 +75,9 @@ class TmdbDetailsActivity : ComponentActivity() {
 
     private val detailsViewModel: TmdbDetailsViewModel by viewModels()
     private val tolokaViewModel: TolokaSearchViewModel by viewModels()
+    private val torrServeLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { tolokaViewModel.retryTorrServer() }
     private val artworkViewModel: FanartArtworkViewModel by viewModels()
     private var launchingPlayer = false
     private val torrServerProbe = TorrServerProbe()
@@ -212,7 +216,11 @@ class TmdbDetailsActivity : ComponentActivity() {
                 val activePalette = if (experimental) readyArtwork?.palette else null
                 val waitForArtwork = experimental && readyDetails != null &&
                     tmdbArtwork != null && readyArtwork == null
-                LaunchedEffect(tolokaState.search) { refreshPlaybackMarks() }
+                LaunchedEffect(tolokaState.search) {
+                    (tolokaState.search as? ua.any2b.tvplayer.ui.TolokaSearchState.Results)
+                        ?.selectedId?.let { selectedTopicId = it }
+                    refreshPlaybackMarks()
+                }
                 LaunchedEffect(detailsState, intent.getBooleanExtra(EXTRA_PLAYBACK_ONLY, false)) {
                     if (intent.getBooleanExtra(EXTRA_PLAYBACK_ONLY, false) &&
                         detailsState is TmdbDetailsState.Error) {
@@ -281,7 +289,8 @@ class TmdbDetailsActivity : ComponentActivity() {
                         .takeIf { it > 0 }
                     if (autoPlaySource == TmdbPlaybackSelection.Source.TORRENT.name &&
                         intent.getBooleanExtra(EXTRA_PLAYBACK_ONLY, false) &&
-                        tolokaState.transfer is TolokaTransferState.Error) {
+                        tolokaState.transfer is TolokaTransferState.Error &&
+                        !(tolokaState.transfer as TolokaTransferState.Error).torrServerUnavailable) {
                         failWatchlistPlayback((tolokaState.transfer as TolokaTransferState.Error).message)
                         return@LaunchedEffect
                     }
@@ -325,7 +334,11 @@ class TmdbDetailsActivity : ComponentActivity() {
                 }
                 FanartDayTheme(activePalette?.light == true) {
                 if (intent.getBooleanExtra(EXTRA_PLAYBACK_ONLY, false)) {
-                    WatchlistPlaybackScreen(tolokaState.transfer)
+                    WatchlistPlaybackScreen(
+                        transfer = tolokaState.transfer,
+                        onRetryTorrServer = tolokaViewModel::retryTorrServer,
+                        onOpenTorrServe = ::openTorrServe,
+                    )
                 } else if (waitForArtwork) {
                     TmdbDetailsPreparingScreen()
                 } else {
@@ -359,6 +372,8 @@ class TmdbDetailsActivity : ComponentActivity() {
                     onDiscardTorrent = tolokaViewModel::discardWeakHit,
                     onRejectTorrent = tolokaViewModel::rejectHit,
                     onRetryMetadata = tolokaViewModel::retryMetadata,
+                    onRetryTorrServer = tolokaViewModel::retryTorrServer,
+                    onOpenTorrServe = ::openTorrServe,
                     onPlayFile = ::openFile,
                     onPanelSelected = detailsViewModel::setPanel,
                     onRetryAnitube = detailsViewModel::retryAnitube,
@@ -564,6 +579,22 @@ class TmdbDetailsActivity : ComponentActivity() {
         autoPlaybackFailed = true
         Toast.makeText(this, message, Toast.LENGTH_LONG).show()
         if (intent.getBooleanExtra(EXTRA_PLAYBACK_ONLY, false)) finish()
+    }
+
+    private fun openTorrServe() {
+        val launchIntent = packageManager.getLaunchIntentForPackage(TORRSERVE_PACKAGE)
+        if (launchIntent == null) {
+            Toast.makeText(this,
+                "Застосунок TorrServe не знайдено. Відкрийте його вручну й запустіть сервер.",
+                Toast.LENGTH_LONG).show()
+            return
+        }
+        try {
+            torrServeLauncher.launch(launchIntent)
+        } catch (error: Exception) {
+            Log.w("TorrentPlayback", "Could not open TorrServe", error)
+            Toast.makeText(this, "Не вдалося відкрити TorrServe", Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun openFile(fileId: Int) {
