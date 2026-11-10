@@ -728,6 +728,8 @@ class TmdbDetailsActivity : ComponentActivity() {
                     putExtra(PlayerActivity.EXTRA_TMDB_ID, it.id)
                     putExtra(PlayerActivity.EXTRA_TMDB_TYPE, it.type.path)
                     putExtra(PlayerActivity.EXTRA_TMDB_TITLE, it.title)
+                    (detailsViewModel.state.value as? TmdbDetailsState.Ready)?.details?.logoUrl
+                        ?.let { logo -> putExtra(PlayerActivity.EXTRA_TMDB_LOGO_URL, logo) }
                     putExtra(PlayerActivity.EXTRA_TMDB_ORIGINAL_TITLE, it.originalTitle)
                     putExtra(PlayerActivity.EXTRA_TMDB_YEAR, it.year ?: 0)
                     putExtra(PlayerActivity.EXTRA_TMDB_POSTER_URL, it.posterUrl)
@@ -842,6 +844,8 @@ class TmdbDetailsActivity : ComponentActivity() {
                     putExtra(PlayerActivity.EXTRA_TMDB_ID, title.id)
                     putExtra(PlayerActivity.EXTRA_TMDB_TYPE, title.type.path)
                     putExtra(PlayerActivity.EXTRA_TMDB_TITLE, title.title)
+                    (detailsViewModel.state.value as? TmdbDetailsState.Ready)?.details?.logoUrl
+                        ?.let { logo -> putExtra(PlayerActivity.EXTRA_TMDB_LOGO_URL, logo) }
                     putExtra(PlayerActivity.EXTRA_TMDB_ORIGINAL_TITLE, title.originalTitle)
                     putExtra(PlayerActivity.EXTRA_TMDB_YEAR, title.year ?: 0)
                     putExtra(PlayerActivity.EXTRA_TMDB_POSTER_URL, title.posterUrl)

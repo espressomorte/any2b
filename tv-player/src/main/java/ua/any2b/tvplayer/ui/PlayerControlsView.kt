@@ -18,7 +18,7 @@ class PlayerControlsView @JvmOverloads constructor(
     val positionLabel: TextView
     val durationLabel: TextView
     val bufferLabel: TextView
-    val bufferIndicator: HalftoneBufferIndicatorView
+    val bufferIndicator: BufferTickIndicatorView
     val bufferContainer: android.view.View
     val nowPlayingLabel: TextView
     val trackActions: LinearLayout

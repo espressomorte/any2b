@@ -266,11 +266,8 @@ private fun TolokaTransferContent(
     ) {
     when (transferState) {
         TolokaTransferState.Idle -> Unit
-        is TolokaTransferState.Loading -> {
-            Text(transferState.step + "…", color = AppColors.TextLight)
-            Text("Останній успішний етап: ${transferState.lastSuccess}", color = AppColors.TextSecondary,
-                fontSize = 12.sp)
-        }
+        is TolokaTransferState.Loading ->
+            Text("Готуємо відтворення…", color = AppColors.TextLight)
         is TolokaTransferState.Error -> {
             Text(transferState.message, color = AppColors.ErrorRed)
             Text("Останній успішний етап: ${transferState.lastSuccess}", color = AppColors.TextSecondary,
