@@ -36,6 +36,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.FocusRequester
@@ -111,7 +112,7 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
     val drawerSearchFocusRequester = remember { FocusRequester() }
     val drawerSettingsFocusRequester = remember { FocusRequester() }
     var drawerReturnFocusRequester by remember { mutableStateOf<FocusRequester?>(null) }
-    var drawerOpen by remember { mutableStateOf(false) }
+    var drawerOpen by rememberSaveable { mutableStateOf(false) }
     val continueFocusRequester = remember { FocusRequester() }
     val scope = rememberCoroutineScope()
     var historyMenuTitle by remember { mutableStateOf<TmdbTitle?>(null) }

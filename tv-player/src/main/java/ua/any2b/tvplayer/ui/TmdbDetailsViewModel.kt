@@ -2,6 +2,7 @@ package ua.any2b.tvplayer.ui
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -42,7 +43,10 @@ sealed interface TmdbRelatedState {
     data class Error(val message: String) : TmdbRelatedState
 }
 
-class TmdbDetailsViewModel(application: Application) : AndroidViewModel(application) {
+class TmdbDetailsViewModel(
+    application: Application,
+    private val savedState: SavedStateHandle,
+) : AndroidViewModel(application) {
     private val history = TmdbSearchHistoryStore(application)
     private val watchHistory = TmdbWatchHistoryStore(application)
     private val favorites = TmdbFavoritesStore(application)
@@ -54,6 +58,7 @@ class TmdbDetailsViewModel(application: Application) : AndroidViewModel(applicat
     val anitubeState = anitubeController.state
     val aniListAvailability = anitubeController.aniListAvailability
     private var loadedKey: Pair<TmdbMediaType, Int>? = null
+    private var activePanelStateKey: String? = null
     private var torrentsOnly = false
     private var loadJob: Job? = null
     private var relatedJob: Job? = null
@@ -137,6 +142,7 @@ class TmdbDetailsViewModel(application: Application) : AndroidViewModel(applicat
         val key = type to id
         if (!force && loadedKey == key) return
         loadedKey = key
+        activePanelStateKey = "details_active_panel_${type.path}_$id"
         this.torrentsOnly = torrentsOnly
         loadJob?.cancel()
         relatedJob?.cancel()
@@ -183,8 +189,13 @@ class TmdbDetailsViewModel(application: Application) : AndroidViewModel(applicat
                 } else null
                 history.recordSelectedTitle(
                     localizedCollection ?: details.collectionName ?: preferredTitle ?: details.title.title)
+                val savedPanel = savedState.get<String>(activePanelStateKey!!)
+                    ?.let { runCatching { Panel.valueOf(it) }.getOrNull() }
+                    ?.takeIf { !torrentsOnly || it == Panel.TORRENT }
+                    ?: Panel.TORRENT
                 _state.value = TmdbDetailsState.Ready(details,
-                    favorites.contains(type, id), watchlist.contains(type, id))
+                    favorites.contains(type, id), watchlist.contains(type, id),
+                    activePanel = savedPanel)
                 relatedJob = viewModelScope.launch { loadRelated(details) }
                 englishTitleJob = viewModelScope.launch {
                     try {
@@ -222,7 +233,10 @@ class TmdbDetailsViewModel(application: Application) : AndroidViewModel(applicat
         val ready = _state.value as? TmdbDetailsState.Ready ?: return
         if (panel == Panel.ONLINE && anitubeController.aniListAvailability.value in
             setOf(AniListAvailability.CHECKING, AniListAvailability.MISSING)) return
-        if (ready.activePanel != panel) _state.value = ready.copy(activePanel = panel)
+        if (ready.activePanel != panel) {
+            activePanelStateKey?.let { savedState[it] = panel.name }
+            _state.value = ready.copy(activePanel = panel)
+        }
     }
 
     fun retryAnitube() = anitubeController.retry()

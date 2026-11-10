@@ -50,6 +50,8 @@ internal fun TolokaSearchPanel(
     onDiscard: (String) -> Unit = {},
     onRejectForever: (String) -> Unit = {},
     onRetryMetadata: () -> Unit,
+    onRetryTorrServer: () -> Unit = onRetryMetadata,
+    onOpenTorrServe: () -> Unit = {},
     onPlayFile: (Int) -> Unit,
     onEditQuery: (() -> Unit)? = null,
     manualSearch: Boolean = false,
@@ -141,7 +143,7 @@ internal fun TolokaSearchPanel(
                         )
                         if (hit.id == searchState.selectedId) {
                             TolokaTransferContent(transferState, playbackStatus, openedFiles,
-                                onSearch, onRetryMetadata, onPlayFile, surfaceColors)
+                                onSearch, onRetryMetadata, onRetryTorrServer, onOpenTorrServe, onPlayFile, surfaceColors)
                         }
                     }
                     if (searchState.weakHits.isNotEmpty()) {
@@ -253,6 +255,8 @@ private fun TolokaTransferContent(
     openedFiles: Set<Int>,
     onSearch: () -> Unit,
     onRetryMetadata: () -> Unit,
+    onRetryTorrServer: () -> Unit,
+    onOpenTorrServe: () -> Unit,
     onPlayFile: (Int) -> Unit,
     surfaceColors: DetailsSurfaceColors,
 ) {
@@ -262,15 +266,14 @@ private fun TolokaTransferContent(
     ) {
     when (transferState) {
         TolokaTransferState.Idle -> Unit
-        is TolokaTransferState.Loading -> {
-            Text(transferState.step + "…", color = AppColors.TextLight)
-            Text("Останній успішний етап: ${transferState.lastSuccess}", color = AppColors.TextSecondary,
-                fontSize = 12.sp)
-        }
+        is TolokaTransferState.Loading ->
+            Text("Готуємо відтворення…", color = AppColors.TextLight)
         is TolokaTransferState.Error -> {
             Text(transferState.message, color = AppColors.ErrorRed)
-            Text("Останній успішний етап: ${transferState.lastSuccess}", color = AppColors.TextSecondary,
-                fontSize = 12.sp)
+            if (transferState.torrServerUnavailable) {
+                Button(onClick = onOpenTorrServe) { Text("Відкрити TorrServe") }
+                Button(onClick = onRetryTorrServer) { Text("Повторити перевірку") }
+            }
             if (transferState.repeatSearch) {
                 Button(onClick = onSearch) { Text("Повторити пошук") }
             }

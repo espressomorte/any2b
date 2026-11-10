@@ -26,6 +26,7 @@ sealed interface TolokaTransferState {
         val lastSuccess: String = "Пошук роздачі",
         val repeatSearch: Boolean = false,
         val retryMetadata: Boolean = false,
+        val torrServerUnavailable: Boolean = false,
     ) : TolokaTransferState
 }
 

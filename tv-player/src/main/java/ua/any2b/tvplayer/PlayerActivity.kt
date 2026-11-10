@@ -22,6 +22,7 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import coil.load
 import kotlinx.coroutines.*
 import okhttp3.OkHttpClient
 import okhttp3.Credentials
@@ -69,6 +70,7 @@ class PlayerActivity : FragmentActivity() {
         const val EXTRA_TMDB_ID = "TMDB_ID"
         const val EXTRA_TMDB_TYPE = "TMDB_TYPE"
         const val EXTRA_TMDB_TITLE = "TMDB_TITLE"
+        const val EXTRA_TMDB_LOGO_URL = "TMDB_LOGO_URL"
         const val EXTRA_TMDB_ORIGINAL_TITLE = "TMDB_ORIGINAL_TITLE"
         const val EXTRA_TMDB_YEAR = "TMDB_YEAR"
         const val EXTRA_TMDB_POSTER_URL = "TMDB_POSTER_URL"
@@ -188,6 +190,10 @@ class PlayerActivity : FragmentActivity() {
             intent.getIntExtra(EXTRA_EPISODE_NUMBER, episodeIndex + 1))
         isToloka = intent.getStringExtra(EXTRA_SOURCE_TYPE) == SOURCE_TOLOKA
         isTmdbAnitube = intent.getStringExtra(EXTRA_SOURCE_TYPE) == SOURCE_ANITUBE_TMDB
+        val loadingArtwork = intent.getStringExtra(EXTRA_TMDB_LOGO_URL)
+            ?.takeIf(String::isNotBlank)
+            ?: intent.getStringExtra(EXTRA_TMDB_POSTER_URL)?.takeIf(String::isNotBlank)
+        if (loadingArtwork != null) binding.playerLoadingLogo.load(loadingArtwork)
         configureNowPlayingLabel()
         tmdbResumeProgress = intent.getFloatExtra(EXTRA_TMDB_RESUME_PROGRESS, 0f)
         torrentResumePositionMs = intent.getLongExtra(EXTRA_TORRENT_RESUME_POSITION_MS, 0L)
@@ -210,7 +216,7 @@ class PlayerActivity : FragmentActivity() {
         }
 
         binding.btnNextEpisode.visibility = View.GONE
-        showStatus("⏳ Підключення до потоку…", if (isToloka) "" else url)
+        showBufferingIndicator()
         initPlayer(url)
     }
 
@@ -713,11 +719,11 @@ class PlayerActivity : FragmentActivity() {
 
     private fun showBufferingIndicator() {
         binding.statusOverlay.visibility = View.GONE
-        binding.bufferingIndicator.visibility = View.VISIBLE
+        binding.playerLoadingLogo.visibility = View.VISIBLE
     }
 
     private fun hideBufferingIndicator() {
-        if (::binding.isInitialized) binding.bufferingIndicator.visibility = View.GONE
+        if (::binding.isInitialized) binding.playerLoadingLogo.visibility = View.GONE
     }
 
     override fun onPause() {

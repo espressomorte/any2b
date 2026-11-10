@@ -1,6 +1,8 @@
 package ua.any2b.core.toloka
 
 import java.util.concurrent.TimeUnit
+import java.io.IOException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -17,7 +19,12 @@ class TorrServerProbe(
         .followRedirects(false)
         .build(),
 ) {
-    suspend fun version(baseUrl: String, auth: TorrServerBasicAuth? = null): String = withContext(Dispatchers.IO) {
+    suspend fun version(
+        baseUrl: String,
+        auth: TorrServerBasicAuth? = null,
+        timeoutSeconds: Long = 8,
+    ): String = withContext(Dispatchers.IO) {
+        require(timeoutSeconds > 0) { "Таймаут має бути більшим за нуль" }
         val base = baseUrl.trim().trimEnd('/').toHttpUrlOrNull()
             ?: throw IllegalArgumentException("Некоректна адреса TorrServer")
         require(base.scheme == "http" || base.scheme == "https") { "Потрібна HTTP або HTTPS адреса" }
@@ -26,7 +33,12 @@ class TorrServerProbe(
         }
         val builder = Request.Builder().url(base.newBuilder().addPathSegment("echo").build())
         if (auth != null) builder.header("Authorization", Credentials.basic(auth.username, auth.password))
-        http.newCall(builder.build())
+        http.newBuilder()
+            .connectTimeout(minOf(4, timeoutSeconds), TimeUnit.SECONDS)
+            .readTimeout(timeoutSeconds, TimeUnit.SECONDS)
+            .callTimeout(timeoutSeconds, TimeUnit.SECONDS)
+            .build()
+            .newCall(builder.build())
             .execute().use { response ->
                 if (response.code == 401) throw IllegalStateException("TorrServer потребує авторизації")
                 if (!response.isSuccessful) throw IllegalStateException("TorrServer відповів HTTP ${response.code}")
@@ -37,5 +49,19 @@ class TorrServerProbe(
                 }
                 version
             }
+    }
+
+    /** Short, bounded health checks used after returning from the TorrServe app. */
+    suspend fun awaitAvailable(baseUrl: String, auth: TorrServerBasicAuth? = null): String {
+        var lastFailure: IOException? = null
+        repeat(3) { attempt ->
+            try {
+                return version(baseUrl, auth, timeoutSeconds = 2)
+            } catch (error: IOException) {
+                lastFailure = error
+                if (attempt < 2) delay(700L * (attempt + 1))
+            }
+        }
+        throw lastFailure ?: IOException("TorrServer недоступний")
     }
 }

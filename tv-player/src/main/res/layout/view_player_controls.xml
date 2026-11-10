@@ -67,9 +67,9 @@
             android:gravity="center_vertical"
             android:orientation="vertical"
             android:contentDescription="Буферизація відео">
-            <ua.any2b.tvplayer.ui.HalftoneBufferIndicatorView
+            <ua.any2b.tvplayer.ui.BufferTickIndicatorView
                 android:id="@+id/ivPlaybackBuffer"
-                android:layout_width="18dp"
+                android:layout_width="68dp"
                 android:layout_height="18dp"
                 android:importantForAccessibility="no" />
 

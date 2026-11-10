@@ -3,6 +3,7 @@ package ua.any2b.tvplayer.ui
 import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -13,6 +14,7 @@ import kotlinx.coroutines.launch
 import ua.any2b.core.toloka.TorrServerBasicAuth
 import ua.any2b.core.toloka.TorrServerClient
 import ua.any2b.core.toloka.TorrServerFailure
+import ua.any2b.core.toloka.TorrServerProbe
 import ua.any2b.core.toloka.TorrServerTorrent
 import ua.any2b.core.toloka.WorkerFailure
 import ua.any2b.core.toloka.TolokaTmdbRanker
@@ -34,13 +36,17 @@ data class FreeTolokaState(
 )
 
 /** Manual Toloka search: no AniList match or release mapping is involved. */
-class TolokaSearchViewModel(application: Application) : AndroidViewModel(application) {
+class TolokaSearchViewModel(
+    application: Application,
+    private val savedState: SavedStateHandle,
+) : AndroidViewModel(application) {
     private val settings = SettingsManager(application)
     private val serverAuth = TorrServerAuthStore(application)
     private val relevance = TolokaRelevanceStore(application)
     private val mappings = TolokaTmdbMappingStore(application)
     private val romajiResolver = AniListRomajiResolver(application)
     private val server = TorrServerClient()
+    private val serverProbe = TorrServerProbe()
     private val _state = MutableStateFlow(FreeTolokaState())
     val state: StateFlow<FreeTolokaState> = _state
 
@@ -55,6 +61,7 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
     private var transferJob: Job? = null
     private var uploadedTopicId: String? = null
     private var uploadedTorrent: TorrServerTorrent? = null
+    private var pendingTopicId: String? = null
 
     fun search(query: String) {
         preparationJob?.cancel()
@@ -67,6 +74,7 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
         preparationJob?.cancel()
         clearAutomaticSearch()
         currentDetails = details
+        savedState.remove<String>(selectedTopicKey(details))
         searchInternal(query, null, details)
     }
 
@@ -247,12 +255,17 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
                     .filterNot { hit -> hits.any { it.id == hit.id } }
                 val rejected = aggregate?.rejected ?: allHits.filterNot(TolokaTmdbRanker::isVideoCandidate)
                 val totalFound = allHits.size
+                val visibleRejected = rejected.filterNot { hit ->
+                    hits.any { it.id == hit.id } || weak.any { it.id == hit.id }
+                }
+                val restoredTopic = latestDetails?.let { savedState.get<String>(selectedTopicKey(it)) }
+                    ?.takeIf { id -> (hits + weak + visibleRejected).any { it.id == id } }
                 _state.value = _state.value.copy(
                     search = TolokaSearchState.Results(searchedQuery, hits,
-                        maxOf(totalFound, hits.size + weak.size + rejected.size),
-                        weakHits = weak, rejectedHits = rejected.filterNot { hit ->
-                            hits.any { it.id == hit.id } || weak.any { it.id == hit.id }
-                        }))
+                        maxOf(totalFound, hits.size + weak.size + visibleRejected.size),
+                        selectedId = restoredTopic,
+                        weakHits = weak, rejectedHits = visibleRejected))
+                restoredTopic?.let(::selectHit)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: WorkerFailure.RateLimited) {
@@ -273,6 +286,8 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
         if ((results.hits + results.weakHits + results.rejectedHits).none { it.id == topicId }) return
         _state.value = _state.value.copy(
             search = results.copy(selectedId = topicId), playbackStatus = null)
+        currentDetails?.let { savedState[selectedTopicKey(it)] = topicId }
+            ?: automaticDetails?.let { savedState[selectedTopicKey(it)] = topicId }
         loadTopic(topicId)
     }
 
@@ -284,11 +299,13 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
             _state.value = _state.value.copy(
                 search = results.copy(selectedId = topicId), playbackStatus = null)
         }
+        (currentDetails ?: automaticDetails)?.let { savedState[selectedTopicKey(it)] = topicId }
         loadTopic(topicId)
     }
 
-    private fun loadTopic(topicId: String) {
+    private fun loadTopic(topicId: String, retryServerAvailability: Boolean = false) {
         val serverUrl = settings.torrServerUrl()
+        pendingTopicId = topicId
         val cached = uploadedTorrent?.takeIf { uploadedTopicId == topicId }
         Log.i("TorrentPlayback", "Preparation started topic=$topicId cached=${cached != null}")
         if (serverUrl.isBlank() || (cached == null && !TolokaConnections.configured(getApplication()))) {
@@ -302,8 +319,15 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
             if (cached == null) "Роздачу вибрано" else "Торент додано до TorrServer"))
         transferJob = viewModelScope.launch {
             var lastSuccess = if (cached == null) "Роздачу вибрано" else "Торент додано до TorrServer"
+            var healthCheckPassed = false
             try {
                 val auth = serverAuth.read()?.let { TorrServerBasicAuth(it.username, it.password) }
+                _state.value = _state.value.copy(transfer = TolokaTransferState.Loading(
+                    "Перевірка доступності TorrServer", lastSuccess))
+                if (retryServerAvailability) serverProbe.awaitAvailable(serverUrl, auth)
+                else serverProbe.version(serverUrl, auth)
+                healthCheckPassed = true
+                Log.i("TorrentPlayback", "TorrServer health check passed topic=$topicId retry=$retryServerAvailability")
                 val torrent = cached ?: run {
                     Log.i("TorrentPlayback", "Requesting torrent metadata topic=$topicId")
                     val bytes = try {
@@ -367,10 +391,15 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
                     error.message.orEmpty(), lastSuccess,
                     retryMetadata = uploadedTopicId == topicId))
             } catch (error: Exception) {
-                Log.e("TorrentPlayback", "Preparation failed topic=$topicId stage=$lastSuccess reason=${error.javaClass.simpleName}")
+                Log.e("TorrentPlayback",
+                    "Preparation failed topic=$topicId stage=$lastSuccess reason=${error.javaClass.simpleName}",
+                    error)
+                val networkUnavailable = !healthCheckPassed && error is java.io.IOException
                 _state.value = _state.value.copy(transfer = TolokaTransferState.Error(
-                    "Помилка TorrServer. Перевірте його доступність і повторіть вручну.",
-                    lastSuccess, retryMetadata = uploadedTopicId == topicId))
+                    if (networkUnavailable) "TorrServer не відповідає. Відкрийте TorrServe, запустіть сервер і повторіть перевірку."
+                    else error.message ?: "Помилка TorrServer. Перевірте його налаштування.",
+                    lastSuccess, retryMetadata = uploadedTopicId == topicId,
+                    torrServerUnavailable = networkUnavailable))
             }
         }
     }
@@ -402,6 +431,15 @@ class TolokaSearchViewModel(application: Application) : AndroidViewModel(applica
         val selected = (_state.value.search as? TolokaSearchState.Results)?.selectedId ?: return
         if (uploadedTopicId == selected && uploadedTorrent != null) selectHit(selected)
     }
+
+    fun retryTorrServer() {
+        val topicId = pendingTopicId ?: (_state.value.search as? TolokaSearchState.Results)?.selectedId ?: return
+        if (_state.value.transfer is TolokaTransferState.Loading) return
+        loadTopic(topicId, retryServerAvailability = true)
+    }
+
+    private fun selectedTopicKey(details: TmdbDetails): String =
+        "selected_torrent_${details.title.type.path}_${details.title.id}"
 
     fun playbackUrl(fileId: Int): String? {
         val files = _state.value.transfer as? TolokaTransferState.Files ?: return null
