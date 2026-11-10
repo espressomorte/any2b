@@ -5,7 +5,9 @@ import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.Credentials
@@ -53,23 +55,31 @@ class TorrServerClient(
         .followRedirects(false)
         .build(),
 ) {
-    suspend fun upload(baseUrl: String, torrentBytes: ByteArray, auth: TorrServerBasicAuth? = null): TorrServerTorrent {
+    suspend fun upload(
+        baseUrl: String,
+        torrentBytes: ByteArray,
+        auth: TorrServerBasicAuth? = null,
+    ): TorrServerTorrent = withContext(Dispatchers.IO) {
         require(torrentBytes.isNotEmpty()) { "Порожній torrent-файл" }
         val base = validatedBase(baseUrl)
         val multipart = MultipartBody.Builder().setType(MultipartBody.FORM)
             .addFormDataPart("file", "upload.torrent", torrentBytes.toRequestBody("application/x-bittorrent".toMediaType()))
             .build()
-        return execute(withAuth(Request.Builder()
+        execute(withAuth(Request.Builder()
             .url(base.newBuilder().addPathSegments("torrent/upload").build())
             .post(multipart), auth).build()).use { response -> parseStatus(response.body?.string().orEmpty()) }
     }
 
-    suspend fun get(baseUrl: String, hash: String, auth: TorrServerBasicAuth? = null): TorrServerTorrent {
+    suspend fun get(
+        baseUrl: String,
+        hash: String,
+        auth: TorrServerBasicAuth? = null,
+    ): TorrServerTorrent = withContext(Dispatchers.IO) {
         require(hash.matches(Regex("[0-9a-fA-F]{40}"))) { "Некоректний hash торента" }
         val base = validatedBase(baseUrl)
         val body = JSONObject().put("action", "get").put("hash", hash)
             .toString().toRequestBody("application/json".toMediaType())
-        return execute(withAuth(Request.Builder().url(base.newBuilder().addPathSegment("torrents").build())
+        execute(withAuth(Request.Builder().url(base.newBuilder().addPathSegment("torrents").build())
             .post(body), auth).build()).use { response -> parseStatus(response.body?.string().orEmpty()) }
     }
 

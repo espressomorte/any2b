@@ -29,12 +29,15 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent">
 
-        <ua.any2b.tvplayer.ui.NeonBufferingIndicatorView
-            android:id="@+id/bufferingIndicator"
-            android:layout_width="52dp"
-            android:layout_height="52dp"
+        <ImageView
+            android:id="@+id/playerLoadingLogo"
+            android:layout_width="300dp"
+            android:layout_height="86dp"
             android:layout_gravity="center"
+            android:contentDescription="Логотип тайтлу"
+            android:scaleType="fitCenter"
             android:visibility="gone" />
+
     </FrameLayout>
 
     <ua.any2b.tvplayer.ui.PlayerControlsView
