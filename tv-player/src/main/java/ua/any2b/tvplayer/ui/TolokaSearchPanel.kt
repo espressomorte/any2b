@@ -270,6 +270,8 @@ private fun TolokaTransferContent(
             Text("Готуємо відтворення…", color = AppColors.TextLight)
         is TolokaTransferState.Error -> {
             Text(transferState.message, color = AppColors.ErrorRed)
+            Text("Останній успішний етап: ${transferState.lastSuccess}", color = AppColors.TextSecondary,
+                fontSize = 12.sp)
             if (transferState.torrServerUnavailable) {
                 Button(onClick = onOpenTorrServe) { Text("Відкрити TorrServe") }
                 Button(onClick = onRetryTorrServer) { Text("Повторити перевірку") }

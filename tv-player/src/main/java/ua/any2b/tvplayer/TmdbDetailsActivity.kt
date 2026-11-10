@@ -336,9 +336,6 @@ class TmdbDetailsActivity : ComponentActivity() {
                 if (intent.getBooleanExtra(EXTRA_PLAYBACK_ONLY, false)) {
                     WatchlistPlaybackScreen(
                         transfer = tolokaState.transfer,
-                        title = readyDetails?.title?.title
-                            ?: intent.getStringExtra(EXTRA_PREFERRED_TITLE).orEmpty(),
-                        logoUrl = readyDetails?.logoUrl,
                         onRetryTorrServer = tolokaViewModel::retryTorrServer,
                         onOpenTorrServe = ::openTorrServe,
                     )
