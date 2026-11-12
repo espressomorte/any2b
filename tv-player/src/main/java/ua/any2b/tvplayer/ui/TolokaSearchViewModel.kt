@@ -463,13 +463,8 @@ class TolokaSearchViewModel(
     fun playbackFileId(seasonNumber: Int, episodeNumber: Int): Int? {
         val files = (_state.value.transfer as? TolokaTransferState.Files)
             ?.torrent?.videoFiles.orEmpty()
-        return files.firstOrNull { file ->
-            val metadata = ua.any2b.core.toloka.TolokaReleaseMetadataParser.parse(file.name)
-            val start = metadata.episodeStart ?: return@firstOrNull false
-            val end = metadata.episodeEnd ?: start
-            (metadata.season == null || metadata.season == seasonNumber) &&
-                episodeNumber in start..end
-        }?.id
+        return ua.any2b.core.toloka.TolokaEpisodeFileIndex
+            .find(files, seasonNumber, episodeNumber)?.id
     }
 
     fun reportPlaybackStatus(message: String) {

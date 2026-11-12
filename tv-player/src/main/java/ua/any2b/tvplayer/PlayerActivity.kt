@@ -566,7 +566,14 @@ class PlayerActivity : FragmentActivity() {
             "$episode серія"
         }
         binding.playerControls.nowPlayingLabel.text = "$title  •  $episodeLabel"
-        binding.playerControls.nowPlayingLabel.visibility = View.VISIBLE
+        binding.playerControls.nowPlayingRow.visibility = View.VISIBLE
+        if (canGoNextEpisode()) {
+            binding.playerControls.nextEpisodeButton.text = "${episode + 1} серія"
+            binding.playerControls.nextEpisodeButton.contentDescription =
+                "Перейти до ${episode + 1} серії"
+            binding.playerControls.nextEpisodeButton.visibility = View.VISIBLE
+            binding.playerControls.nextEpisodeButton.setOnClickListener { launchNextEpisode() }
+        }
     }
 
     private fun updateSkipIntroButton() {
@@ -601,7 +608,7 @@ class PlayerActivity : FragmentActivity() {
             intent.getIntExtra(EXTRA_TMDB_EPISODE, -1) > 0 &&
             when {
                 isToloka -> !intent.getStringExtra(EXTRA_TOLOKA_TOPIC_ID).isNullOrBlank() &&
-                    !intent.getStringExtra(EXTRA_NEXT_STREAM_URL).isNullOrBlank()
+                    intent.getBooleanExtra(EXTRA_NEXT_EPISODE_AVAILABLE, false)
                 isTmdbAnitube -> intent.getBooleanExtra(EXTRA_NEXT_EPISODE_AVAILABLE, false)
                 else -> false
             }
@@ -810,6 +817,13 @@ class PlayerActivity : FragmentActivity() {
     }
 
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        if (binding.playerControls.nextEpisodeButton.hasFocus() &&
+            event.action == android.view.KeyEvent.ACTION_DOWN &&
+            event.keyCode in setOf(android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+                android.view.KeyEvent.KEYCODE_ENTER, android.view.KeyEvent.KEYCODE_NUMPAD_ENTER)) {
+            binding.playerControls.nextEpisodeButton.performClick()
+            return true
+        }
         val audioButton = binding.playerControls.findViewById<View>(R.id.btnAudioTracks)
         val subtitleButton = binding.playerControls.findViewById<View>(R.id.btnSubtitleTracks)
         val focusedTrackAction = audioButton.hasFocus() || subtitleButton.hasFocus()

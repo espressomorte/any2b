@@ -55,7 +55,6 @@ class PlayerControlsController(
     private val seekBar = controls.seekBar
     private val positionLabel = controls.positionLabel
     private val durationLabel = controls.durationLabel
-    private val bufferLabel = controls.bufferLabel
     private val bufferIndicator = controls.bufferIndicator
     private val bufferContainer = controls.bufferContainer
     private var transport: PlayerTransport? = null
@@ -132,6 +131,13 @@ class PlayerControlsController(
             return true
         }
         if (event.keyCode == KeyEvent.KEYCODE_DPAD_UP &&
+            controls.visibility == View.VISIBLE && seekBar.hasFocus() &&
+            controls.nextEpisodeButton.visibility == View.VISIBLE) {
+            controls.nextEpisodeButton.requestFocus()
+            scheduleHide()
+            return true
+        }
+        if (event.keyCode == KeyEvent.KEYCODE_DPAD_UP &&
             controls.visibility == View.VISIBLE && controls.areTrackActionsExpanded() &&
             controls.hasTrackActionFocus()) {
             controls.collapseTrackActions()
@@ -159,13 +165,13 @@ class PlayerControlsController(
                 scrubBy(SCRUB_INCREMENT_SECONDS)
             }
             KeyEvent.KEYCODE_DPAD_LEFT -> {
-                if (!seekBar.hasFocus()) return false
+                if (controls.visibility == View.VISIBLE && !seekBar.hasFocus()) return false
                 show()
                 scrubBy(-SCRUB_INCREMENT_SECONDS)
                 return true
             }
             KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                if (!seekBar.hasFocus()) return false
+                if (controls.visibility == View.VISIBLE && !seekBar.hasFocus()) return false
                 show()
                 scrubBy(SCRUB_INCREMENT_SECONDS)
                 return true
@@ -258,7 +264,6 @@ class PlayerControlsController(
         bufferContainer.visibility = if (bufferFillPercentage == null) View.GONE else View.VISIBLE
         bufferFillPercentage?.let {
             bufferIndicator.setBufferPercentage(it)
-            bufferLabel.text = "$it%"
         }
         val bufferedPosition = current.bufferedPositionMs()
         seekBar.secondaryProgress = if (durationSeconds > 0 && bufferedPosition != null) {

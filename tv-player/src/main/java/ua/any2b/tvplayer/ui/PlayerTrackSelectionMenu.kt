@@ -21,16 +21,16 @@ import java.util.Locale
 internal class PlayerTrackSelectionMenu(private val activity: Activity) {
     private var player: Player? = null
     private var controls: PlayerControlsView? = null
-    private var audioButton: TextView? = null
-    private var subtitleButton: TextView? = null
+    private var audioButton: View? = null
+    private var subtitleButton: View? = null
     private var audioGroups: List<Tracks.Group> = emptyList()
     private var subtitleGroups: List<Tracks.Group> = emptyList()
 
     fun bind(player: Player, controls: PlayerControlsView) {
         this.player = player
         this.controls = controls
-        audioButton = controls.findViewById(R.id.btnAudioTracks)
-        subtitleButton = controls.findViewById(R.id.btnSubtitleTracks)
+        audioButton = controls.audioTrackButton
+        subtitleButton = controls.subtitleTrackButton
         audioButton?.setOnClickListener { showAudioMenu() }
         subtitleButton?.setOnClickListener { showSubtitleMenu() }
         update(player.currentTracks)
@@ -41,10 +41,66 @@ internal class PlayerTrackSelectionMenu(private val activity: Activity) {
             .filter { group -> (0 until group.length).any(group::isTrackSupported) }
         subtitleGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
             .filter { group -> (0 until group.length).any(group::isTrackSupported) }
-        audioButton?.visibility = if (audioGroups.isNotEmpty()) View.VISIBLE else View.GONE
-        subtitleButton?.visibility = if (subtitleGroups.isNotEmpty()) View.VISIBLE else View.GONE
-        if (audioGroups.isEmpty() && subtitleGroups.isEmpty()) {
-            controls?.collapseTrackActions(returnFocus = false)
+        val audioLanguageCount = languageCount(audioGroups)
+        val subtitleLanguageCount = languageCount(subtitleGroups)
+        audioButton?.isEnabled = audioLanguageCount > 1
+        subtitleButton?.isEnabled = subtitleLanguageCount > 1
+        controls?.audioTrackChoice?.text = choiceLabel(audioGroups, audioLanguageCount, C.TRACK_TYPE_AUDIO)
+        controls?.subtitleTrackChoice?.text = choiceLabel(subtitleGroups, subtitleLanguageCount, C.TRACK_TYPE_TEXT)
+        audioButton?.contentDescription = "Аудіодоріжка: ${controls?.audioTrackChoice?.text}"
+        subtitleButton?.contentDescription = "Субтитри: ${controls?.subtitleTrackChoice?.text}"
+        if (controls?.hasTrackActionFocus() == true &&
+            audioButton?.isEnabled != true && subtitleButton?.isEnabled != true) {
+            controls?.collapseTrackActions()
+        }
+    }
+
+    private fun languageCount(groups: List<Tracks.Group>): Int = groups.flatMap { group ->
+        (0 until group.length).filter(group::isTrackSupported)
+            .map { index -> languageKey(group.getTrackFormat(index)) }
+    }.distinct().size
+
+    private fun languageKey(format: Format): String = when (format.language?.lowercase(Locale.ROOT)
+        ?.substringBefore('-')) {
+        "uk", "ukr" -> "uk"
+        "en", "eng" -> "en"
+        "ru", "rus" -> "ru"
+        "ja", "jpn" -> "ja"
+        "pl", "pol" -> "pl"
+        else -> format.language?.lowercase(Locale.ROOT)?.takeIf { it.isNotBlank() && it != "und" }
+            ?: format.label?.lowercase(Locale.ROOT)?.takeIf(String::isNotBlank)
+            ?: "und"
+    }
+
+    private fun choiceLabel(groups: List<Tracks.Group>, languageCount: Int, type: Int): String {
+        if (languageCount == 0) return "—"
+        if (languageCount == 1) return "Авто"
+        if (type == C.TRACK_TYPE_TEXT &&
+            type in (player?.trackSelectionParameters?.disabledTrackTypes ?: emptySet())) return "Вимк."
+        val selected = groups.firstNotNullOfOrNull { group ->
+            (0 until group.length).firstOrNull(group::isTrackSelected)
+                ?.let(group::getTrackFormat)
+        } ?: return "Авто"
+        return shortLanguageName(selected)
+    }
+
+    private fun shortLanguageName(format: Format): String {
+        val language = format.language?.lowercase(Locale.ROOT)?.substringBefore('-')
+        return when (language) {
+            "uk", "ukr" -> "Укр"
+            "en", "eng" -> "Eng"
+            "ru", "rus" -> "Рус"
+            "ja", "jpn" -> "Яп"
+            "pl", "pol" -> "Пол"
+            "fr", "fra", "fre" -> "Фр"
+            "de", "deu", "ger" -> "Нім"
+            "es", "spa" -> "Ісп"
+            "it", "ita" -> "Італ"
+            "ko", "kor" -> "Кор"
+            "zh", "zho", "chi" -> "Кит"
+            else -> format.language?.takeIf { it.isNotBlank() && it != "und" }
+                ?: format.label?.takeIf(String::isNotBlank)?.take(12)
+                ?: "Авто"
         }
     }
 
@@ -148,7 +204,9 @@ internal class PlayerTrackSelectionMenu(private val activity: Activity) {
             window.addFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND)
             window.attributes = window.attributes.apply { dimAmount = 0.68f }
         }
-        dialog.setOnDismissListener { (audioButton ?: subtitleButton)?.requestFocus() }
+        dialog.setOnDismissListener {
+            (if (type == C.TRACK_TYPE_AUDIO) audioButton else subtitleButton)?.requestFocus()
+        }
         dialog.show()
         dialog.window?.setLayout((activity.resources.displayMetrics.widthPixels * 0.72f).toInt(),
             (activity.resources.displayMetrics.heightPixels * 0.76f).toInt())

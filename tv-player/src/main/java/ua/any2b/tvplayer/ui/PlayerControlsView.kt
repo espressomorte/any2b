@@ -17,13 +17,16 @@ class PlayerControlsView @JvmOverloads constructor(
     val seekBar: SeekBar
     val positionLabel: TextView
     val durationLabel: TextView
-    val bufferLabel: TextView
     val bufferIndicator: BufferTickIndicatorView
     val bufferContainer: android.view.View
     val nowPlayingLabel: TextView
+    val nowPlayingRow: android.view.View
+    val nextEpisodeButton: TextView
     val trackActions: LinearLayout
-    val audioTrackButton: TextView
-    val subtitleTrackButton: TextView
+    val audioTrackButton: LinearLayout
+    val subtitleTrackButton: LinearLayout
+    val audioTrackChoice: TextView
+    val subtitleTrackChoice: TextView
 
     init {
         orientation = VERTICAL
@@ -31,23 +34,28 @@ class PlayerControlsView @JvmOverloads constructor(
         seekBar = findViewById(R.id.playbackSeekBar)
         positionLabel = findViewById(R.id.tvPlaybackPosition)
         durationLabel = findViewById(R.id.tvPlaybackDuration)
-        bufferLabel = findViewById(R.id.tvPlaybackBuffer)
         bufferIndicator = findViewById(R.id.ivPlaybackBuffer)
         bufferContainer = findViewById(R.id.playbackBufferContainer)
         nowPlayingLabel = findViewById(R.id.tvNowPlaying)
+        nowPlayingRow = findViewById(R.id.nowPlayingRow)
+        nextEpisodeButton = findViewById(R.id.btnNextEpisodeControl)
         trackActions = findViewById(R.id.playerTrackActions)
         audioTrackButton = findViewById(R.id.btnAudioTracks)
         subtitleTrackButton = findViewById(R.id.btnSubtitleTracks)
+        audioTrackChoice = findViewById(R.id.tvAudioTrackChoice)
+        subtitleTrackChoice = findViewById(R.id.tvSubtitleTrackChoice)
     }
 
     fun expandTrackActions(): Boolean {
-        if (audioTrackButton.visibility != VISIBLE && subtitleTrackButton.visibility != VISIBLE) return false
         trackActions.animate().cancel()
         trackActions.alpha = 0f
         trackActions.translationY = -8f * resources.displayMetrics.density
         trackActions.visibility = VISIBLE
         trackActions.animate().alpha(1f).translationY(0f).setDuration(180L).start()
-        (if (audioTrackButton.visibility == VISIBLE) audioTrackButton else subtitleTrackButton).requestFocus()
+        when {
+            audioTrackButton.isEnabled -> audioTrackButton.requestFocus()
+            subtitleTrackButton.isEnabled -> subtitleTrackButton.requestFocus()
+        }
         return true
     }
 
