@@ -13,7 +13,6 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.CacheWriter
@@ -55,8 +54,12 @@ class PlayerActivity : FragmentActivity() {
         private const val BUFFER_FOR_PLAYBACK_MS = 2_500
         private const val BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 5_000
         private const val NEXT_EPISODE_PRELOAD_LEAD_MS = 20_000L
+        private const val NEXT_EPISODE_FALLBACK_LEAD_MS = 45_000L
         private const val NEXT_EPISODE_PREFETCH_BYTES = 2L * 1024L * 1024L
         private const val PLAYER_PROMPT_TIMEOUT_MS = 13_000L
+        private const val TORRENT_BUFFER_TIMEOUT_MS = 30_000L
+        private const val TORRENT_SEEK_BUFFER_TIMEOUT_MS = 45_000L
+        private const val TORRENT_RETRY_BUFFER_TIMEOUT_MS = 60_000L
         const val EXTRA_STREAM_URL = "STREAM_URL"
         const val EXTRA_VOICE_INDEX = "VOICE_INDEX"
         const val EXTRA_EPISODE_INDEX = "EPISODE_INDEX"
@@ -79,6 +82,7 @@ class PlayerActivity : FragmentActivity() {
         const val EXTRA_TMDB_SEASON = "TMDB_SEASON"
         const val EXTRA_TMDB_EPISODE = "TMDB_EPISODE"
         const val EXTRA_NEXT_STREAM_URL = "NEXT_STREAM_URL"
+        const val EXTRA_NEXT_EPISODE_AVAILABLE = "NEXT_EPISODE_AVAILABLE"
         const val EXTRA_TMDB_ANITUBE_RELEASE = "TMDB_ANITUBE_RELEASE"
         const val EXTRA_TMDB_ANITUBE_VOICE_NAME = "TMDB_ANITUBE_VOICE_NAME"
         const val EXTRA_TMDB_RESUME_PROGRESS = "TMDB_RESUME_PROGRESS"
@@ -98,6 +102,7 @@ class PlayerActivity : FragmentActivity() {
     private var introLookupStarted = false
     private var introPromptDismissed = false
     private var nextEpisodePromptDismissed = false
+    private var nextEpisodeTransitioning = false
     private var nextEpisodePreloadStarted = false
     private var activePlayerPrompt: PlayerPrompt? = null
     private var promptDismissRunnable: Runnable? = null
@@ -131,9 +136,12 @@ class PlayerActivity : FragmentActivity() {
     private val backupSources = ArrayDeque<AnitubeStreamFallback>()
     private var retryingBackup = false
     private var torrentBufferingSinceMs = 0L
+    private var torrentLastSeekAtMs = 0L
+    private var torrentRecoveryAttempts = 0
+    private var torrentRetrySeekPending = false
     private var torrentBufferPromptShown = false
     private var torrentBufferingWatch: Runnable? = null
-    private var estimatedBandwidthBps = 0L
+    private var torrentRecoveryDialog: AlertDialog? = null
     private val streamResolver = StreamResolver()
 
     private var progressJob: Job? = null
@@ -253,8 +261,11 @@ class PlayerActivity : FragmentActivity() {
                     when (state) {
                         Player.STATE_READY   -> {
                             torrentBufferingSinceMs = 0L
+                            torrentBufferPromptShown = false
+                            torrentRetrySeekPending = false
                             torrentBufferingWatch?.let(mainHandler::removeCallbacks)
                             torrentBufferingWatch = null
+                            torrentRecoveryDialog?.dismiss()
                             hideBufferingIndicator()
                             binding.statusOverlay.visibility = View.GONE
                             if (isToloka) {
@@ -283,9 +294,12 @@ class PlayerActivity : FragmentActivity() {
                             val current = exo.currentPosition
                             val duration = exo.duration
                             if (duration > 0 && current >= duration - 3000) {
-                                showStatus("✓ Завершено", if (isToloka) "" else url)
                                 if (isTmdbAnitube) saveTmdbAnitubeProgress(1f, current, duration)
-                                finish()
+                                else if (isToloka) saveTolokaProgress(current, duration)
+                                if (!canGoNextEpisode() || !launchNextEpisode()) {
+                                    showStatus("✓ Завершено", if (isToloka) "" else url)
+                                    finish()
+                                }
                             } else {
                                 Log.w(TAG, "Ignored premature STATE_ENDED at current=$current, duration=$duration")
                             }
@@ -298,16 +312,43 @@ class PlayerActivity : FragmentActivity() {
                     setKeepScreenOn(playWhenReady && exo.playbackState != Player.STATE_ENDED)
                 }
 
+                override fun onPositionDiscontinuity(
+                    oldPosition: Player.PositionInfo,
+                    newPosition: Player.PositionInfo,
+                    reason: Int,
+                ) {
+                    if (!isToloka || reason != Player.DISCONTINUITY_REASON_SEEK) return
+                    if (torrentRetrySeekPending) {
+                        torrentRetrySeekPending = false
+                        return
+                    }
+                    torrentLastSeekAtMs = android.os.SystemClock.elapsedRealtime()
+                    torrentBufferingSinceMs = 0L
+                    torrentRecoveryAttempts = 0
+                    torrentBufferingWatch?.let(mainHandler::removeCallbacks)
+                    torrentBufferingWatch = null
+                    Log.i(TAG, "Torrent seek from=${oldPosition.positionMs} to=${newPosition.positionMs}")
+                    if (exo.playbackState == Player.STATE_BUFFERING) watchTorrentBuffering(exo)
+                }
+
                 override fun onPlayerError(error: PlaybackException) {
                     if (isToloka) {
                         Log.e("Player", "Torrent playback: ${error.errorCodeName} / ${error.message}", error)
+                        val matroskaReadFailed = generateSequence(error as Throwable) { it.cause }
+                            .any { it is IllegalStateException &&
+                                it.message?.contains("No valid varint length mask found") == true }
                         if (error.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED ||
                             error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED ||
                             error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES) {
                             showStatus("✗ Пристрій не підтримує відеоформат цієї роздачі (можливо, HEVC). Спробуйте іншу роздачу з H.264 або зовнішній плеєр.", "")
+                        } else if (matroskaReadFailed && torrentRecoveryAttempts == 0) {
+                            Log.w(TAG, "Matroska read failed after seek; retrying from an earlier position")
+                            retryTorrentAtPosition(exo, rewindMs = 5_000L)
                         } else {
                             torrentBufferPromptShown = true
-                            showTorrentRecoveryDialog(exo, "Помилка потоку: ${error.errorCodeName}")
+                            showTorrentRecoveryDialog(exo, if (matroskaReadFailed)
+                                "Не вдалося прочитати відео біля вибраної позиції"
+                                else "Помилка потоку: ${error.errorCodeName}")
                         }
                     } else {
                         Log.e("Player", "ExoPlayer: ${error.errorCodeName} / ${error.message}", error)
@@ -341,7 +382,8 @@ class PlayerActivity : FragmentActivity() {
                                 topicId?.matches(Regex("[0-9]+")) == true && fileId > 0) {
                                 TolokaPlaybackStore(this@PlayerActivity)
                                     .markTmdbOpened(type.path, tmdbId, topicId, fileId)
-                                TmdbWatchHistoryStore(this@PlayerActivity).record(TmdbTitle(
+                                val history = TmdbWatchHistoryStore(this@PlayerActivity)
+                                history.record(TmdbTitle(
                                     tmdbId, type, tmdbTitle,
                                     intent.getStringExtra(EXTRA_TMDB_ORIGINAL_TITLE),
                                     intent.getIntExtra(EXTRA_TMDB_YEAR, 0).takeIf { it > 0 },
@@ -351,6 +393,11 @@ class PlayerActivity : FragmentActivity() {
                                     genreIds = intent.getIntArrayExtra(EXTRA_TMDB_GENRE_IDS)
                                         ?.toSet().orEmpty(),
                                 ))
+                                history.savePlaybackSelection(type, tmdbId,
+                                    ua.any2b.tvplayer.data.TmdbPlaybackSelection(
+                                        ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.TORRENT,
+                                        topicId = topicId, fileId = fileId,
+                                        fileName = intent.getStringExtra(EXTRA_TOLOKA_FILE_NAME)))
                                 tolokaPlaybackMarked = true
                             }
                         }
@@ -358,17 +405,6 @@ class PlayerActivity : FragmentActivity() {
                             binding.statusOverlay.visibility = View.GONE
                         }, 3000)
                     }
-                }
-            })
-
-            exo.addAnalyticsListener(object : AnalyticsListener {
-                override fun onBandwidthEstimate(
-                    eventTime: AnalyticsListener.EventTime,
-                    totalLoadTimeMs: Int,
-                    totalBytesTransferred: Long,
-                    bitrateEstimate: Long,
-                ) {
-                    estimatedBandwidthBps = bitrateEstimate.coerceAtLeast(0L)
                 }
             })
 
@@ -386,13 +422,24 @@ class PlayerActivity : FragmentActivity() {
             override fun run() {
                 torrentBufferingWatch = null
                 if (isFinishing || isDestroyed || player !== exo || exo.playbackState != Player.STATE_BUFFERING) return
-                val elapsed = android.os.SystemClock.elapsedRealtime() - startedAt
-                val lowBandwidth = estimatedBandwidthBps in 1 until 1_500_000L
-                val threshold = if (lowBandwidth || estimatedBandwidthBps == 0L) 15_000L else 30_000L
+                val now = android.os.SystemClock.elapsedRealtime()
+                val elapsed = now - startedAt
+                val threshold = when {
+                    torrentRecoveryAttempts > 0 -> TORRENT_RETRY_BUFFER_TIMEOUT_MS
+                    torrentLastSeekAtMs > 0L &&
+                        now - torrentLastSeekAtMs < TORRENT_SEEK_BUFFER_TIMEOUT_MS ->
+                        TORRENT_SEEK_BUFFER_TIMEOUT_MS
+                    else -> TORRENT_BUFFER_TIMEOUT_MS
+                }
                 if (elapsed >= threshold) {
-                    torrentBufferPromptShown = true
-                    Log.w(TAG, "Torrent buffering prolonged ${elapsed}ms estimatedBandwidth=${estimatedBandwidthBps}bps")
-                    showTorrentRecoveryDialog(exo, if (lowBandwidth) "Низька швидкість потоку" else "Потік довго буферизується")
+                    Log.w(TAG, "Torrent buffering prolonged ${elapsed}ms " +
+                        "afterSeek=${torrentLastSeekAtMs > 0L} retry=$torrentRecoveryAttempts " +
+                        "position=${exo.currentPosition} buffered=${exo.bufferedPosition}")
+                    if (torrentRecoveryAttempts == 0) retryTorrentAtPosition(exo)
+                    else {
+                        torrentBufferPromptShown = true
+                        showTorrentRecoveryDialog(exo, "Потік довго буферизується")
+                    }
                 } else {
                     torrentBufferingWatch = this
                     mainHandler.postDelayed(this, threshold - elapsed)
@@ -400,33 +447,44 @@ class PlayerActivity : FragmentActivity() {
             }
         }
         torrentBufferingWatch = watch
-        mainHandler.postDelayed(watch, 15_000L)
+        mainHandler.postDelayed(watch, 5_000L)
+    }
+
+    private fun retryTorrentAtPosition(exo: ExoPlayer, rewindMs: Long = 0L) {
+        val position = (exo.currentPosition - rewindMs).coerceAtLeast(0L)
+        torrentRecoveryAttempts++
+        torrentBufferingSinceMs = 0L
+        torrentRetrySeekPending = true
+        Log.i(TAG, "Retrying torrent stream at position=$position")
+        exo.stop()
+        exo.prepare()
+        exo.seekTo(position)
+        exo.playWhenReady = true
     }
 
     private fun showTorrentRecoveryDialog(exo: ExoPlayer, reason: String) {
-        if (isFinishing || isDestroyed) return
+        if (isFinishing || isDestroyed || torrentRecoveryDialog?.isShowing == true) return
         hideBufferingIndicator()
-        val speed = estimatedBandwidthBps.takeIf { it > 0L }
-            ?.let { "\nОцінена швидкість: %.1f Мбіт/с".format(it / 1_000_000.0) }.orEmpty()
-        AlertDialog.Builder(this)
+        torrentRecoveryDialog = AlertDialog.Builder(this)
             .setTitle("Не вдається відтворити")
-            .setMessage("$reason.$speed\n\nМожна повторити підключення або повернутися до списку й вибрати іншу роздачу.")
+            .setMessage("$reason. Можна повторити підключення або повернутися до списку й вибрати іншу роздачу.")
             .setPositiveButton("Повторити") { _, _ ->
                 torrentBufferingWatch?.let(mainHandler::removeCallbacks)
                 torrentBufferingWatch = null
                 torrentBufferingSinceMs = 0L
                 torrentBufferPromptShown = false
-                estimatedBandwidthBps = 0L
-                exo.stop()
-                exo.prepare()
-                exo.playWhenReady = true
+                retryTorrentAtPosition(exo)
             }
             .setNegativeButton("Змінити роздачу") { _, _ -> finish() }
             .setOnCancelListener {
                 torrentBufferPromptShown = false
+                torrentBufferingSinceMs = 0L
                 if (exo.playbackState == Player.STATE_BUFFERING) watchTorrentBuffering(exo)
             }
-            .show()
+            .create().also { dialog ->
+                dialog.setOnDismissListener { if (torrentRecoveryDialog === dialog) torrentRecoveryDialog = null }
+                dialog.show()
+            }
     }
 
     private fun retryAnitubeBackup() {
@@ -512,12 +570,16 @@ class PlayerActivity : FragmentActivity() {
     }
 
     private fun updateSkipIntroButton() {
-        val position = player?.currentPosition ?: return
+        val exo = player ?: return
+        val position = exo.currentPosition
         val isTv = intent.getStringExtra(EXTRA_TMDB_TYPE) == TmdbMediaType.TV.path
         val creditsStartMs = if (isTv) introSegments.credits.minOfOrNull { it.startMs }
-            ?.takeIf { it > 0L } else null
-        if (!nextEpisodePreloadStarted && creditsStartMs != null &&
-            position >= (creditsStartMs - NEXT_EPISODE_PRELOAD_LEAD_MS).coerceAtLeast(0L)) {
+            ?.takeIf { it > 0L && (exo.duration <= 0L || it < exo.duration) } else null
+        val nextStartMs = creditsStartMs ?: exo.duration.takeIf { it > 0L }
+            ?.let { (it - NEXT_EPISODE_FALLBACK_LEAD_MS).coerceAtLeast(0L) }
+        val canGoNext = canGoNextEpisode()
+        if (!nextEpisodePreloadStarted && canGoNext && nextStartMs != null &&
+            position >= (nextStartMs - NEXT_EPISODE_PRELOAD_LEAD_MS).coerceAtLeast(0L)) {
             nextEpisodePreloadStarted = true
             prefetchNextEpisodeChunk()
         }
@@ -525,18 +587,24 @@ class PlayerActivity : FragmentActivity() {
         val intro = introSegments.intros.firstOrNull {
             position >= it.startMs && position < it.endMs
         }
-        val nextSeason = intent.getIntExtra(EXTRA_TMDB_SEASON, -1)
-        val nextEpisode = intent.getIntExtra(EXTRA_TMDB_EPISODE, -1)
-        val canGoNext = isTv && nextSeason > 0 && nextEpisode > 0 &&
-            (isToloka && !intent.getStringExtra(EXTRA_TOLOKA_TOPIC_ID).isNullOrBlank() ||
-                isTmdbAnitube)
         when {
             intro != null && !introPromptDismissed -> showPlayerPrompt(PlayerPrompt.SKIP_INTRO)
-            creditsStartMs != null && position >= creditsStartMs && canGoNext &&
+            nextStartMs != null && position >= nextStartMs && canGoNext &&
                 !nextEpisodePromptDismissed -> showPlayerPrompt(PlayerPrompt.NEXT_EPISODE)
             else -> hidePlayerPrompt()
         }
     }
+
+    private fun canGoNextEpisode(): Boolean =
+        intent.getStringExtra(EXTRA_TMDB_TYPE) == TmdbMediaType.TV.path &&
+            intent.getIntExtra(EXTRA_TMDB_SEASON, -1) > 0 &&
+            intent.getIntExtra(EXTRA_TMDB_EPISODE, -1) > 0 &&
+            when {
+                isToloka -> !intent.getStringExtra(EXTRA_TOLOKA_TOPIC_ID).isNullOrBlank() &&
+                    !intent.getStringExtra(EXTRA_NEXT_STREAM_URL).isNullOrBlank()
+                isTmdbAnitube -> intent.getBooleanExtra(EXTRA_NEXT_EPISODE_AVAILABLE, false)
+                else -> false
+            }
 
     private fun showPlayerPrompt(prompt: PlayerPrompt) {
         if (activePlayerPrompt == prompt) return
@@ -606,16 +674,18 @@ class PlayerActivity : FragmentActivity() {
         }
     }
 
-    private fun launchNextEpisode() {
-        val tmdbId = intent.getIntExtra(EXTRA_TMDB_ID, -1).takeIf { it > 0 } ?: return
+    private fun launchNextEpisode(): Boolean {
+        if (nextEpisodeTransitioning) return true
+        if (!canGoNextEpisode()) return false
+        val tmdbId = intent.getIntExtra(EXTRA_TMDB_ID, -1).takeIf { it > 0 } ?: return false
         val type = intent.getStringExtra(EXTRA_TMDB_TYPE)
-            ?.takeIf { it == TmdbMediaType.TV.path } ?: return
+            ?.takeIf { it == TmdbMediaType.TV.path } ?: return false
         val nextEpisode = (intent.getIntExtra(EXTRA_TMDB_EPISODE, episodeNumber) + 1)
-        val season = intent.getIntExtra(EXTRA_TMDB_SEASON, -1).takeIf { it > 0 } ?: return
+        val season = intent.getIntExtra(EXTRA_TMDB_SEASON, -1).takeIf { it > 0 } ?: return false
         val source = when {
             isToloka -> ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.TORRENT
             isTmdbAnitube -> ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.ANITUBE
-            else -> return
+            else -> return false
         }
         val nextIntent = android.content.Intent(this, TmdbDetailsActivity::class.java).apply {
             putExtra(TmdbDetailsActivity.EXTRA_TMDB_ID, tmdbId)
@@ -640,12 +710,16 @@ class PlayerActivity : FragmentActivity() {
             }
         }
         try {
+            nextEpisodeTransitioning = true
             startActivity(nextIntent)
             finish()
+            return true
         } catch (error: Exception) {
+            nextEpisodeTransitioning = false
             Log.e(TAG, "Could not open next episode", error)
             nextEpisodePromptDismissed = true
             hidePlayerPrompt()
+            return false
         }
     }
 
@@ -670,6 +744,7 @@ class PlayerActivity : FragmentActivity() {
                     ?.toSet().orEmpty(),
             ),
             voiceIndex, episodeIndex, episodeNumber, progress,
+            seasonNumber = intent.getIntExtra(EXTRA_TMDB_SEASON, 1).coerceAtLeast(1),
             positionMs = positionMs, durationMs = durationMs,
         )
     }

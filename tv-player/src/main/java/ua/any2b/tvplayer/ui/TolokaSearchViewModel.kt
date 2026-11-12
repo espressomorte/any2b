@@ -441,6 +441,13 @@ class TolokaSearchViewModel(
     private fun selectedTopicKey(details: TmdbDetails): String =
         "selected_torrent_${details.title.type.path}_${details.title.id}"
 
+    /** Topic that owns the currently loaded file list, independent of search selection updates. */
+    fun playbackTopicId(fileId: Int): String? {
+        val files = _state.value.transfer as? TolokaTransferState.Files ?: return null
+        if (files.torrent.videoFiles.none { it.id == fileId }) return null
+        return uploadedTopicId
+    }
+
     fun playbackUrl(fileId: Int): String? {
         val files = _state.value.transfer as? TolokaTransferState.Files ?: return null
         val file = files.torrent.videoFiles.firstOrNull { it.id == fileId } ?: return null

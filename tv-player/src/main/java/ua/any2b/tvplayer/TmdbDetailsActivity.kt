@@ -227,11 +227,12 @@ class TmdbDetailsActivity : ComponentActivity() {
                         failWatchlistPlayback((detailsState as TmdbDetailsState.Error).message)
                     }
                 }
-                LaunchedEffect(tolokaState.transfer, selectedTopicId, readyDetails?.title?.id) {
+                LaunchedEffect(tolokaState.transfer, readyDetails?.title?.id) {
                     val details = readyDetails ?: return@LaunchedEffect
-                    val topicId = selectedTopicId ?: return@LaunchedEffect
                     val files = (tolokaState.transfer as? TolokaTransferState.Files)
                         ?.torrent?.videoFiles ?: return@LaunchedEffect
+                    val topicId = files.firstOrNull()?.id
+                        ?.let(tolokaViewModel::playbackTopicId) ?: return@LaunchedEffect
                     val progress = TmdbWatchHistoryStore(this@TmdbDetailsActivity)
                         .episodeProgress(details.title.type, details.title.id)
                     val fallbackSeason = progress?.seasonNumber
@@ -602,8 +603,9 @@ class TmdbDetailsActivity : ComponentActivity() {
 
     private fun openFile(fileId: Int) {
         if (launchingPlayer) return
+        val topicId = tolokaViewModel.playbackTopicId(fileId)
         val url = tolokaViewModel.playbackUrl(fileId)
-        if (url == null) {
+        if (topicId == null || url == null) {
             tolokaViewModel.reportPlaybackStatus("Не вдалося сформувати URL потоку для вибраного файлу")
             Toast.makeText(this, "Відеофайл недоступний. Повторіть вибір роздачі", Toast.LENGTH_LONG).show()
             return
@@ -617,7 +619,7 @@ class TmdbDetailsActivity : ComponentActivity() {
                     SettingsManager(this@TmdbDetailsActivity).torrServerUrl(),
                     credentials?.let { TorrServerBasicAuth(it.username, it.password) },
                 )
-                if (!isFinishing && !isDestroyed) launchFilePlayback(fileId, url)
+                if (!isFinishing && !isDestroyed) launchFilePlayback(fileId, url, topicId)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -651,7 +653,7 @@ class TmdbDetailsActivity : ComponentActivity() {
             .show()
     }
 
-    private fun launchFilePlayback(fileId: Int, url: String) {
+    private fun launchFilePlayback(fileId: Int, url: String, topicId: String) {
         val fileName = tolokaViewModel.playbackFileName(fileId)
         tolokaViewModel.reportPlaybackStatus("URL потоку сформовано для індексу $fileId. Відкриваємо плеєр…")
         val title = (detailsViewModel.state.value as? TmdbDetailsState.Ready)?.details?.title
@@ -662,16 +664,12 @@ class TmdbDetailsActivity : ComponentActivity() {
             if (externalIntent != null) {
                 try {
                     val history = TmdbWatchHistoryStore(this)
-                    selectedTopicId?.let { topicId ->
-                        TolokaPlaybackStore(this).markTmdbOpened(tmdbType, tmdbId, topicId, fileId)
-                    }
+                    TolokaPlaybackStore(this).markTmdbOpened(tmdbType, tmdbId, topicId, fileId)
                     title?.let {
                         history.record(it)
-                        selectedTopicId?.let { topicId ->
-                            history.savePlaybackSelection(it.type, it.id,
-                                TmdbPlaybackSelection(TmdbPlaybackSelection.Source.TORRENT,
-                                    topicId = topicId, fileId = fileId, fileName = fileName))
-                        }
+                        history.savePlaybackSelection(it.type, it.id,
+                            TmdbPlaybackSelection(TmdbPlaybackSelection.Source.TORRENT,
+                                topicId = topicId, fileId = fileId, fileName = fileName))
                         if (it.type == TmdbMediaType.TV) {
                             val episode = fileName?.let(TolokaReleaseMetadataParser::parse)
                                 ?.takeIf { meta -> meta.episodeStart != null &&
@@ -692,13 +690,13 @@ class TmdbDetailsActivity : ComponentActivity() {
                             (meta.episodeEnd == null || meta.episodeEnd == meta.episodeStart) }
                     val torrentContext = title?.let {
                         PendingVimuPlayback(it, TmdbPlaybackSelection.Source.TORRENT,
-                            selectedTopicId, fileId, episode?.episodeStart,
+                            topicId, fileId, episode?.episodeStart,
                             episode?.season ?: it.matchedSeasonNumber)
                     }
                     launchExternalPlayer(externalIntent, selectedPackage,
-                            selectedTopicId?.let { topicId -> title?.let {
+                            title?.let {
                                 history.torrentProgress(it.type, it.id, topicId, fileId)?.positionMs
-                            } } ?: 0L, torrentContext)
+                            } ?: 0L, torrentContext)
                     refreshPlaybackMarks()
                     tolokaViewModel.reportPlaybackStatus("URL передано зовнішньому плеєру. Результат відтворення перевіряйте в ньому")
                     if (!ExternalVideoPlayers(this).isVimu(selectedPackage))
@@ -719,14 +717,12 @@ class TmdbDetailsActivity : ComponentActivity() {
             startActivity(Intent(this, PlayerActivity::class.java).apply {
                 putExtra(PlayerActivity.EXTRA_STREAM_URL, url)
                 putExtra(PlayerActivity.EXTRA_SOURCE_TYPE, PlayerActivity.SOURCE_TOLOKA)
-                selectedTopicId?.let { putExtra(PlayerActivity.EXTRA_TOLOKA_TOPIC_ID, it) }
+                putExtra(PlayerActivity.EXTRA_TOLOKA_TOPIC_ID, topicId)
                 putExtra(PlayerActivity.EXTRA_TOLOKA_FILE_ID, fileId)
                 fileName?.let { putExtra(PlayerActivity.EXTRA_TOLOKA_FILE_NAME, it) }
                 title?.let {
-                    val resumePosition = selectedTopicId?.let { topicId ->
-                        TmdbWatchHistoryStore(this@TmdbDetailsActivity)
-                            .torrentProgress(it.type, it.id, topicId, fileId)
-                    }?.positionMs ?: 0L
+                    val resumePosition = TmdbWatchHistoryStore(this@TmdbDetailsActivity)
+                        .torrentProgress(it.type, it.id, topicId, fileId)?.positionMs ?: 0L
                     putExtra(PlayerActivity.EXTRA_TORRENT_RESUME_POSITION_MS, resumePosition)
                     putExtra(PlayerActivity.EXTRA_TMDB_ID, it.id)
                     putExtra(PlayerActivity.EXTRA_TMDB_TYPE, it.type.path)
@@ -762,11 +758,6 @@ class TmdbDetailsActivity : ComponentActivity() {
                 }
             })
             finishDetailsForWatchlistPlayback()
-            title?.let { selectedTopicId?.let { topicId ->
-                TmdbWatchHistoryStore(this).savePlaybackSelection(it.type, it.id,
-                    TmdbPlaybackSelection(TmdbPlaybackSelection.Source.TORRENT,
-                        topicId = topicId, fileId = fileId, fileName = fileName))
-            } }
             tolokaViewModel.reportPlaybackStatus("URL передано вбудованому плеєру")
         } catch (_: Exception) {
             launchingPlayer = false
@@ -859,6 +850,10 @@ class TmdbDetailsActivity : ComponentActivity() {
                         putExtra(PlayerActivity.EXTRA_TMDB_SEASON, it)
                     }
                     putExtra(PlayerActivity.EXTRA_TMDB_EPISODE, episodeNumber)
+                    putExtra(PlayerActivity.EXTRA_NEXT_EPISODE_AVAILABLE,
+                        found?.voices?.getOrNull(voiceIndex)?.episodes?.any {
+                            it.episodeNumber == episodeNumber + 1
+                        } == true)
                     selectedRelease?.let {
                         putExtra(PlayerActivity.EXTRA_TMDB_ANITUBE_RELEASE, it)
                     }

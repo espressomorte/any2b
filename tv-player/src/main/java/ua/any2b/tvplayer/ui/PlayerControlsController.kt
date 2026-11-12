@@ -46,6 +46,7 @@ class PlayerControlsController(
 ) {
     private companion object {
         const val SCRUB_INCREMENT_SECONDS = 10
+        const val SEEK_SETTLE_MS = 500L
         const val HIDE_DELAY_MS = 5_000L
         const val PROGRESS_UPDATE_MS = 500L
     }
@@ -59,6 +60,8 @@ class PlayerControlsController(
     private val bufferContainer = controls.bufferContainer
     private var transport: PlayerTransport? = null
     private var isScrubbing = false
+    private var pendingSeekPositionMs: Long? = null
+    private val commitSeek = Runnable { commitPendingSeek() }
 
     private val hideControls = Runnable {
         controls.collapseTrackActions(returnFocus = false)
@@ -87,6 +90,7 @@ class PlayerControlsController(
             }
 
             override fun onStopTrackingTouch(bar: SeekBar) {
+                cancelPendingSeek()
                 transport?.seekTo(bar.progress.toLong() * 1_000L)
                 isScrubbing = false
                 refreshProgress()
@@ -96,6 +100,7 @@ class PlayerControlsController(
     }
 
     fun attach(transport: PlayerTransport?) {
+        cancelPendingSeek()
         this.transport = transport
         refreshProgress()
     }
@@ -111,8 +116,13 @@ class PlayerControlsController(
 
     /** Reveals controls on the first remote input and handles transport shortcuts. */
     fun onRemoteKey(event: KeyEvent): Boolean {
+        val seekKey = event.keyCode in setOf(KeyEvent.KEYCODE_DPAD_LEFT,
+            KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MEDIA_REWIND,
+            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD)
+        if (event.action == KeyEvent.ACTION_UP && seekKey && pendingSeekPositionMs != null) return true
         if (event.action != KeyEvent.ACTION_DOWN) return false
         val current = transport ?: return false
+        if (!seekKey && pendingSeekPositionMs != null) commitPendingSeek()
         if (controls.visibility == View.VISIBLE) scheduleHide()
 
         if (event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN &&
@@ -190,6 +200,7 @@ class PlayerControlsController(
     fun release() {
         handler.removeCallbacks(hideControls)
         handler.removeCallbacks(updateProgress)
+        cancelPendingSeek()
         transport = null
     }
 
@@ -203,7 +214,7 @@ class PlayerControlsController(
         val duration = current.durationMs()
         val durationSeconds = (duration / 1_000L)
             .coerceIn(0L, Int.MAX_VALUE.toLong())
-        val baseSeconds = if (controls.visibility == View.VISIBLE) {
+        val baseSeconds = pendingSeekPositionMs?.div(1_000L) ?: if (controls.visibility == View.VISIBLE) {
             seekBar.progress.toLong()
         } else {
             current.currentPositionMs().coerceAtLeast(0L) / 1_000L
@@ -215,12 +226,26 @@ class PlayerControlsController(
             .toInt()
         seekBar.progress = targetSeconds
         positionLabel.text = formatTime(targetSeconds.toLong() * 1_000L)
-        current.seekTo(targetSeconds.toLong() * 1_000L)
+        pendingSeekPositionMs = targetSeconds.toLong() * 1_000L
+        handler.removeCallbacks(commitSeek)
+        handler.postDelayed(commitSeek, SEEK_SETTLE_MS)
+    }
+
+    private fun commitPendingSeek() {
+        handler.removeCallbacks(commitSeek)
+        val position = pendingSeekPositionMs ?: return
+        pendingSeekPositionMs = null
+        transport?.seekTo(position)
+    }
+
+    private fun cancelPendingSeek() {
+        handler.removeCallbacks(commitSeek)
+        pendingSeekPositionMs = null
     }
 
     private fun refreshProgress() {
         val current = transport ?: return
-        val position = current.currentPositionMs().coerceAtLeast(0L)
+        val position = (pendingSeekPositionMs ?: current.currentPositionMs()).coerceAtLeast(0L)
         val duration = current.durationMs().coerceAtLeast(0L)
         val durationSeconds = (duration / 1_000L).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
         seekBar.max = durationSeconds

@@ -8,22 +8,24 @@
     :root{color-scheme:dark;--bg:#111218;--panel:#1b1d26;--line:#30323e;--muted:#a1a3b4;--text:#f2f1f8;--purple:#b6a7ff;--green:#74d6a5;--yellow:#f2c66d;--red:#f08d96}
     *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,sans-serif}button,input,select,textarea{font:inherit;color:inherit}button,select,input[type=search],textarea{background:#252733;border:1px solid #414351;border-radius:10px;padding:9px 12px}button{cursor:pointer}button:hover{border-color:var(--purple)}a{color:var(--purple)}header{padding:25px max(20px,calc((100vw - 1440px)/2));border-bottom:1px solid var(--line);background:#171820}h1{font-size:22px;margin:0 0 4px}header p{margin:0;color:var(--muted)}main{max-width:1440px;margin:auto;padding:20px;display:grid;gap:16px}.toolbar,.stats,.layout{display:flex;gap:12px;align-items:center}.toolbar{flex-wrap:wrap}.toolbar .spacer{flex:1}.stats{flex-wrap:wrap}.stat{padding:8px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--muted)}.stat b{color:var(--text);margin-right:5px}.layout{align-items:stretch}.list{width:43%;min-width:330px;max-height:calc(100vh - 245px);overflow:auto;border:1px solid var(--line);border-radius:12px;background:var(--panel)}.row{width:100%;text-align:left;display:block;padding:13px 15px;border:0;border-bottom:1px solid var(--line);border-radius:0;background:transparent}.row:hover,.row.active{background:#282936}.row strong{display:block;font-size:15px;margin:5px 0}.meta{font-size:12px;color:var(--muted)}.badge{font-size:11px;border-radius:99px;padding:3px 8px;background:#292b35;color:var(--muted)}.badge.matched{color:var(--green);background:#173127}.badge.needs_review{color:var(--yellow);background:#3a3020}.badge.not_found{color:var(--red);background:#382329}.detail{flex:1;min-width:0;padding:20px;border:1px solid var(--line);border-radius:12px;background:var(--panel);max-height:calc(100vh - 245px);overflow:auto}.detail h2{font-size:21px;margin:0 0 4px}.detail h3{font-size:15px;margin:20px 0 8px}.detailhead{display:flex;justify-content:space-between;gap:14px}.reason{margin:14px 0;padding:11px 13px;background:#242631;border-radius:9px;color:#d1d0dc}.facts{display:flex;gap:8px;flex-wrap:wrap;color:var(--muted);font-size:13px}.candidate{border:1px solid var(--line);border-radius:10px;padding:13px;margin:9px 0}.candidate h4{margin:0 0 4px;font-size:16px}.candidate p{margin:3px 0;color:var(--muted)}.tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}.tag{font-size:11px;color:#d5d3df;background:#30323d;border-radius:6px;padding:3px 7px}.empty{padding:32px;color:var(--muted);text-align:center}.load{border:1px dashed #545668;border-radius:12px;padding:16px;color:var(--muted)}.load input{max-width:100%}.error{color:var(--red)}.review-tools{margin:20px 0;padding:14px;border:1px solid var(--line);border-radius:10px}.review-tools label{display:block;margin-bottom:7px;font-weight:600}.review-tools textarea{width:100%;min-height:82px;resize:vertical}.review-tools small{display:block;color:var(--muted);margin-top:5px}.reject,.confirm-candidate{font-size:12px;padding:5px 9px;margin:8px 6px 0 0}.reject[aria-pressed=true]{color:#ffc1c3;background:#39252b;border-color:#88525a}.confirm-candidate[aria-pressed=true]{color:#a8f0c9;background:#153c2e;border-color:#388b65}.candidate.rejected{opacity:.62}.candidate.rejected h4{text-decoration:line-through}.candidate.confirmed{border-color:#388b65}.@media(max-width:800px){.layout{display:block}.list{width:100%;min-width:0;max-height:40vh;margin-bottom:12px}.detail{max-height:none}.stats{gap:6px}}
     .romaji-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.verify-result{display:block;min-height:1.4em;color:var(--muted);font-size:12px}.verify-result.success{color:var(--green)}.verify-result.error{color:var(--red)}.verify-anitube{font-size:12px;padding:5px 9px}button:disabled{opacity:.55;cursor:wait}
+    .audit-flags{margin:14px 0;padding:13px;border:1px solid var(--line);border-radius:10px;background:#22242e}.audit-flags h3{margin:0 0 8px}.audit-flags p{margin:7px 0;color:var(--muted)}.badge.high{color:#ffc1c3;background:#42252b}.badge.medium{color:#ffe0a3;background:#47351d}.badge.low{color:#c7baff;background:#302b47}.badge.info{color:#b6c5d7;background:#283241}.badge.resolved{color:var(--green);background:#173127}.load label{display:inline-block;margin-right:16px}.load small{display:block;margin-top:8px}.audit-hint{color:var(--yellow)}
   </style>
 </head>
 <body>
   <header><h1>AniList × TMDB × AniTube</h1><p>Перегляд результатів автоматичного зіставлення · для перевірки кандидата відкрийте через <code>python3 total-matcher/review_server.py</code></p></header>
   <main>
-    <div class="load"><label>Відкрити JSON зіставлень: <input id="file" type="file" accept="application/json,.json"></label> <span id="filename">Оберіть <code>anilistTmbdbAnitube.json</code></span></div>
+    <div class="load"><label>JSON зіставлень: <input id="file" type="file" accept="application/json,.json"></label><label>Аудит: <input id="auditFile" type="file" accept="application/json,.json"></label><span id="filename">Оберіть <code>anilistTmbdbAnitube-anilist-search.json</code></span><small id="auditFilename">Аудит необов’язковий. Для перевірки з аудиту завантажте також <code>total-matcher/data/audit.json</code>; рішення експортуються у JSON зіставлень.</small></div>
     <section class="stats" id="stats"></section>
-    <section class="toolbar"><select id="status"><option value="all">Усі статуси</option><option value="matched">Успішно зіставлено</option><option value="needs_review">Потребує перевірки</option><option value="not_found">Не знайдено</option></select><input id="query" type="search" placeholder="Пошук за назвою або ID"><button id="export" disabled>Експортувати перевірки</button><span class="spacer"></span><span class="meta" id="shown"></span></section>
+    <section class="toolbar"><select id="scope"><option value="all">Усі записи</option><option value="audit">Записи аудиту</option></select><select id="risk" hidden><option value="all">Усі ризики</option><option value="high">Високий</option><option value="medium">Середній</option><option value="low">Низький</option><option value="info">Інформація</option></select><select id="auditState" hidden><option value="all">Усі рішення</option><option value="open">Не вирішено</option><option value="resolved">Вирішено вручну</option></select><select id="flag" hidden><option value="all">Усі причини</option></select><select id="status"><option value="all">Усі статуси</option><option value="matched">Успішно зіставлено</option><option value="needs_review">Потребує перевірки</option><option value="not_found">Не знайдено</option></select><input id="query" type="search" placeholder="Пошук за назвою або ID"><button id="export" disabled>Експортувати перевірки</button><span class="spacer"></span><span class="meta" id="shown"></span></section>
     <div class="layout"><section class="list" id="list"><div class="empty">Завантажте JSON-файл, щоб побачити записи.</div></section><article class="detail" id="detail"><div class="empty">Оберіть запис зі списку.</div></article></div>
   </main>
 <script>
 const $=id=>document.getElementById(id);
-let records=[],visible=[],selected=-1,sourceMeta={};
+let records=[],visible=[],selected=-1,sourceMeta={},auditById=new Map(),auditData=null;
 const STORAGE='anilist-review-notes-v1';
 let notes=readNotes();
 const labels={matched:'Успішно зіставлено',needs_review:'Потребує перевірки',not_found:'Не знайдено'};
+const riskLabels={high:'Високий ризик',medium:'Середній ризик',low:'Низький ризик',info:'Інформація'};
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function readNotes(){try{return JSON.parse(localStorage.getItem(STORAGE)||'{}')}catch{return {}}}
 function key(x){return String(x.newsId??x.anitubeUrl??x.anitubeTitle)}
@@ -34,6 +36,18 @@ function noteFor(x){
   return n;
 }
 function saveNotes(){localStorage.setItem(STORAGE,JSON.stringify(notes))}
+function hasDecision(x){const n=noteFor(x);return n.confirmed.length>0||((x.candidates?.length||0)>0&&n.rejected.length>=x.candidates.length)}
+function auditFor(x){return auditById.get(Number(x.newsId))}
+function loadAudit(data,name){
+  if(!data||!Array.isArray(data.results))throw Error('У файлі аудиту немає масиву results.');
+  const ids=new Set();for(const row of data.results){const id=Number(row.newsId);if(!Number.isInteger(id)||ids.has(id))throw Error('В аудиті є некоректні або повторні newsId.');ids.add(id)}
+  auditData=data;auditById=new Map(data.results.map(row=>[Number(row.newsId),row]));
+  const flags=[...new Set(data.results.flatMap(row=>(row.flags||[]).map(f=>f.code)))].sort();
+  $('flag').innerHTML='<option value="all">Усі причини</option>'+flags.map(code=>`<option value="${esc(code)}">${esc(code)}</option>`).join('');
+  $('scope').value='audit';$('auditFilename').textContent=`${name} · ${data.results.length.toLocaleString('uk-UA')} записів аудиту`;
+  updateAuditControls();renderStats();filter();
+}
+function updateAuditControls(){const active=$('scope').value==='audit';for(const id of ['risk','auditState','flag'])$(id).hidden=!active}
 function load(data,name){
   if(!data||!Array.isArray(data.items))throw Error('У файлі немає масиву items.');
   records=data.items;sourceMeta=data.$meta||{};
@@ -53,23 +67,41 @@ function renderStats(){
   const counts=records.reduce((a,x)=>(a[x.status]=(a[x.status]||0)+1,a),{});
   $('stats').innerHTML=`<span class="stat"><b>${(sourceMeta.processedCount??records.length).toLocaleString('uk-UA')}</b> оброблено</span>`+
     Object.entries(labels).map(([k,v])=>`<span class="stat"><b>${(counts[k]||0).toLocaleString('uk-UA')}</b> ${v}</span>`).join('')+
-    `<span class="stat">Завершено: ${sourceMeta.complete?'так':'ні'}</span>`;
+    `<span class="stat">Завершено: ${sourceMeta.complete?'так':'ні'}</span>`+
+    (auditData?`<span class="stat"><b>${auditData.results.length.toLocaleString('uk-UA')}</b> в аудиті</span><span class="stat"><b>${records.filter(x=>auditFor(x)).length.toLocaleString('uk-UA')}</b> знайдено у файлі зіставлень</span><span class="stat"><b>${records.filter(x=>auditFor(x)&&hasDecision(x)).length.toLocaleString('uk-UA')}</b> вирішено вручну</span>`:'');
 }
 function filter(){
-  const s=$('status').value,q=$('query').value.trim().toLocaleLowerCase('uk');
+  const s=$('status').value,q=$('query').value.trim().toLocaleLowerCase('uk'),auditMode=$('scope').value==='audit';
   visible=records.map((x,i)=>({x,i})).filter(({x})=>(s==='all'||x.status===s)&&
+    (!auditMode||!!auditFor(x))&&(!auditMode||$('risk').value==='all'||auditFor(x)?.risk===$('risk').value)&&
+    (!auditMode||$('flag').value==='all'||auditFor(x)?.flags?.some(f=>f.code===$('flag').value))&&
+    (!auditMode||$('auditState').value==='all'||(hasDecision(x)?'resolved':'open')===$('auditState').value)&&
     (!q||[x.anitubeTitle,x.newsId,x.year,x.reason,...(x.candidates||[]).flatMap(c=>[c.anilistTitle,c.anilistRomaji,c.tmdbTitle,c.anilistId,c.tmdbId])].join(' ').toLocaleLowerCase('uk').includes(q)));
+  if(auditMode)visible.sort((a,b)=>({high:0,medium:1,low:2,info:3}[auditFor(a.x)?.risk]??4)-({high:0,medium:1,low:2,info:3}[auditFor(b.x)?.risk]??4));
   $('shown').textContent=`${visible.length.toLocaleString('uk-UA')} записів`;
-  $('list').innerHTML=visible.length?visible.map(({x,i})=>`<button class="row ${i===selected?'active':''}" data-i="${i}"><span class="badge ${esc(x.status)}">${esc(labels[x.status]||x.status)}</span><strong>${esc(x.anitubeTitle||'Без назви')}</strong><span class="meta">AniTube #${esc(x.newsId)} · ${esc(x.year||'рік невідомий')} · ${x.candidates?.length||0} кандидатів</span></button>`).join(''):'<div class="empty">За цим фільтром записів немає.</div>';
+  $('list').innerHTML=visible.length?visible.map(({x,i})=>`<button class="row ${i===selected?'active':''}" data-i="${i}"><span class="badge ${esc(x.status)}">${esc(labels[x.status]||x.status)}</span> ${auditFor(x)?`<span class="badge ${esc(auditFor(x).risk)}">${esc(riskLabels[auditFor(x).risk]||auditFor(x).risk)}</span> ${hasDecision(x)?'<span class="badge resolved">Вирішено</span>':''}`:''}<strong>${esc(x.anitubeTitle||'Без назви')}</strong><span class="meta">AniTube #${esc(x.newsId)} · ${esc(x.year||'рік невідомий')} · ${x.candidates?.length||0} кандидатів</span></button>`).join(''):'<div class="empty">За цим фільтром записів немає.</div>';
   document.querySelectorAll('.row').forEach(b=>b.onclick=()=>{selected=+b.dataset.i;filter();renderDetail(records[selected])});
-  if(selected<0&&visible.length){selected=visible[0].i;filter();renderDetail(records[selected])}
-  else if(selected>=0&&!visible.some(z=>z.i===selected)){$('detail').innerHTML='<div class="empty">Оберіть запис зі списку.</div>';selected=-1}
+  if(!visible.some(z=>z.i===selected)){
+    selected=visible.length?visible[0].i:-1;
+    if(selected>=0){document.querySelector(`.row[data-i="${selected}"]`)?.classList.add('active');renderDetail(records[selected])}
+    else $('detail').innerHTML='<div class="empty">За цим фільтром записів немає.</div>';
+  }
 }
 function candidateSnapshot(c,index,verification=null){return {index,anilistId:c.anilistId??null,tmdbId:c.tmdbId??null,tmdbType:c.tmdbType??null,tmdbSeason:c.tmdbSeason??null,anilistTitle:c.anilistTitle??null,anilistRomaji:c.anilistRomaji??null,tmdbTitle:c.tmdbTitle??null,...(verification?{anitubeSearchVerification:verification}:{})}}
+function auditHtml(x){
+  const a=auditFor(x);if(!a)return '';
+  const first=x.candidates?.[0],chosen=a.selected||{};
+  const mismatch=a.candidateCount!==x.candidates?.length||Number(chosen.anilistId)!==Number(first?.anilistId)||
+    Number(chosen.tmdbId)!==Number(first?.tmdbId)||chosen.tmdbType!==first?.tmdbType||chosen.tmdbSeason!==first?.tmdbSeason;
+  return `<section class="audit-flags"><h3>Аудит · <span class="badge ${esc(a.risk)}">${esc(riskLabels[a.risk]||a.risk)}</span> ${hasDecision(x)?'<span class="badge resolved">Вирішено вручну</span>':''}</h3>
+    ${mismatch?'<p class="audit-hint">Аудит і файл зіставлень не збігаються за кандидатами. Перевірте версії файлів перед рішенням.</p>':''}
+    ${(a.flags||[]).map(f=>`<p><span class="badge ${esc(f.severity)}">${esc(f.severity)}</span> <strong>${esc(f.code)}</strong> · ${esc(f.message)}</p>`).join('')||'<p>Сигналів немає.</p>'}
+    <small class="meta">Автоматичний вибір першого кандидата не є ручним підтвердженням.</small></section>`;
+}
 function renderDetail(x){
   const candidates=x.candidates||[],n=noteFor(x);
   $('detail').innerHTML=`<div class="detailhead"><div><h2>${esc(x.anitubeTitle||'Без назви')}</h2><div class="facts">AniTube #${esc(x.newsId)} · ${esc(x.year||'рік невідомий')} · ${esc(x.episodes||'—')} серій</div></div><span class="badge ${esc(x.status)}">${esc(labels[x.status]||x.status)}</span></div>
-  <div class="facts" style="margin-top:9px"><a href="${esc(x.anitubeUrl||'#')}" target="_blank" rel="noopener">Відкрити AniTube ↗</a></div><div class="reason">${esc(x.reason||'Причина не вказана')}</div>
+  <div class="facts" style="margin-top:9px"><a href="${esc(x.anitubeUrl||'#')}" target="_blank" rel="noopener">Відкрити AniTube ↗</a></div>${auditHtml(x)}<div class="reason">${esc(x.reason||'Причина не вказана')}</div>
   <section class="review-tools"><label for="comment">Службовий коментар: що перевірити</label><textarea id="comment" placeholder="Можна додати кілька AniList URL, якщо реліз об’єднує сезони">${esc(n.comment)}</textarea><small id="saved">Коментар зберігається в цьому браузері</small></section>
   <section class="review-tools"><label for="anilist-link">Перевірити посилання AniList</label><div class="romaji-row"><input id="anilist-link" type="url" placeholder="https://anilist.co/anime/12345/" style="flex:1;min-width:240px"><button id="add-anilist">Перевірити й додати</button></div><small id="anilist-link-result">Після додавання зв’язок з AniList буде підтверджений; TMDB можна знайти повторним аналізом.</small></section>
   <h3>Кандидати (${candidates.length})</h3>${candidates.length?candidates.map((c,i)=>{
@@ -79,7 +111,7 @@ function renderDetail(x){
     <div class="facts">${[c.anilistFormat&&`Формат ${c.anilistFormat}`,c.anilistYear&&`AniList ${c.anilistYear}`,c.tmdbYear&&`TMDB ${c.tmdbYear}`,c.tmdbSeason!=null&&`Сезон TMDB ${c.tmdbSeason}`,c.tmdbSeasonYear&&`Рік сезону ${c.tmdbSeasonYear}`,c.anilistEpisodes&&`AniList серій ${c.anilistEpisodes}`,c.tmdbSeasonEpisodes&&`TMDB серій ${c.tmdbSeasonEpisodes}`,c.matchScore!=null&&`Оцінка ${c.matchScore}`,c.mappingSource&&`Джерело ${c.mappingSource}`,confirmed&&!c.tmdbId&&'TMDB: очікує зіставлення'].filter(Boolean).map(esc).join(' · ')}</div>
     ${c.tmdbSeasons?.length?`<p>Сезони TMDB: ${c.tmdbSeasons.map(s=>`${s.number} (${s.year||'—'}, ${s.episodes||'?'} еп.)`).map(esc).join(' · ')}</p>`:''}${c.episodeMappings?.length?`<p>Епізоди: ${c.episodeMappings.map(m=>`${m.sourceRange} → ${m.targetRange}`).map(esc).join(' · ')}</p>`:''}
     <div class="tags">${Object.entries(e).map(([k,v])=>`<span class="tag">${esc(k)}: ${typeof v==='boolean'?(v?'так':'ні'):esc(v)}</span>`).join('')}</div>
-    ${x.status==='needs_review'||confirmed?`<button class="confirm-candidate" data-candidate="${i}" aria-pressed="${confirmed}">${confirmed?'Зняти підтвердження':'Підтвердити кандидата'}</button>`:''}<button class="reject" data-candidate="${i}" aria-pressed="${rejected}">${rejected?'Повернути кандидата':'Відхилити кандидата'}</button></section>`
+    ${x.status==='needs_review'||auditFor(x)||confirmed?`<button class="confirm-candidate" data-candidate="${i}" aria-pressed="${confirmed}">${confirmed?'Зняти підтвердження':'Підтвердити кандидата'}</button>`:''}<button class="reject" data-candidate="${i}" aria-pressed="${rejected}">${rejected?'Повернути кандидата':'Відхилити кандидата'}</button></section>`
   }).join(''):'<p class="meta">Кандидатів немає.</p>'}`;
   $('comment').oninput=e=>{n.comment=e.target.value;saveNotes();$('saved').textContent='Збережено'};
   $('add-anilist').onclick=async()=>{
@@ -103,8 +135,8 @@ function renderDetail(x){
       x.status='matched';x.reason=x.candidates[i].tmdbId?'AniList підтверджено вручну':'AniList підтверджено вручну; TMDB очікує зіставлення';saveNotes();renderStats();$('status').value='matched';filter();renderDetail(x);
     }catch(error){result.textContent=`Не вдалося додати: ${error.message}`;button.disabled=false}
   };
-  document.querySelectorAll('.reject').forEach(b=>b.onclick=()=>{const i=+b.dataset.candidate;n.rejected.includes(i)?n.rejected=n.rejected.filter(v=>v!==i):n.rejected.push(i);n.confirmed=n.confirmed.filter(v=>v!==i);saveNotes();renderDetail(x)});
-  document.querySelectorAll('.confirm-candidate').forEach(b=>b.onclick=()=>{const i=+b.dataset.candidate;n.confirmed.includes(i)?n.confirmed=n.confirmed.filter(v=>v!==i):n.confirmed.push(i);n.rejected=n.rejected.filter(v=>v!==i);saveNotes();renderDetail(x)});
+  document.querySelectorAll('.reject').forEach(b=>b.onclick=()=>{const i=+b.dataset.candidate;n.rejected.includes(i)?n.rejected=n.rejected.filter(v=>v!==i):n.rejected.push(i);n.confirmed=n.confirmed.filter(v=>v!==i);saveNotes();renderStats();filter();if(selected>=0)renderDetail(x)});
+  document.querySelectorAll('.confirm-candidate').forEach(b=>b.onclick=()=>{const i=+b.dataset.candidate;n.confirmed.includes(i)?n.confirmed=n.confirmed.filter(v=>v!==i):n.confirmed.push(i);n.rejected=n.rejected.filter(v=>v!==i);saveNotes();renderStats();filter();if(selected>=0)renderDetail(x)});
   document.querySelectorAll('.verify-anitube').forEach(b=>b.onclick=async()=>{
     const i=+b.dataset.candidate,c=candidates[i],status=$(`verify-result-${i}`);
     b.disabled=true;b.textContent='Шукаю…';status.className='verify-result';status.textContent='Пошук на AniTube за ромаджі…';
@@ -120,7 +152,10 @@ function renderDetail(x){
   });
 }
 $('file').onchange=async e=>{const f=e.target.files[0];if(!f)return;try{load(JSON.parse(await f.text()),f.name)}catch(err){$('filename').innerHTML=`<span class="error">${esc(err.message)}</span>`}};
-$('status').onchange=filter;$('query').oninput=filter;
+$('auditFile').onchange=async e=>{const f=e.target.files[0];if(!f)return;try{loadAudit(JSON.parse(await f.text()),f.name)}catch(err){$('auditFilename').innerHTML=`<span class="error">${esc(err.message)}</span>`}};
+$('scope').onchange=()=>{updateAuditControls();filter()};
+for(const id of ['risk','auditState','flag','status'])$(id).onchange=filter;
+$('query').oninput=filter;
 $('export').onclick=()=>{
   const out={$meta:{...sourceMeta,reviewExportedAt:new Date().toISOString()},items:records.map(x=>{
     const n=noteFor(x),confirmed=n.confirmed.map(i=>candidateSnapshot(x.candidates?.[i]||{},i,n.verified?.[i]||null));
