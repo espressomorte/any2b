@@ -97,4 +97,4 @@ data class HomeRow(
     val items: List<AnimeCard>,
 )
 
-class AniListException(message: String) : Exception(message)
+class AniListException(message: String, cause: Throwable? = null) : Exception(message, cause)

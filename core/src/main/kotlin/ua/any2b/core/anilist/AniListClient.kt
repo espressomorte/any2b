@@ -3,13 +3,22 @@ package ua.any2b.core.anilist
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.Dns
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import ua.any2b.core.tmdb.TmdbListSort
+import java.io.IOException
+import java.net.Inet4Address
+import java.net.InetAddress
 import java.util.concurrent.TimeUnit
+
+internal class Ipv4FirstDns(private val delegate: Dns = Dns.SYSTEM) : Dns {
+    override fun lookup(hostname: String): List<InetAddress> =
+        delegate.lookup(hostname).sortedBy { if (it is Inet4Address) 0 else 1 }
+}
 
 /**
  * Клієнт публічного GraphQL API AniList (без ключа, ліміт ~90 запитів на хвилину).
@@ -17,6 +26,7 @@ import java.util.concurrent.TimeUnit
  */
 class AniListClient(
     private val http: OkHttpClient = OkHttpClient.Builder()
+        .dns(Ipv4FirstDns())
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .build(),
@@ -313,23 +323,27 @@ query Category(${'$'}page: Int, ${'$'}perPage: Int$categoryVariables) {
                 .header("User-Agent", "Any2B/1.0 (Android TV)")
                 .build()
 
-            http.newCall(request).execute().use { resp ->
-                val text = resp.body?.string().orEmpty()
-                if (resp.code == 429) {
-                    val wait = resp.header("Retry-After") ?: "60"
-                    throw AniListException("Забагато запитів до AniList, спробуйте через $wait с")
+            try {
+                http.newCall(request).execute().use { resp ->
+                    val text = resp.body?.string().orEmpty()
+                    if (resp.code == 429) {
+                        val wait = resp.header("Retry-After") ?: "60"
+                        throw AniListException("Забагато запитів до AniList, спробуйте через $wait с")
+                    }
+                    if (!resp.isSuccessful) {
+                        throw AniListException("AniList відповів HTTP ${resp.code}")
+                    }
+                    val json = JSONObject(text)
+                    if (json.has("errors") && json.isNull("data")) {
+                        val msg = json.getJSONArray("errors")
+                            .getJSONObject(0)
+                            .optString("message", "помилка запиту")
+                        throw AniListException("AniList: $msg")
+                    }
+                    json.getJSONObject("data")
                 }
-                if (!resp.isSuccessful) {
-                    throw AniListException("AniList відповів HTTP ${resp.code}")
-                }
-                val json = JSONObject(text)
-                if (json.has("errors") && json.isNull("data")) {
-                    val msg = json.getJSONArray("errors")
-                        .getJSONObject(0)
-                        .optString("message", "помилка запиту")
-                    throw AniListException("AniList: $msg")
-                }
-                json.getJSONObject("data")
+            } catch (error: IOException) {
+                throw AniListException("Не вдалося з’єднатися з AniList. Перевірте мережу та повторіть.", error)
             }
         }
 

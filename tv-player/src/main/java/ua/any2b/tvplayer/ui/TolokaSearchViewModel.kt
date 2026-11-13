@@ -62,6 +62,7 @@ class TolokaSearchViewModel(
     private var uploadedTopicId: String? = null
     private var uploadedTorrent: TorrServerTorrent? = null
     private var pendingTopicId: String? = null
+    private val torrentHashes = application.getSharedPreferences("torrserver_topic_hashes", 0)
 
     fun search(query: String) {
         preparationJob?.cancel()
@@ -307,8 +308,10 @@ class TolokaSearchViewModel(
         val serverUrl = settings.torrServerUrl()
         pendingTopicId = topicId
         val cached = uploadedTorrent?.takeIf { uploadedTopicId == topicId }
+        val hashKey = "${serverUrl.trimEnd('/')}|$topicId"
+        val savedHash = torrentHashes.getString(hashKey, null)
         Log.i("TorrentPlayback", "Preparation started topic=$topicId cached=${cached != null}")
-        if (serverUrl.isBlank() || (cached == null && !TolokaConnections.configured(getApplication()))) {
+        if (serverUrl.isBlank() || (cached == null && savedHash == null && !TolokaConnections.configured(getApplication()))) {
             Log.w("TorrentPlayback", "Preparation stopped: integration is not configured topic=$topicId")
             _state.value = _state.value.copy(transfer = TolokaTransferState.Error(
                 "Налаштуйте Toloka і TorrServer у розділі «Інтеграції»"))
@@ -328,7 +331,21 @@ class TolokaSearchViewModel(
                 else serverProbe.version(serverUrl, auth)
                 healthCheckPassed = true
                 Log.i("TorrentPlayback", "TorrServer health check passed topic=$topicId retry=$retryServerAvailability")
-                val torrent = cached ?: run {
+                val restored = if (cached == null && savedHash != null) {
+                    try {
+                        server.get(serverUrl, savedHash, auth).also {
+                            Log.i("TorrentPlayback", "Restored torrent from TorrServer topic=$topicId files=${it.files.size}")
+                        }
+                    } catch (error: TorrServerFailure.Http) {
+                        if (error.status != 404) throw error
+                        torrentHashes.edit().remove(hashKey).apply()
+                        null
+                    } catch (_: TorrServerFailure.InvalidResponse) {
+                        torrentHashes.edit().remove(hashKey).apply()
+                        null
+                    }
+                } else null
+                val torrent = cached ?: restored ?: run {
                     Log.i("TorrentPlayback", "Requesting torrent metadata topic=$topicId")
                     val bytes = try {
                         TolokaConnections.torrent(getApplication(), topicId)
@@ -345,6 +362,7 @@ class TolokaSearchViewModel(
                         Log.i("TorrentPlayback", "Torrent accepted by TorrServer topic=$topicId files=${it.files.size}")
                         uploadedTopicId = topicId
                         uploadedTorrent = it
+                        torrentHashes.edit().putString(hashKey, it.hash).apply()
                     }
                 }
                 lastSuccess = "Торент додано до TorrServer"
@@ -368,6 +386,7 @@ class TolokaSearchViewModel(
                     found ?: throw TorrServerFailure.FilesUnavailable()
                 }
                 uploadedTorrent = withFiles
+                uploadedTopicId = topicId
                 Log.i("TorrentPlayback", "Preparation complete topic=$topicId files=${withFiles.files.size} videoFiles=${withFiles.videoFiles.size}")
                 _state.value = _state.value.copy(transfer = TolokaTransferState.Files(withFiles))
             } catch (error: CancellationException) {
@@ -441,6 +460,13 @@ class TolokaSearchViewModel(
     private fun selectedTopicKey(details: TmdbDetails): String =
         "selected_torrent_${details.title.type.path}_${details.title.id}"
 
+    /** Topic that owns the currently loaded file list, independent of search selection updates. */
+    fun playbackTopicId(fileId: Int): String? {
+        val files = _state.value.transfer as? TolokaTransferState.Files ?: return null
+        if (files.torrent.videoFiles.none { it.id == fileId }) return null
+        return uploadedTopicId
+    }
+
     fun playbackUrl(fileId: Int): String? {
         val files = _state.value.transfer as? TolokaTransferState.Files ?: return null
         val file = files.torrent.videoFiles.firstOrNull { it.id == fileId } ?: return null
@@ -456,13 +482,17 @@ class TolokaSearchViewModel(
     fun playbackFileId(seasonNumber: Int, episodeNumber: Int): Int? {
         val files = (_state.value.transfer as? TolokaTransferState.Files)
             ?.torrent?.videoFiles.orEmpty()
-        return files.firstOrNull { file ->
-            val metadata = ua.any2b.core.toloka.TolokaReleaseMetadataParser.parse(file.name)
-            val start = metadata.episodeStart ?: return@firstOrNull false
-            val end = metadata.episodeEnd ?: start
-            (metadata.season == null || metadata.season == seasonNumber) &&
-                episodeNumber in start..end
-        }?.id
+        return ua.any2b.core.toloka.TolokaEpisodeFileIndex
+            .find(files, seasonNumber, episodeNumber)?.id
+    }
+
+    /** Resolve a manually selected playlist file with the same rules as next-episode lookup. */
+    fun playbackEpisodeNumber(fileId: Int, seasonNumber: Int): Int? {
+        val files = (_state.value.transfer as? TolokaTransferState.Files)
+            ?.torrent?.videoFiles.orEmpty()
+        if (files.none { it.id == fileId }) return null
+        return ua.any2b.core.toloka.TolokaEpisodeFileIndex
+            .episodeNumber(files, fileId, seasonNumber)
     }
 
     fun reportPlaybackStatus(message: String) {

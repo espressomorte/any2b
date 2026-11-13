@@ -4,15 +4,18 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import ua.any2b.core.anilist.AniListClient
 import ua.any2b.core.tmdb.TmdbListSort
 import ua.any2b.core.tmdb.TmdbTitle
 import ua.any2b.tvplayer.data.AniListTmdbCatalog
 import ua.any2b.tvplayer.data.AniListLocalDataMigrator
+import ua.any2b.tvplayer.data.HomeRowCache
 import ua.any2b.tvplayer.data.TmdbFavoritesStore
 import ua.any2b.tvplayer.data.TmdbWatchHistoryStore
 
@@ -35,6 +38,7 @@ class CategoryViewModel(
     private val localFavorites = TmdbFavoritesStore(application)
     private val localHistory = TmdbWatchHistoryStore(application)
     private val tmdbCatalog = AniListTmdbCatalog(application)
+    private val rowCache = HomeRowCache(application)
     private val localDataMigrator = AniListLocalDataMigrator(application)
     private var page = 0
     private var localItems: List<TmdbTitle> = emptyList()
@@ -49,6 +53,7 @@ class CategoryViewModel(
     val state: StateFlow<CategoryState> = _state
 
     init {
+        if (!isLocal) _state.value = _state.value.copy(items = rowCache.read(cacheKey(_state.value)))
         if (isLocal) viewModelScope.launch {
             localDataMigrator.migrate()
             localItems = readLocalItems()
@@ -82,7 +87,7 @@ class CategoryViewModel(
         loadJob?.cancel()
         page = 0
         loadedRawItems = emptyList()
-        _state.value = state.copy(items = emptyList(), loadingMore = false,
+        _state.value = state.copy(items = rowCache.read(cacheKey(state)), loadingMore = false,
             hasMore = true, error = null)
         loadMore()
     }
@@ -124,6 +129,9 @@ class CategoryViewModel(
                 val allItems = loadedRawItems
                 _state.value = _state.value.copy(items = allItems,
                     loadingMore = false, hasMore = hasMore)
+                if (!isLocal) withContext(Dispatchers.IO) {
+                    rowCache.save(cacheKey(current), allItems)
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -151,6 +159,10 @@ class CategoryViewModel(
         "history" -> localHistory.all()
         else -> emptyList()
     }
+
+    private fun cacheKey(state: CategoryState): String =
+        "category:$categoryId:${state.sort}:${state.yearAscending}:" +
+            "${state.yearRange?.first}-${state.yearRange?.last}"
 
     companion object { const val PAGE_SIZE = 20 }
 }

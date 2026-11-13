@@ -1,24 +1,60 @@
 <?xml version="1.0" encoding="utf-8"?>
-<merge xmlns:android="http://schemas.android.com/apk/res/android">
+<merge xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical">
 
-        <TextView
-            android:id="@+id/tvNowPlaying"
+        <androidx.constraintlayout.widget.ConstraintLayout
+            android:id="@+id/nowPlayingRow"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginStart="64dp"
             android:layout_marginBottom="4dp"
-            android:ellipsize="end"
-            android:fontFamily="@font/ibm_plex_sans_regular"
-            android:singleLine="true"
-            android:textColor="#80F5FF"
-            android:textSize="18sp"
-            android:textStyle="bold"
-            android:visibility="gone" />
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/tvNowPlaying"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:fontFamily="@font/ibm_plex_sans_regular"
+                android:singleLine="true"
+                android:textColor="#80F5FF"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                app:layout_constrainedWidth="true"
+                app:layout_constraintHorizontal_bias="0"
+                app:layout_constraintHorizontal_chainStyle="packed"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintEnd_toStartOf="@id/btnNextEpisodeControl"
+                app:layout_constraintTop_toTopOf="parent"
+                app:layout_constraintBottom_toBottomOf="parent" />
+
+            <TextView
+                android:id="@+id/btnNextEpisodeControl"
+                android:layout_width="wrap_content"
+                android:layout_height="40dp"
+                android:layout_marginStart="12dp"
+                android:background="@null"
+                android:clickable="true"
+                android:focusable="true"
+                android:fontFamily="@font/ibm_plex_sans_regular"
+                android:gravity="center_vertical"
+                android:contentDescription="Перейти до наступної серії"
+                android:drawableStart="@drawable/ic_player_next_episode"
+                android:drawablePadding="8dp"
+                android:drawableTint="@color/player_next_episode_tint"
+                android:textColor="@color/player_next_episode_tint"
+                android:textSize="14sp"
+                android:visibility="gone"
+                android:nextFocusDown="@id/playbackSeekBar"
+                app:layout_constraintStart_toEndOf="@id/tvNowPlaying"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintBaseline_toBaselineOf="@id/tvNowPlaying" />
+        </androidx.constraintlayout.widget.ConstraintLayout>
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -43,6 +79,7 @@
             android:layout_weight="1"
             android:contentDescription="Позиція відтворення"
             android:focusable="true"
+            android:nextFocusUp="@id/btnNextEpisodeControl"
             android:progressBackgroundTint="#0D5B70"
             android:secondaryProgressTint="#0D5B70"
             android:progressTint="#1CDDE2"
@@ -67,21 +104,21 @@
             android:gravity="center_vertical"
             android:orientation="vertical"
             android:contentDescription="Буферизація відео">
-            <ua.any2b.tvplayer.ui.BufferTickIndicatorView
-                android:id="@+id/ivPlaybackBuffer"
-                android:layout_width="68dp"
-                android:layout_height="18dp"
-                android:importantForAccessibility="no" />
-
             <TextView
                 android:id="@+id/tvPlaybackBuffer"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:gravity="center"
                 android:fontFamily="@font/ibm_plex_sans_regular"
-                android:text="0%"
+                android:text="Буфер"
                 android:textColor="#C7D0D8"
                 android:textSize="10sp" />
+
+            <ua.any2b.tvplayer.ui.BufferTickIndicatorView
+                android:id="@+id/ivPlaybackBuffer"
+                android:layout_width="68dp"
+                android:layout_height="18dp"
+                android:importantForAccessibility="no" />
         </LinearLayout>
         </LinearLayout>
 
@@ -95,38 +132,68 @@
             android:gravity="start|center_vertical"
             android:visibility="gone">
 
-            <TextView
+            <LinearLayout
                 android:id="@+id/btnAudioTracks"
                 android:layout_width="wrap_content"
-                android:layout_height="38dp"
-                android:layout_marginEnd="8dp"
-                android:background="@drawable/player_track_action_background"
+                android:layout_height="32dp"
+                android:layout_marginEnd="6dp"
+                android:background="@drawable/player_track_action_compact_background"
                 android:clickable="true"
                 android:focusable="true"
-                android:fontFamily="@font/ibm_plex_sans_regular"
-                android:gravity="center"
-                android:paddingStart="12dp"
-                android:paddingEnd="12dp"
-                android:text="♫ АУДІО"
-                android:textColor="#C4CAD4"
-                android:textSize="13sp"
-                android:visibility="gone" />
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingStart="7dp"
+                android:paddingEnd="7dp">
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:duplicateParentState="true"
+                    android:fontFamily="@font/fa_solid_900"
+                    android:text="&#xf130;"
+                    android:textColor="@color/player_track_action_text"
+                    android:textSize="11sp" />
+                <TextView
+                    android:id="@+id/tvAudioTrackChoice"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:duplicateParentState="true"
+                    android:layout_marginStart="5dp"
+                    android:fontFamily="@font/ibm_plex_sans_regular"
+                    android:text="Авто"
+                    android:textColor="@color/player_track_action_text"
+                    android:textSize="11sp" />
+            </LinearLayout>
 
-            <TextView
+            <LinearLayout
                 android:id="@+id/btnSubtitleTracks"
                 android:layout_width="wrap_content"
-                android:layout_height="38dp"
-                android:background="@drawable/player_track_action_background"
+                android:layout_height="32dp"
+                android:background="@drawable/player_track_action_compact_background"
                 android:clickable="true"
                 android:focusable="true"
-                android:fontFamily="@font/ibm_plex_sans_regular"
-                android:gravity="center"
-                android:paddingStart="12dp"
-                android:paddingEnd="12dp"
-                android:text="CC СУБТИТРИ"
-                android:textColor="#C4CAD4"
-                android:textSize="13sp"
-                android:visibility="gone" />
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingStart="7dp"
+                android:paddingEnd="7dp">
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:duplicateParentState="true"
+                    android:fontFamily="@font/fa_solid_900"
+                    android:text="&#xf4ad;"
+                    android:textColor="@color/player_track_action_text"
+                    android:textSize="11sp" />
+                <TextView
+                    android:id="@+id/tvSubtitleTrackChoice"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:duplicateParentState="true"
+                    android:layout_marginStart="5dp"
+                    android:fontFamily="@font/ibm_plex_sans_regular"
+                    android:text="—"
+                    android:textColor="@color/player_track_action_text"
+                    android:textSize="11sp" />
+            </LinearLayout>
         </LinearLayout>
     </LinearLayout>
 

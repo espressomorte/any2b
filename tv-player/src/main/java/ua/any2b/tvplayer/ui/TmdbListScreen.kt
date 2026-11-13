@@ -62,6 +62,8 @@ fun TmdbListScreen(state: TmdbListState, onOpen: (TmdbTitle) -> Unit,
         "animation_tv" -> "Популярні анімаційні серіали"
         "animation_movie" -> "Популярні повнометражні анімаційні фільми"
         "mal_top" -> "Аніме з найвищими оцінками"
+        "toloka_animation" -> "Анімація Toloka"
+        "toloka_video" -> "Фільми й серіали Toloka"
         else -> "Обрані тайтли"
     }
     Column(Modifier.fillMaxSize().background(AppColors.BackgroundDark)
@@ -72,7 +74,8 @@ fun TmdbListScreen(state: TmdbListState, onOpen: (TmdbTitle) -> Unit,
             Text(heading, style = MaterialTheme.typography.headlineLarge, color = Color.White)
             OutlinedButton(onClick = onBack) { Text("Назад") }
         }
-        if (state.category !in setOf("favorites", "history", "recommendations", "upcoming")) {
+        if (state.category !in setOf("favorites", "history", "recommendations", "upcoming") &&
+            !state.category.startsWith("toloka_")) {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 ListSortButton("Популярність", selected = state.sort == TmdbListSort.POPULARITY,
                     onClick = { onSort(TmdbListSort.POPULARITY) })
