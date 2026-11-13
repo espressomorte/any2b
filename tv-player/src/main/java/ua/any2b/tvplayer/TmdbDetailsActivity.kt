@@ -664,14 +664,25 @@ class TmdbDetailsActivity : ComponentActivity() {
         tolokaViewModel.reportPlaybackStatus("URL потоку сформовано для індексу $fileId. Відкриваємо плеєр…")
         val title = (detailsViewModel.state.value as? TmdbDetailsState.Ready)?.details?.title
         val fileMetadata = fileName?.let(TolokaReleaseMetadataParser::parse)
+        val folderSeason = (tolokaViewModel.state.value.transfer as? TolokaTransferState.Files)
+            ?.torrent?.videoFiles?.firstOrNull { it.id == fileId }
+            ?.path?.substringBeforeLast('/', "")?.takeIf(String::isNotBlank)
+            ?.let(TolokaReleaseMetadataParser::parse)?.season
         val requestedEpisode = autoPlayEpisode.takeIf { autoPlaybackStarted && it > 0 &&
             tolokaViewModel.playbackFileId(autoPlaySeason, it) == fileId }
-        val currentEpisode = fileMetadata?.episodeStart?.takeIf {
-            fileMetadata.episodeEnd == null || fileMetadata.episodeEnd == it
-        } ?: requestedEpisode
-        val currentSeason = fileMetadata?.season
+        val currentSeason = fileMetadata?.season ?: folderSeason
             ?: autoPlaySeason.takeIf { requestedEpisode != null }
             ?: title?.matchedSeasonNumber
+            ?: 1.takeIf { title?.type == TmdbMediaType.TV }
+        val currentEpisode = fileMetadata?.episodeStart?.takeIf {
+            fileMetadata.episodeEnd == null || fileMetadata.episodeEnd == it
+        } ?: requestedEpisode ?: currentSeason?.let { season ->
+            tolokaViewModel.playbackEpisodeNumber(fileId, season)
+        }
+        Log.d("NextEp", "Toloka playlist current=$currentSeason:$currentEpisode " +
+            "file=$fileId next=${currentSeason?.let { season ->
+                currentEpisode?.let { tolokaViewModel.playbackFileId(season, it + 1) }
+            }}")
         val selectedPackage = SettingsManager(this).selectedPlayerPackage()
         val serverRequiresAuth = TorrServerAuthStore(this).read() != null
         if (selectedPackage != null && !serverRequiresAuth) {

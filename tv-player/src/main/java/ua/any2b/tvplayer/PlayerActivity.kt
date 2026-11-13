@@ -1,6 +1,12 @@
 package ua.any2b.tvplayer
 
 import android.app.AlertDialog
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -14,11 +20,15 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.CacheWriter
 import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.Renderer
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import coil.load
@@ -36,6 +46,8 @@ import ua.any2b.core.tmdb.TmdbTitle
 import ua.any2b.core.tmdb.IntroDbClient
 import ua.any2b.core.tmdb.IntroDbSegments
 import ua.any2b.core.toloka.TolokaReleaseMetadataParser
+import ua.any2b.core.toloka.TorrServerBasicAuth
+import ua.any2b.core.toloka.TorrServerProbe
 import ua.any2b.core.extractor.StreamResolver
 import ua.any2b.tvplayer.data.AnitubeStreamFallback
 import ua.any2b.tvplayer.ui.Media3PlayerTransport
@@ -43,6 +55,7 @@ import ua.any2b.tvplayer.ui.PlayerControlsController
 import ua.any2b.tvplayer.ui.PlayerTrackSelectionMenu
 import ua.any2b.tvplayer.databinding.ActivityPlayerBinding
 import java.util.concurrent.TimeUnit
+import kotlin.random.Random
 
 @OptIn(UnstableApi::class)
 class PlayerActivity : FragmentActivity() {
@@ -60,6 +73,7 @@ class PlayerActivity : FragmentActivity() {
         private const val TORRENT_BUFFER_TIMEOUT_MS = 30_000L
         private const val TORRENT_SEEK_BUFFER_TIMEOUT_MS = 45_000L
         private const val TORRENT_RETRY_BUFFER_TIMEOUT_MS = 60_000L
+        private const val MAX_STREAM_RETRIES = 4
         const val EXTRA_STREAM_URL = "STREAM_URL"
         const val EXTRA_VOICE_INDEX = "VOICE_INDEX"
         const val EXTRA_EPISODE_INDEX = "EPISODE_INDEX"
@@ -142,6 +156,17 @@ class PlayerActivity : FragmentActivity() {
     private var torrentBufferPromptShown = false
     private var torrentBufferingWatch: Runnable? = null
     private var torrentRecoveryDialog: AlertDialog? = null
+    private var streamRetryJob: Job? = null
+    private var stablePlaybackJob: Job? = null
+    private var networkCheckJob: Job? = null
+    private var networkInterrupted = false
+    private var resumeAfterNetwork = false
+    private var streamRetryCount = 0
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private val connectivityManager by lazy {
+        getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    }
+    private val torrServerProbe = TorrServerProbe()
     private val streamResolver = StreamResolver()
 
     private var progressJob: Job? = null
@@ -226,11 +251,15 @@ class PlayerActivity : FragmentActivity() {
         binding.btnNextEpisode.visibility = View.GONE
         showBufferingIndicator()
         initPlayer(url)
+        observeNetwork()
     }
 
     private fun initPlayer(url: String) {
         val mediaSource = if (isToloka) {
-            ProgressiveMediaSource.Factory(mediaDataSourceFactory).createMediaSource(MediaItem.fromUri(url))
+            val extractors = DefaultExtractorsFactory()
+                .setSubtitleParserFactory(TolerantSubtitleParserFactory())
+            ProgressiveMediaSource.Factory(mediaDataSourceFactory, extractors)
+                .createMediaSource(MediaItem.fromUri(url))
         } else {
             HlsMediaSource.Factory(mediaDataSourceFactory).createMediaSource(MediaItem.fromUri(url))
         }
@@ -244,12 +273,15 @@ class PlayerActivity : FragmentActivity() {
             )
             .build()
 
-        player = ExoPlayer.Builder(this)
+        player = ExoPlayer.Builder(this, DefaultRenderersFactory(this))
             .setLoadControl(loadControl)
             .build().also { exo ->
             binding.playerView.player = exo
             controlsController?.attach(Media3PlayerTransport(exo))
-            trackSelectionMenu.bind(exo, binding.playerControls)
+            trackSelectionMenu.bind(exo, binding.playerControls) {
+                controlsController?.show()
+                binding.playerControls.collapseTrackActions()
+            }
 
             exo.addListener(object : Player.Listener {
                 override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
@@ -260,6 +292,12 @@ class PlayerActivity : FragmentActivity() {
                     Log.d("Player", "state=$state") // 1 IDLE, 2 BUFFERING, 3 READY, 4 ENDED
                     when (state) {
                         Player.STATE_READY   -> {
+                            streamRetryJob?.cancel()
+                            if (networkInterrupted) {
+                                exo.pause()
+                                showStatus("Відсутнє підключення до ${if (isToloka) "TorrServe" else "інтернету"}", "")
+                                return
+                            }
                             torrentBufferingSinceMs = 0L
                             torrentBufferPromptShown = false
                             torrentRetrySeekPending = false
@@ -332,23 +370,23 @@ class PlayerActivity : FragmentActivity() {
                 }
 
                 override fun onPlayerError(error: PlaybackException) {
+                    if (networkInterrupted) return
+                    val failure = classifyPlaybackError(error)
+                    Log.e(TAG, "Playback failure=$failure code=${error.errorCodeName}", error)
+                    if (failure == StreamFailure.TRANSIENT && scheduleStreamRetry(exo)) return
                     if (isToloka) {
                         Log.e("Player", "Torrent playback: ${error.errorCodeName} / ${error.message}", error)
                         val matroskaReadFailed = generateSequence(error as Throwable) { it.cause }
                             .any { it is IllegalStateException &&
                                 it.message?.contains("No valid varint length mask found") == true }
-                        if (error.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED ||
-                            error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED ||
-                            error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES) {
+                        if (failure == StreamFailure.DECODER) {
                             showStatus("✗ Пристрій не підтримує відеоформат цієї роздачі (можливо, HEVC). Спробуйте іншу роздачу з H.264 або зовнішній плеєр.", "")
                         } else if (matroskaReadFailed && torrentRecoveryAttempts == 0) {
                             Log.w(TAG, "Matroska read failed after seek; retrying from an earlier position")
                             retryTorrentAtPosition(exo, rewindMs = 5_000L)
                         } else {
                             torrentBufferPromptShown = true
-                            showTorrentRecoveryDialog(exo, if (matroskaReadFailed)
-                                "Не вдалося прочитати відео біля вибраної позиції"
-                                else "Помилка потоку: ${error.errorCodeName}")
+                            showTorrentRecoveryDialog(exo, failureMessage(failure))
                         }
                     } else {
                         Log.e("Player", "ExoPlayer: ${error.errorCodeName} / ${error.message}", error)
@@ -357,14 +395,19 @@ class PlayerActivity : FragmentActivity() {
                             retryAnitubeBackup()
                             return
                         }
-                        val msg = "✗ Помилка: ${error.errorCodeName} — ${error.message}"
+                        val msg = "✗ ${failureMessage(failure)}"
                         setKeepScreenOn(false)
                         showStatus(msg, url)
                     }
                 }
 
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    stablePlaybackJob?.cancel()
                     if (isPlaying) {
+                        stablePlaybackJob = lifecycleScope.launch {
+                            delay(10_000)
+                            if (player === exo && exo.isPlaying) streamRetryCount = 0
+                        }
                         if (isTmdbAnitube && !tmdbAnitubeStarted) {
                             saveTmdbAnitubeProgress(tmdbResumeProgress,
                                 exo.currentPosition, exo.duration)
@@ -435,8 +478,9 @@ class PlayerActivity : FragmentActivity() {
                     Log.w(TAG, "Torrent buffering prolonged ${elapsed}ms " +
                         "afterSeek=${torrentLastSeekAtMs > 0L} retry=$torrentRecoveryAttempts " +
                         "position=${exo.currentPosition} buffered=${exo.bufferedPosition}")
-                    if (torrentRecoveryAttempts == 0) retryTorrentAtPosition(exo)
-                    else {
+                    if (scheduleStreamRetry(exo)) {
+                        torrentBufferingSinceMs = 0L
+                    } else {
                         torrentBufferPromptShown = true
                         showTorrentRecoveryDialog(exo, "Потік довго буферизується")
                     }
@@ -460,6 +504,127 @@ class PlayerActivity : FragmentActivity() {
         exo.prepare()
         exo.seekTo(position)
         exo.playWhenReady = true
+    }
+
+    private enum class StreamFailure { TRANSIENT, AUTH, MISSING, PARSING, SUBTITLE, DECODER, OTHER }
+
+    private fun classifyPlaybackError(error: PlaybackException): StreamFailure {
+        if (generateSequence(error as Throwable) { it.cause }.any { cause ->
+                cause.stackTrace.any { it.className == "androidx.media3.extractor.text.ssa.SsaParser" }
+            }) return StreamFailure.SUBTITLE
+        val http = generateSequence(error as Throwable) { it.cause }
+            .filterIsInstance<HttpDataSource.InvalidResponseCodeException>().firstOrNull()
+        if (http != null) return when (http.responseCode) {
+            401, 403 -> StreamFailure.AUTH
+            404, 410, 416 -> StreamFailure.MISSING
+            in 500..599, 408, 429 -> StreamFailure.TRANSIENT
+            else -> StreamFailure.OTHER
+        }
+        return when (error.errorCode) {
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> StreamFailure.TRANSIENT
+            PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND,
+            PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE -> StreamFailure.MISSING
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
+            PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED -> StreamFailure.PARSING
+            PlaybackException.ERROR_CODE_DECODING_FAILED,
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES -> StreamFailure.DECODER
+            else -> StreamFailure.OTHER
+        }
+    }
+
+    private fun failureMessage(failure: StreamFailure): String = when (failure) {
+        StreamFailure.AUTH -> "Джерело відхилило авторизацію"
+        StreamFailure.MISSING -> "Файл або вибрана позиція недоступні в роздачі"
+        StreamFailure.PARSING -> "Пошкоджений або непідтримуваний медіаконтейнер"
+        StreamFailure.SUBTITLE -> "Помилка вбудованих субтитрів цієї роздачі"
+        StreamFailure.DECODER -> "Пристрій не підтримує формат цієї роздачі"
+        StreamFailure.TRANSIENT -> "Не вдалося відновити з’єднання з потоком"
+        StreamFailure.OTHER -> "Помилка відтворення потоку"
+    }
+
+    private fun scheduleStreamRetry(exo: ExoPlayer): Boolean {
+        if (streamRetryCount >= MAX_STREAM_RETRIES || streamRetryJob?.isActive == true) return false
+        val position = exo.currentPosition.coerceAtLeast(0L)
+        val shouldPlay = exo.playWhenReady
+        val base = (1_000L shl streamRetryCount).coerceAtMost(8_000L)
+        val waitMs = Random.nextLong(base / 2, base + base / 2 + 1)
+        streamRetryCount++
+        Log.i(TAG, "Stream retry $streamRetryCount/$MAX_STREAM_RETRIES in ${waitMs}ms at $position")
+        streamRetryJob = lifecycleScope.launch {
+            delay(waitMs)
+            if (isFinishing || isDestroyed || player !== exo || networkInterrupted) return@launch
+            exo.stop()
+            exo.prepare()
+            exo.seekTo(position)
+            exo.playWhenReady = shouldPlay
+        }
+        return true
+    }
+
+    private fun observeNetwork() {
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onLost(network: Network) { checkStreamNetwork() }
+            override fun onAvailable(network: Network) { checkStreamNetwork() }
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                checkStreamNetwork()
+            }
+        }
+        networkCallback = callback
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            connectivityManager.registerDefaultNetworkCallback(callback)
+        } else {
+            connectivityManager.registerNetworkCallback(
+                NetworkRequest.Builder().addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET).build(),
+                callback,
+            )
+        }
+    }
+
+    private fun checkStreamNetwork() {
+        networkCheckJob?.cancel()
+        networkCheckJob = lifecycleScope.launch {
+            delay(700)
+            val reachable = if (isToloka) {
+                val base = SettingsManager(this@PlayerActivity).torrServerUrl()
+                val auth = TorrServerAuthStore(this@PlayerActivity).read()
+                    ?.let { TorrServerBasicAuth(it.username, it.password) }
+                try {
+                    torrServerProbe.version(base, auth, timeoutSeconds = 2)
+                    true
+                } catch (_: Exception) { false }
+            } else {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    connectivityManager.activeNetwork?.let(connectivityManager::getNetworkCapabilities)
+                        ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+                } else {
+                    @Suppress("DEPRECATION")
+                    connectivityManager.activeNetworkInfo?.isConnected == true
+                }
+            }
+            val exo = player ?: return@launch
+            if (!reachable && !networkInterrupted) {
+                networkInterrupted = true
+                resumeAfterNetwork = exo.playWhenReady
+                streamRetryJob?.cancel()
+                exo.pause()
+                showStatus("Відсутнє підключення до ${if (isToloka) "TorrServe" else "інтернету"}", "")
+            } else if (reachable && networkInterrupted) {
+                networkInterrupted = false
+                val position = exo.currentPosition.coerceAtLeast(0L)
+                streamRetryCount = 0
+                exo.stop()
+                exo.prepare()
+                exo.seekTo(position)
+                exo.playWhenReady = resumeAfterNetwork
+                showBufferingIndicator()
+            }
+            if (!reachable && networkInterrupted && !isFinishing && !isDestroyed) {
+                delay(3_000)
+                checkStreamNetwork()
+            }
+        }
     }
 
     private fun showTorrentRecoveryDialog(exo: ExoPlayer, reason: String) {
@@ -846,7 +1011,7 @@ class PlayerActivity : FragmentActivity() {
 
     override fun onResume() {
         super.onResume()
-        player?.play()
+        if (!networkInterrupted) player?.play()
         setKeepScreenOn(player?.let {
             it.playWhenReady && it.playbackState != Player.STATE_ENDED
         } == true)
@@ -857,6 +1022,10 @@ class PlayerActivity : FragmentActivity() {
     }
 
     override fun onDestroy() {
+        networkCallback?.let { connectivityManager.unregisterNetworkCallback(it) }
+        networkCheckJob?.cancel()
+        streamRetryJob?.cancel()
+        stablePlaybackJob?.cancel()
         setKeepScreenOn(false)
         mainHandler.removeCallbacks(updateIntroSkip)
         promptDismissRunnable?.let(mainHandler::removeCallbacks)

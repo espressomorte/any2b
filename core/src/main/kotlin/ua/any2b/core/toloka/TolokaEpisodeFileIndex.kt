@@ -40,6 +40,34 @@ object TolokaEpisodeFileIndex {
         return entries.getOrNull(episode - 1)?.file
     }
 
+    fun episodeNumber(files: List<TorrServerFile>, fileId: Int, season: Int): Int? {
+        if (season <= 0) return null
+        val file = files.firstOrNull { it.id == fileId } ?: return null
+        val metadata = TolokaReleaseMetadataParser.parse(file.name)
+        val folder = file.path.substringBeforeLast('/', "")
+        val folderSeason = folder.takeIf(String::isNotBlank)
+            ?.let(TolokaReleaseMetadataParser::parse)?.season
+        val xNotation = seasonByEpisode.find(file.name)
+        val fileSeason = metadata.season ?: xNotation?.groupValues?.get(1)?.toIntOrNull()
+            ?: folderSeason
+        if (fileSeason != null && fileSeason != season) return null
+        val explicit = metadata.episodeStart?.takeIf {
+            metadata.episodeEnd == null || metadata.episodeEnd == it
+        } ?: xNotation?.groupValues?.get(2)?.toIntOrNull()
+            ?: leadingNumber.find(file.name)?.groupValues?.get(1)?.toIntOrNull()
+            ?: trailingNumber.find(file.name)?.groupValues?.get(1)?.toIntOrNull()
+        if (explicit != null) return explicit.takeIf { find(files, season, it)?.id == fileId }
+        if (files.size < 2 || files.any { other ->
+                val name = other.name
+                val parsed = TolokaReleaseMetadataParser.parse(name)
+                parsed.episodeStart != null || seasonByEpisode.containsMatchIn(name) ||
+                    leadingNumber.containsMatchIn(name) || trailingNumber.containsMatchIn(name) ||
+                    other.path.substringBeforeLast('/', "") != folder
+            }) return null
+        return files.indexOfFirst { it.id == fileId }.takeIf { it >= 0 }
+            ?.plus(1)?.takeIf { find(files, season, it)?.id == fileId }
+    }
+
     private data class Entry(
         val file: TorrServerFile,
         val season: Int?,

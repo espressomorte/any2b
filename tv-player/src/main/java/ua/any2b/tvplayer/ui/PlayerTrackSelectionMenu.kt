@@ -25,10 +25,12 @@ internal class PlayerTrackSelectionMenu(private val activity: Activity) {
     private var subtitleButton: View? = null
     private var audioGroups: List<Tracks.Group> = emptyList()
     private var subtitleGroups: List<Tracks.Group> = emptyList()
+    private var onMenuClosed: (() -> Unit)? = null
 
-    fun bind(player: Player, controls: PlayerControlsView) {
+    fun bind(player: Player, controls: PlayerControlsView, onMenuClosed: () -> Unit) {
         this.player = player
         this.controls = controls
+        this.onMenuClosed = onMenuClosed
         audioButton = controls.audioTrackButton
         subtitleButton = controls.subtitleTrackButton
         audioButton?.setOnClickListener { showAudioMenu() }
@@ -44,7 +46,7 @@ internal class PlayerTrackSelectionMenu(private val activity: Activity) {
         val audioLanguageCount = languageCount(audioGroups)
         val subtitleLanguageCount = languageCount(subtitleGroups)
         audioButton?.isEnabled = audioLanguageCount > 1
-        subtitleButton?.isEnabled = subtitleLanguageCount > 1
+        subtitleButton?.isEnabled = subtitleGroups.isNotEmpty()
         controls?.audioTrackChoice?.text = choiceLabel(audioGroups, audioLanguageCount, C.TRACK_TYPE_AUDIO)
         controls?.subtitleTrackChoice?.text = choiceLabel(subtitleGroups, subtitleLanguageCount, C.TRACK_TYPE_TEXT)
         audioButton?.contentDescription = "Аудіодоріжка: ${controls?.audioTrackChoice?.text}"
@@ -74,9 +76,9 @@ internal class PlayerTrackSelectionMenu(private val activity: Activity) {
 
     private fun choiceLabel(groups: List<Tracks.Group>, languageCount: Int, type: Int): String {
         if (languageCount == 0) return "—"
-        if (languageCount == 1) return "Авто"
         if (type == C.TRACK_TYPE_TEXT &&
             type in (player?.trackSelectionParameters?.disabledTrackTypes ?: emptySet())) return "Вимк."
+        if (languageCount == 1 && type == C.TRACK_TYPE_AUDIO) return "Авто"
         val selected = groups.firstNotNullOfOrNull { group ->
             (0 until group.length).firstOrNull(group::isTrackSelected)
                 ?.let(group::getTrackFormat)
@@ -171,10 +173,9 @@ internal class PlayerTrackSelectionMenu(private val activity: Activity) {
         }
 
         groups.forEach { group ->
-            val supportedIndices = (0 until group.length).filter(group::isTrackSupported)
-            if (supportedIndices.isEmpty()) return@forEach
-            val format = group.getTrackFormat(supportedIndices.first())
-            val selected = supportedIndices.any(group::isTrackSelected)
+            (0 until group.length).filter(group::isTrackSupported).forEach { index ->
+            val format = group.getTrackFormat(index)
+            val selected = group.isTrackSelected(index)
             val chips = if (type == C.TRACK_TYPE_AUDIO) {
                 listOf("${FaIcons.MICROPHONE}" to 0xFF1CDDE2.toInt(), languageName(format) to 0xFF1CDDE2.toInt()) +
                     listOfNotNull(channelLabel(format)?.let { it to 0xFF8793A5.toInt() })
@@ -186,7 +187,7 @@ internal class PlayerTrackSelectionMenu(private val activity: Activity) {
                 ?: codecName(format)
                 ?: if (type == C.TRACK_TYPE_AUDIO) "Аудіодоріжка" else "Субтитри"
             rows.addView(menuRow(detail, chips, if (format.label != null) codecName(format) else null, selected) {
-                val override = TrackSelectionOverride(group.mediaTrackGroup, supportedIndices)
+                val override = TrackSelectionOverride(group.mediaTrackGroup, listOf(index))
                 activePlayer.trackSelectionParameters = activePlayer.trackSelectionParameters.buildUpon()
                     .clearOverridesOfType(type)
                     .setTrackTypeDisabled(type, false)
@@ -194,6 +195,7 @@ internal class PlayerTrackSelectionMenu(private val activity: Activity) {
                     .build()
                 dialog.dismiss()
             })
+            }
         }
 
         dialog.setContentView(root)
@@ -205,7 +207,7 @@ internal class PlayerTrackSelectionMenu(private val activity: Activity) {
             window.attributes = window.attributes.apply { dimAmount = 0.68f }
         }
         dialog.setOnDismissListener {
-            (if (type == C.TRACK_TYPE_AUDIO) audioButton else subtitleButton)?.requestFocus()
+            controls?.post { onMenuClosed?.invoke() }
         }
         dialog.show()
         dialog.window?.setLayout((activity.resources.displayMetrics.widthPixels * 0.72f).toInt(),
