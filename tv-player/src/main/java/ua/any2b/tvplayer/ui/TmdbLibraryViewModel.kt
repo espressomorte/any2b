@@ -6,10 +6,12 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import ua.any2b.core.tmdb.TmdbMediaType
 import ua.any2b.core.tmdb.TmdbFailure
 import ua.any2b.core.tmdb.TmdbTitle
@@ -25,9 +27,12 @@ import ua.any2b.tvplayer.data.TmdbWatchlistEntry
 import ua.any2b.tvplayer.data.TmdbWatchlistStore
 import ua.any2b.tvplayer.data.MalTmdbCatalog
 import ua.any2b.tvplayer.data.HomeSectionSetting
+import ua.any2b.tvplayer.data.HomeRowCache
 import ua.any2b.tvplayer.data.SettingsManager
 import ua.any2b.tvplayer.data.tmdbHomeRecommendations
 import ua.any2b.tvplayer.data.workerTmdbConnection
+import ua.any2b.tvplayer.data.TolokaRssTmdbCatalog
+import ua.any2b.tvplayer.data.TolokaRssTmdbRows
 
 sealed interface TmdbPopularState {
     data object Loading : TmdbPopularState
@@ -47,6 +52,12 @@ sealed interface AniListHomeState {
     data class Error(val message: String) : AniListHomeState
 }
 
+sealed interface TolokaRssState {
+    data object Loading : TolokaRssState
+    data class Results(val rows: TolokaRssTmdbRows) : TolokaRssState
+    data class Error(val message: String) : TolokaRssState
+}
+
 data class TmdbLibraryState(
     val watchlist: List<TmdbWatchlistHomeItem> = emptyList(),
     val history: List<TmdbTitle> = emptyList(),
@@ -58,6 +69,7 @@ data class TmdbLibraryState(
     val malTop: MalTopState = MalTopState.Loading,
     val trending: AniListHomeState = AniListHomeState.Loading,
     val popularSeason: AniListHomeState = AniListHomeState.Loading,
+    val tolokaReleases: TolokaRssState = TolokaRssState.Loading,
     val initialHomeLoading: Boolean = false,
 )
 
@@ -87,10 +99,34 @@ class TmdbLibraryViewModel(application: Application,
     private val favorites = TmdbFavoritesStore(application)
     private val localDataMigrator = AniListLocalDataMigrator(application)
     private val settings = SettingsManager(application)
+    private val tolokaRss = TolokaRssTmdbCatalog(application)
+    private val homeRows = HomeRowCache(application)
     private val _state = MutableStateFlow(TmdbLibraryState(
+        watchlist = if (animationOnly) watchlist.all().map { entry ->
+            TmdbWatchlistHomeItem(entry,
+                logoUrl = watchlist.cachedLogo(entry.title.type, entry.title.id),
+                seasons = if (entry.title.type == TmdbMediaType.TV)
+                    watchlist.cachedSeasons(entry.title.id).orEmpty() else emptyList())
+        } else emptyList(),
         history = history.all().filter(::visibleInCurrentCatalog),
         favorites = favorites.all().filter(::visibleInCurrentCatalog),
+        recommendations = homeRows.read("recommendations"),
         mainSections = if (animationOnly) settings.mainHomeSections() else emptyList(),
+        tv = homeRows.read(if (animationOnly) "animation_tv" else "general_tv")
+            .takeIf(List<TmdbTitle>::isNotEmpty)?.let(TmdbPopularState::Results)
+            ?: TmdbPopularState.Loading,
+        movies = homeRows.read(if (animationOnly) "animation_movie" else "general_movie")
+            .takeIf(List<TmdbTitle>::isNotEmpty)?.let(TmdbPopularState::Results)
+            ?: TmdbPopularState.Loading,
+        malTop = homeRows.read("mal_top").takeIf(List<TmdbTitle>::isNotEmpty)
+            ?.let { MalTopState.Results(it, hasMore = true) } ?: MalTopState.Loading,
+        trending = homeRows.read("trending").takeIf(List<TmdbTitle>::isNotEmpty)
+            ?.let(AniListHomeState::Results) ?: AniListHomeState.Loading,
+        popularSeason = homeRows.read("popular_season").takeIf(List<TmdbTitle>::isNotEmpty)
+            ?.let(AniListHomeState::Results) ?: AniListHomeState.Loading,
+        tolokaReleases = tolokaRss.cached().let { cached ->
+            if (cached.isEmpty) TolokaRssState.Loading else TolokaRssState.Results(cached)
+        },
         initialHomeLoading = animationOnly))
     val state: StateFlow<TmdbLibraryState> = _state
     private fun visibleInCurrentCatalog(title: TmdbTitle): Boolean = animationOnly ||
@@ -100,27 +136,21 @@ class TmdbLibraryViewModel(application: Application,
     private var aniListHomeJob: Job? = null
     private var legacyMigrationJob: Job? = null
     private var watchlistEpisodesJob: Job? = null
-    private val initialSectionsPending = mutableSetOf<String>().apply {
-        if (animationOnly) {
-            val enabled = _state.value.mainSections.filter { it.enabled }.map { it.id }.toSet()
-            addAll(enabled.intersect(setOf("animation_tv", "animation_movie", "mal_top", "trending", "popular_season")))
-            val hasRecommendationSources = (_state.value.history + _state.value.favorites)
-                .distinctBy { it.type to it.id }.take(4).isNotEmpty()
-            if ("recommendations" in enabled && hasRecommendationSources) add("recommendations")
-        }
-    }
+    // Network rows must never keep the watchlist behind the initial loading screen.
+    private val initialSectionsPending = mutableSetOf("personal_lists")
 
     init {
         migrateLegacyAniListData()
+        refreshTolokaRss()
         if (animationOnly) {
             val enabled = _state.value.mainSections.filter { it.enabled }.map { it.id }.toSet()
             Log.i(TAG, "Home load started animationOnly=true enabledSections=${enabled.sorted()}")
-            if (initialSectionsPending.isEmpty()) finishInitialHomeLoad()
             if ("animation_tv" in enabled) refreshPopular(TmdbMediaType.TV)
             if ("animation_movie" in enabled) refreshPopular(TmdbMediaType.MOVIE)
             if ("mal_top" in enabled) refreshMalTop()
             if (enabled.any { it == "trending" || it == "popular_season" }) refreshAniListHome()
             refreshPersonalLists()
+            completeInitialSection("personal_lists")
         } else {
             refreshPersonalLists()
             refreshPopular(TmdbMediaType.TV)
@@ -128,8 +158,25 @@ class TmdbLibraryViewModel(application: Application,
         }
     }
 
+    fun refreshTolokaRss() {
+        viewModelScope.launch {
+            try {
+                _state.value = _state.value.copy(tolokaReleases =
+                    TolokaRssState.Results(tolokaRss.refresh()))
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                Log.w(TAG, "Toloka RSS load failed: ${error.message}", error)
+                if (_state.value.tolokaReleases !is TolokaRssState.Results)
+                    _state.value = _state.value.copy(tolokaReleases =
+                        TolokaRssState.Error("Не вдалося завантажити новинки Toloka"))
+            }
+        }
+    }
+
     fun refreshMalTop() {
-        _state.value = _state.value.copy(malTop = MalTopState.Loading)
+        if (_state.value.malTop !is MalTopState.Results)
+            _state.value = _state.value.copy(malTop = MalTopState.Loading)
         viewModelScope.launch {
             val startedAt = SystemClock.elapsedRealtime()
             Log.i(TAG, "Home section load started section=mal_top source=MAL+Fribb")
@@ -137,6 +184,7 @@ class TmdbLibraryViewModel(application: Application,
                 val page = malTmdbCatalog.page(page = 1)
                 _state.value = _state.value.copy(malTop =
                     MalTopState.Results(page.titles, page.hasMore))
+                withContext(Dispatchers.IO) { homeRows.save("mal_top", page.titles) }
                 Log.i(TAG, "Home section load succeeded section=mal_top count=${page.titles.size} " +
                     "hasMore=${page.hasMore} elapsedMs=${SystemClock.elapsedRealtime() - startedAt}")
                 completeInitialSection("mal_top")
@@ -146,8 +194,9 @@ class TmdbLibraryViewModel(application: Application,
                 Log.e(TAG, "Home section load failed section=mal_top " +
                     "elapsedMs=${SystemClock.elapsedRealtime() - startedAt} " +
                     "errorType=${error.javaClass.name} message=${error.message}", error)
-                _state.value = _state.value.copy(malTop = MalTopState.Error(
-                    error.message ?: "Не вдалося завантажити рейтинг MAL"))
+                if (_state.value.malTop !is MalTopState.Results)
+                    _state.value = _state.value.copy(malTop = MalTopState.Error(
+                        error.message ?: "Не вдалося завантажити рейтинг MAL"))
                 completeInitialSection("mal_top")
             }
         }
@@ -155,16 +204,27 @@ class TmdbLibraryViewModel(application: Application,
 
     fun refreshAniListHome() {
         aniListHomeJob?.cancel()
-        _state.value = _state.value.copy(trending = AniListHomeState.Loading,
-            popularSeason = AniListHomeState.Loading)
+        _state.value = _state.value.copy(
+            trending = _state.value.trending.takeIf { it is AniListHomeState.Results }
+                ?: AniListHomeState.Loading,
+            popularSeason = _state.value.popularSeason.takeIf { it is AniListHomeState.Results }
+                ?: AniListHomeState.Loading)
         aniListHomeJob = viewModelScope.launch {
             val startedAt = SystemClock.elapsedRealtime()
             Log.i(TAG, "Home section load started section=trending,popular_season source=AniList")
             try {
                 val rows = aniListCatalog.homeRows(perRow = HOME_FETCH_SIZE)
+                val freshTrending = rows["trending"].orEmpty()
+                val freshSeason = rows["popular_season"].orEmpty()
                 _state.value = _state.value.copy(
-                    trending = AniListHomeState.Results(rows["trending"].orEmpty()),
-                    popularSeason = AniListHomeState.Results(rows["popular_season"].orEmpty()))
+                    trending = freshTrending.takeIf(List<TmdbTitle>::isNotEmpty)
+                        ?.let(AniListHomeState::Results) ?: _state.value.trending,
+                    popularSeason = freshSeason.takeIf(List<TmdbTitle>::isNotEmpty)
+                        ?.let(AniListHomeState::Results) ?: _state.value.popularSeason)
+                withContext(Dispatchers.IO) {
+                    homeRows.save("trending", freshTrending)
+                    homeRows.save("popular_season", freshSeason)
+                }
                 Log.i(TAG, "Home section load succeeded source=AniList " +
                     "trendingCount=${rows["trending"]?.size ?: 0} " +
                     "popularSeasonCount=${rows["popular_season"]?.size ?: 0} " +
@@ -176,8 +236,12 @@ class TmdbLibraryViewModel(application: Application,
                     "elapsedMs=${SystemClock.elapsedRealtime() - startedAt} " +
                     "errorType=${error.javaClass.name} message=${error.message}", error)
                 val message = error.message ?: "Не вдалося завантажити аніме AniList"
-                _state.value = _state.value.copy(trending = AniListHomeState.Error(message),
-                    popularSeason = AniListHomeState.Error(message))
+                _state.value = _state.value.copy(
+                    trending = _state.value.trending.takeIf { it is AniListHomeState.Results }
+                        ?: AniListHomeState.Error(message),
+                    popularSeason = _state.value.popularSeason.takeIf {
+                        it is AniListHomeState.Results
+                    } ?: AniListHomeState.Error(message))
             } finally {
                 completeInitialSection("trending")
                 completeInitialSection("popular_season")
@@ -188,13 +252,13 @@ class TmdbLibraryViewModel(application: Application,
     fun refreshPersonalLists() {
         val watched = history.all()
         val saved = favorites.all()
+        val savedWatchlist = if (animationOnly) watchlist.all() else emptyList()
+        if (animationOnly) Log.i(TAG, "Home watchlist loaded entries=${savedWatchlist.size}")
         val sections = if (animationOnly) settings.mainHomeSections() else emptyList()
         val previouslyEnabled = _state.value.mainSections.filter { it.enabled }.map { it.id }.toSet()
         val nowEnabled = sections.filter { it.enabled }.map { it.id }.toSet()
         _state.value = _state.value.copy(
-            watchlist = watchlist.all().filter {
-                animationOnly || visibleInCurrentCatalog(it.title)
-            }.map { entry ->
+            watchlist = savedWatchlist.map { entry ->
                 val previous = _state.value.watchlist.firstOrNull {
                     it.entry.title.type == entry.title.type && it.entry.title.id == entry.title.id
                 }
@@ -216,9 +280,7 @@ class TmdbLibraryViewModel(application: Application,
             history = watched.filter(::visibleInCurrentCatalog),
             favorites = saved.filter(::visibleInCurrentCatalog),
             mainSections = sections)
-        refreshWatchlistEpisodes(watchlist.all().filter {
-            animationOnly || visibleInCurrentCatalog(it.title)
-        })
+        if (animationOnly) refreshWatchlistEpisodes(savedWatchlist)
         if (!animationOnly) {
             return
         }
@@ -243,7 +305,7 @@ class TmdbLibraryViewModel(application: Application,
         if (sources == recommendationSources) return
         recommendationSources = sources
         recommendationsJob?.cancel()
-        _state.value = _state.value.copy(recommendations = emptyList())
+        // Keep the last successful row visible until the new suggestions arrive.
         if (sources.isEmpty()) {
             completeInitialSection("recommendations")
             return
@@ -256,6 +318,7 @@ class TmdbLibraryViewModel(application: Application,
                 val titles = tmdbHomeRecommendations(getApplication())
                 if (recommendationSources == sources) {
                     _state.value = _state.value.copy(recommendations = titles)
+                    withContext(Dispatchers.IO) { homeRows.save("recommendations", titles) }
                     Log.i(TAG, "Home section load succeeded section=recommendations " +
                         "count=${titles.size} elapsedMs=${SystemClock.elapsedRealtime() - startedAt}")
                     completeInitialSection("recommendations")
@@ -268,7 +331,7 @@ class TmdbLibraryViewModel(application: Application,
                     "errorType=${error.javaClass.name} message=${error.message}", error)
                 if (recommendationSources == sources) {
                     recommendationSources = null
-                    _state.value = _state.value.copy(recommendations = emptyList())
+                    // A failed refresh must not remove cached suggestions.
                     completeInitialSection("recommendations")
                 }
             }
@@ -471,7 +534,8 @@ class TmdbLibraryViewModel(application: Application,
     }
 
     fun refreshPopular(type: TmdbMediaType) {
-        setRow(type, TmdbPopularState.Loading)
+        if ((if (type == TmdbMediaType.TV) _state.value.tv else _state.value.movies)
+            !is TmdbPopularState.Results) setRow(type, TmdbPopularState.Loading)
         viewModelScope.launch {
             val startedAt = SystemClock.elapsedRealtime()
             val section = if (type == TmdbMediaType.TV) "animation_tv" else "animation_movie"
@@ -487,6 +551,9 @@ class TmdbLibraryViewModel(application: Application,
                     excludedGenreIds = if (animationOnly) emptySet() else
                         ua.any2b.core.tmdb.TmdbGeneralCatalog.excludedGenreIds)
                 setRow(type, TmdbPopularState.Results(titles))
+                val cacheKey = if (animationOnly) section else
+                    if (type == TmdbMediaType.TV) "general_tv" else "general_movie"
+                withContext(Dispatchers.IO) { homeRows.save(cacheKey, titles) }
                 Log.i(TAG, "Home section load succeeded section=$section count=${titles.size} " +
                     "elapsedMs=${SystemClock.elapsedRealtime() - startedAt}")
                 completeInitialSection(
@@ -500,7 +567,8 @@ class TmdbLibraryViewModel(application: Application,
                 val message = if (error is TmdbFailure.Http && error.status == 404)
                     "Проксі Worker ще не підтримує популярні тайтли"
                 else error.message ?: "Не вдалося завантажити популярні тайтли"
-                setRow(type, TmdbPopularState.Error(message))
+                if ((if (type == TmdbMediaType.TV) _state.value.tv else _state.value.movies)
+                    !is TmdbPopularState.Results) setRow(type, TmdbPopularState.Error(message))
                 completeInitialSection(
                     if (type == TmdbMediaType.TV) "animation_tv" else "animation_movie")
             }

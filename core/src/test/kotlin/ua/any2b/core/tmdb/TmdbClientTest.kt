@@ -87,6 +87,24 @@ class TmdbClientTest {
     }
 
     @Test
+    fun trendingAndOnAirUseTvEndpointsAndKeepPopularity() = runBlocking {
+        val requests = mutableListOf<Request>()
+        val client = client { request ->
+            requests += request
+            fixture(request, 200, """{"results":[{"id":42,"name":"Серіал",
+                "first_air_date":"2026-04-10","vote_average":8.4,"popularity":142.5}]}""")
+        }
+        val trending = client.trendingTv("key", page = 2)
+        val onAir = client.onTheAirTv("key")
+        assertEquals(listOf("/3/trending/tv/week", "/3/tv/on_the_air"),
+            requests.map { it.url.encodedPath })
+        assertEquals("2", requests.first().url.queryParameter("page"))
+        assertEquals(42, onAir.single().id)
+        assertEquals(142.5, trending.single().popularity)
+        assertEquals("2026-04-10", trending.single().airDate)
+    }
+
+    @Test
     fun movieCollectionContainsOnlyItsPartsAndExcludesAdultTitles() = runBlocking {
         val paths = mutableListOf<String>()
         val client = client { request ->

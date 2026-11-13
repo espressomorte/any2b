@@ -6,6 +6,9 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -21,7 +24,11 @@ import ua.any2b.tvplayer.data.TmdbWatchlistStore
 
 /** Unified catalog home. AniList rows are resolved to TMDB identities before display. */
 class MainActivity : ComponentActivity() {
-    companion object { private const val TAG = "WatchlistPlayback" }
+    companion object {
+        private const val TAG = "WatchlistPlayback"
+        const val EXTRA_HOME_RESET = "home_reset"
+    }
+    private var homeResetToken by mutableLongStateOf(0L)
     private val viewModel: TmdbLibraryViewModel by viewModels {
         object : ViewModelProvider.Factory {
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -33,6 +40,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        homeResetToken = intent.getLongExtra(EXTRA_HOME_RESET,
+            android.os.SystemClock.elapsedRealtimeNanos())
         setContent {
             AppTheme {
                 TmdbLibraryScreen(
@@ -65,12 +74,15 @@ class MainActivity : ComponentActivity() {
                         })
                     },
                     onBack = {},
+                    onHome = { homeResetToken = android.os.SystemClock.elapsedRealtimeNanos() },
                     animationOnly = true,
+                    homeResetToken = homeResetToken,
                     onSearchTitle = { startActivity(Intent(this, TolokaSearchActivity::class.java)) },
                     onOpenAllTmdb = { startActivity(Intent(this, TmdbLibraryActivity::class.java)) },
                     onSettings = { startActivity(Intent(this, SettingsActivity::class.java)) },
                     onRetryMal = viewModel::refreshMalTop,
                     onRetryAniList = viewModel::refreshAniListHome,
+                    onRetryTolokaRss = viewModel::refreshTolokaRss,
                     onRemoveFromHistory = viewModel::removeFromHistory,
                     onSelectWatchlistSeason = { title, seasonNumber ->
                         if (viewModel.hasPlayableWatchlistSeason(title, seasonNumber)) {
@@ -89,8 +101,16 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        homeResetToken = intent.getLongExtra(EXTRA_HOME_RESET,
+            android.os.SystemClock.elapsedRealtimeNanos())
+    }
+
     override fun onResume() {
         super.onResume()
+        homeResetToken = android.os.SystemClock.elapsedRealtimeNanos()
         viewModel.refreshPersonalLists()
     }
 

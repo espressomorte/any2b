@@ -44,4 +44,10 @@ object TolokaConnections {
             ?: throw IllegalStateException("У конфігу немає даних Toloka")
         return direct.check(credentials.username, credentials.password)
     }
+
+    suspend fun rss(context: Context): String {
+        val credentials = if (SettingsManager(context).isEncryptedConfigEnabled())
+            TolokaCredentialStore(context).read() else null
+        return direct.rss(credentials?.username, credentials?.password)
+    }
 }

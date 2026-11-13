@@ -2,6 +2,7 @@ package ua.any2b.tvplayer
 
 import android.content.Intent
 import android.os.Bundle
+import android.os.SystemClock
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -34,6 +35,7 @@ class TmdbLibraryActivity : ComponentActivity() {
                         startActivity(TvNavigation.details(this, title, torrentsOnly = true))
                     },
                     onRetry = viewModel::refreshPopular,
+                    onRetryTolokaRss = viewModel::refreshTolokaRss,
                     onMore = { category ->
                         startActivity(Intent(this, TmdbListActivity::class.java).apply {
                             putExtra(TmdbListActivity.EXTRA_CATEGORY, category)
@@ -61,7 +63,8 @@ class TmdbLibraryActivity : ComponentActivity() {
                     },
                     onOpenEpisode = ::openWatchlistPlayback,
                     onContinueWatchlist = ::openWatchlistPlayback,
-                    onBack = ::finish)
+                    onBack = ::returnHome,
+                    onHome = ::returnHome)
             }
         }
 
@@ -70,6 +73,14 @@ class TmdbLibraryActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         viewModel.refreshPersonalLists()
+    }
+
+    private fun returnHome() {
+        startActivity(Intent(this, MainActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            putExtra(MainActivity.EXTRA_HOME_RESET, SystemClock.elapsedRealtimeNanos())
+        })
+        finish()
     }
 
     private fun openWatchlistPlayback(title: ua.any2b.core.tmdb.TmdbTitle,

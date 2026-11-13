@@ -1,5 +1,7 @@
 package ua.any2b.tvplayer.ui
 
+import android.util.Log
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.BringIntoViewSpec
@@ -28,6 +30,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -36,8 +39,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.FocusDirection
@@ -92,12 +98,15 @@ import kotlin.math.roundToInt
 @Composable
 fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
     onRetry: (TmdbMediaType) -> Unit, onMore: (String) -> Unit, onBack: () -> Unit,
+    onHome: () -> Unit = onBack,
     animationOnly: Boolean = false,
+    homeResetToken: Long = 0L,
     onSearchTitle: () -> Unit = {},
     onOpenAllTmdb: () -> Unit = {},
     onSettings: () -> Unit = {},
     onRetryMal: () -> Unit = {},
     onRetryAniList: () -> Unit = {},
+    onRetryTolokaRss: () -> Unit = {},
     onOpenFavorite: (TmdbTitle) -> Unit = onOpen,
     onRemoveFromHistory: (TmdbTitle) -> Unit = {},
     onSelectWatchlistSeason: (TmdbTitle, Int) -> Unit = { _, _ -> },
@@ -106,7 +115,19 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
         if (episode == null) onOpen(title) else onOpenEpisode(title, episode)
     },
 ) {
-    val listState = rememberLazyListState()
+    val listState = remember(homeResetToken) { LazyListState() }
+    LaunchedEffect(animationOnly, state.watchlist.size, state.initialHomeLoading) {
+        Log.i("WatchlistUi", "screen animationOnly=$animationOnly " +
+            "entries=${state.watchlist.size} loading=${state.initialHomeLoading}")
+    }
+    LaunchedEffect(listState) {
+        snapshotFlow { Triple(listState.layoutInfo.totalItemsCount,
+            listState.layoutInfo.visibleItemsInfo.map { it.key },
+            listState.firstVisibleItemIndex) }.distinctUntilChanged().collect { layout ->
+            if (animationOnly) Log.i("WatchlistUi", "layout total=${layout.first} " +
+                "visible=${layout.second} index=${layout.third}")
+        }
+    }
     val drawerHomeFocusRequester = remember { FocusRequester() }
     val drawerMoviesFocusRequester = remember { FocusRequester() }
     val drawerSearchFocusRequester = remember { FocusRequester() }
@@ -143,7 +164,8 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
                 if (it.hasFocus) drawerOpen = false
             }, state = listState,
                 verticalArrangement = Arrangement.spacedBy(24.dp),
-                contentPadding = PaddingValues(bottom = if (animationOnly) 0.dp else 32.dp)) {
+                contentPadding = PaddingValues(bottom = if (animationOnly)
+                    watchlistViewportHeight * 0.55f else 32.dp)) {
             if (animationOnly) {
                 if (state.watchlist.isNotEmpty()) item(key = "watchlist") {
                     WatchlistHomeSection(state.watchlist, onSelectWatchlistSeason,
@@ -218,11 +240,22 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
                         }
                     }
                 }
+                item(key = "toloka_animation") {
+                    TolokaRssRow("Анімація Toloka", state.tolokaReleases,
+                        animated = true, onOpen = onOpen,
+                        onMore = { onMore("toloka_animation") },
+                        onRetry = onRetryTolokaRss,
+                        onSectionFocus = { alignSection("toloka_animation") },
+                        drawerFocusRequester = drawerHomeFocusRequester,
+                        onContentFocusRequester = { drawerReturnFocusRequester = it })
+                }
             } else {
-                if (state.watchlist.isNotEmpty()) item(key = "watchlist") {
-                    WatchlistHomeSection(state.watchlist, onSelectWatchlistSeason,
-                        onOpenEpisode, onContinueWatchlist, onOpen,
-                        onSectionFocus = { alignSection("watchlist") },
+                item(key = "toloka_video") {
+                    TolokaRssRow("Фільми й серіали Toloka", state.tolokaReleases,
+                        animated = false, onOpen = onOpen,
+                        onMore = { onMore("toloka_video") },
+                        onRetry = onRetryTolokaRss,
+                        onSectionFocus = { alignSection("toloka_video") },
                         drawerFocusRequester = drawerHomeFocusRequester,
                         onContentFocusRequester = { drawerReturnFocusRequester = it })
                 }
@@ -292,8 +325,7 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
             onHome = {
                 historyMenuTitle = null
                 alignedSection = if (animationOnly) "watchlist" else null
-                scope.launch { listState.scrollToItem(0) }
-                onBack()
+                onHome()
             },
             onMovies = onOpenAllTmdb,
             onSearch = onSearchTitle,
@@ -876,6 +908,37 @@ private fun TmdbPopularRow(title: String, state: TmdbPopularState,
             TmdbLibraryRow(title, state.titles, onOpen, onMore,
                 onSectionFocus = onSectionFocus, drawerFocusRequester = drawerFocusRequester,
                 onContentFocusRequester = onContentFocusRequester)
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun TolokaRssRow(title: String, state: TolokaRssState, animated: Boolean,
+    onOpen: (TmdbTitle) -> Unit, onMore: () -> Unit, onRetry: () -> Unit,
+    onSectionFocus: () -> Unit, drawerFocusRequester: FocusRequester?,
+    onContentFocusRequester: (FocusRequester) -> Unit) {
+    val titles = (state as? TolokaRssState.Results)?.rows?.let {
+        if (animated) it.animated else it.general
+    }.orEmpty()
+    if (titles.isNotEmpty()) {
+        TmdbLibraryRow(title, titles, onOpen, onMore = onMore,
+            onSectionFocus = onSectionFocus,
+            drawerFocusRequester = drawerFocusRequester,
+            onContentFocusRequester = onContentFocusRequester)
+    } else {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(title, style = MaterialTheme.typography.titleLarge, color = Color.White,
+                modifier = Modifier.padding(horizontal = 4.dp))
+            when (state) {
+                TolokaRssState.Loading -> Text("Завантаження…", color = AppColors.TextSecondary)
+                is TolokaRssState.Error -> {
+                Text(state.message, color = AppColors.ErrorRed)
+                Button(onClick = onRetry) { Text("Повторити") }
+                }
+                is TolokaRssState.Results ->
+                    Text("Новинок поки немає", color = AppColors.TextSecondary)
+            }
+        }
     }
 }
 

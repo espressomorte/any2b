@@ -46,6 +46,8 @@ data class TmdbTitle(
     val matchedSeasonYear: Int? = null,
     val matchedSeasonNumber: Int? = null,
     val backdropUrl: String? = null,
+    val popularity: Double? = null,
+    val airDate: String? = null,
 ) {
     fun searchNames(query: String): List<String> {
         val original = originalTitle?.takeIf { originalLanguage != "en" && originalLanguage != "uk" }
@@ -171,6 +173,19 @@ class TmdbClient(
         excludedGenreIds: Set<Int> = emptySet()): List<TmdbTitle> =
         listPage(type, token, TmdbListSort.POPULARITY, 1, genreId,
             excludedGenreIds = excludedGenreIds).titles
+
+    suspend fun trendingTv(token: String, window: String = "week", page: Int = 1): List<TmdbTitle> {
+        require(window == "day" || window == "week")
+        require(page in 1..500)
+        return parseList(request(listOf("trending", "tv", window), token, "uk-UA",
+            "page" to page.toString()), TmdbMediaType.TV, "uk-UA")
+    }
+
+    suspend fun onTheAirTv(token: String, page: Int = 1): List<TmdbTitle> {
+        require(page in 1..500)
+        return parseList(request(listOf("tv", "on_the_air"), token, "uk-UA",
+            "page" to page.toString()), TmdbMediaType.TV, "uk-UA")
+    }
 
     suspend fun listPage(type: TmdbMediaType, token: String, sort: TmdbListSort, page: Int,
         genreId: Int? = null, yearRange: IntRange? = null,
@@ -498,6 +513,9 @@ private fun JSONObject.toTitle(type: TmdbMediaType, language: String): TmdbTitle
         }.orEmpty(),
         backdropUrl = optionalString("backdrop_path")?.takeIf { it.startsWith("/") }
             ?.let { "https://image.tmdb.org/t/p/w1280$it" },
+        popularity = optDouble("popularity", Double.NaN)
+            .takeIf { it.isFinite() && it >= 0.0 },
+        airDate = date,
     )
 }
 

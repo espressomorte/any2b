@@ -14,6 +14,7 @@ import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.Cookie
 import okhttp3.CookieJar
+import okhttp3.Credentials
 import okhttp3.FormBody
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -57,6 +58,27 @@ class DirectTolokaClient(
     suspend fun check(username: String, password: String): Boolean = lock.withLock {
         ensureSession(username, password)
         true
+    }
+
+    /** RSS catalog request, using the existing session when local credentials are configured. */
+    suspend fun rss(username: String? = null, password: String? = null): String = lock.withLock {
+        if (!username.isNullOrBlank() && !password.isNullOrBlank())
+            ensureSession(username, password)
+        val url = origin.newBuilder().addPathSegment("rss.php")
+            .addQueryParameter("t", "1").addQueryParameter("c", "50")
+            .addQueryParameter("lite", "1")
+            .addQueryParameter("cat", "8").addQueryParameter("toronly", "1")
+            .addQueryParameter("thumbs", "1").build()
+        val authorization = if (!username.isNullOrBlank() && !password.isNullOrBlank())
+            Credentials.basic(username, password) else null
+        request(url, authorization = authorization).use { response ->
+            if (!response.isSuccessful) throw WorkerFailure.TolokaHttp(response.code)
+            val xml = response.body?.string().orEmpty()
+            if (!xml.contains("<rss", ignoreCase = true) &&
+                !xml.contains("<feed", ignoreCase = true))
+                throw WorkerFailure.TolokaInvalidResponse()
+            xml
+        }
     }
 
     suspend fun search(username: String, password: String, query: String): TolokaSearch = lock.withLock {
@@ -138,7 +160,8 @@ class DirectTolokaClient(
         html
     }
 
-    private suspend fun request(initial: HttpUrl, form: FormBody? = null): Response {
+    private suspend fun request(initial: HttpUrl, form: FormBody? = null,
+        authorization: String? = null): Response {
         if (remainingCooldownSeconds() > 0) throw WorkerFailure.RateLimited(remainingCooldownSeconds())
         var url = initial
         var body = form
@@ -147,6 +170,7 @@ class DirectTolokaClient(
                 throw WorkerFailure.TolokaInvalidResponse()
             val builder = Request.Builder().url(url).header("User-Agent", "Animarium-Toloka/0.2")
                 .header("Referer", origin.newBuilder().addPathSegment("login.php").build().toString())
+            if (authorization != null) builder.header("Authorization", authorization)
             if (body != null) builder.post(body!!) else builder.get()
             val call = http.newCall(builder.build())
             val response = try { suspendCancellableCoroutine<Response> { continuation ->
