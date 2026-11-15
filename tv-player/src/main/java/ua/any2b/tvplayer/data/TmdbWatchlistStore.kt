@@ -221,12 +221,16 @@ class TmdbWatchlistStore(context: Context) {
         prefs.getString(logoKey(type, id), null)?.takeIf(String::isNotBlank)
     }
 
-    fun hasCachedLogo(type: TmdbMediaType, id: Int): Boolean = synchronized(lock) {
-        prefs.contains(logoKey(type, id))
+    fun hasCachedLogo(type: TmdbMediaType, id: Int,
+        languagePriority: List<String> = LogoLanguagePreference.defaults): Boolean = synchronized(lock) {
+        prefs.contains(logoKey(type, id)) && prefs.getString(logoPriorityKey(type, id), null) ==
+            languagePriority.joinToString(",")
     }
 
-    fun saveLogo(type: TmdbMediaType, id: Int, logoUrl: String?) = synchronized(lock) {
-        prefs.edit().putString(logoKey(type, id), logoUrl.orEmpty()).apply()
+    fun saveLogo(type: TmdbMediaType, id: Int, logoUrl: String?,
+        languagePriority: List<String> = LogoLanguagePreference.defaults) = synchronized(lock) {
+        prefs.edit().putString(logoKey(type, id), logoUrl.orEmpty())
+            .putString(logoPriorityKey(type, id), languagePriority.joinToString(",")).apply()
     }
 
     fun updateTitleMetadata(title: TmdbTitle) = synchronized(lock) {
@@ -275,7 +279,7 @@ class TmdbWatchlistStore(context: Context) {
     }
 
     private fun clearTitleCache(type: TmdbMediaType, id: Int) {
-        prefs.edit().remove(logoKey(type, id)).apply()
+        prefs.edit().remove(logoKey(type, id)).remove(logoPriorityKey(type, id)).apply()
         prefs.all.keys.filter { it.startsWith("playable_${type.path}_${id}_") }
             .forEach { prefs.edit().remove(it).apply() }
         if (type != TmdbMediaType.TV) return
@@ -367,6 +371,7 @@ class TmdbWatchlistStore(context: Context) {
         releaseId: Int) = "anitube_voices_${type.path}_${titleId}_${seasonNumber}_$releaseId"
     private fun seasonKey(seriesId: Int) = "seasons_$seriesId"
     private fun logoKey(type: TmdbMediaType, id: Int) = "logo_${type.path}_$id"
+    private fun logoPriorityKey(type: TmdbMediaType, id: Int) = "logo_priority_${type.path}_$id"
     private fun playableEpisodesKey(type: TmdbMediaType, id: Int, playlistKey: String) =
         "playable_${type.path}_${id}_$playlistKey"
 

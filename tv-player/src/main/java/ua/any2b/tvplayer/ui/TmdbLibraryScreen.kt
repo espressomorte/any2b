@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.lazy.LazyColumn
@@ -77,12 +78,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.BorderStroke
 import androidx.tv.material3.Border
 import androidx.tv.material3.Button
+import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.Card
 import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
+import androidx.tv.material3.Glow
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.OutlinedButton
+import androidx.tv.material3.OutlinedButtonDefaults
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
@@ -242,16 +246,16 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
                                 drawerFocusRequester = drawerHomeFocusRequester,
                                 onContentFocusRequester = { drawerReturnFocusRequester = it })
                         }
+                        "toloka_animation" -> item(key = "toloka_animation") {
+                            TolokaRssRow(section.title, state.tolokaReleases,
+                                animated = true, onOpen = onOpen,
+                                onMore = { onMore("toloka_animation") },
+                                onRetry = onRetryTolokaRss,
+                                onSectionFocus = { alignSection("toloka_animation") },
+                                drawerFocusRequester = drawerHomeFocusRequester,
+                                onContentFocusRequester = { drawerReturnFocusRequester = it })
+                        }
                     }
-                }
-                item(key = "toloka_animation") {
-                    TolokaRssRow("Анімація Toloka", state.tolokaReleases,
-                        animated = true, onOpen = onOpen,
-                        onMore = { onMore("toloka_animation") },
-                        onRetry = onRetryTolokaRss,
-                        onSectionFocus = { alignSection("toloka_animation") },
-                        drawerFocusRequester = drawerHomeFocusRequester,
-                        onContentFocusRequester = { drawerReturnFocusRequester = it })
                 }
             } else {
                 item(key = "toloka_video") {
@@ -518,6 +522,33 @@ private fun FloatingIconButton(
 }
 
 @Composable
+private fun WatchlistSeasonArrow(
+    glyph: String,
+    description: String,
+    enabled: Boolean,
+    downTo: FocusRequester?,
+    onClick: () -> Unit,
+) {
+    var focused by remember(description) { mutableStateOf(false) }
+    Box(
+        modifier = Modifier.size(40.dp)
+            .onFocusChanged { focused = it.isFocused }
+            .then(Modifier.clickable(enabled = enabled, onClick = onClick)
+                .focusable(enabled = enabled)
+                .focusProperties { downTo?.let { down = it } })
+            .semantics { contentDescription = description }
+            .neonGlow(focused = focused, borderRadius = 8.dp, alpha = 0.7f),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(glyph, color = when {
+            !enabled -> AppColors.TextSecondary.copy(alpha = 0.4f)
+            focused -> AppColors.NeonCyan
+            else -> Color.White
+        }, style = MaterialTheme.typography.titleLarge)
+    }
+}
+
+@Composable
 private fun WatchlistHomeSection(
     items: List<TmdbWatchlistHomeItem>,
     onSelectSeason: (TmdbTitle, Int) -> Unit,
@@ -554,6 +585,8 @@ private fun WatchlistHomeSection(
         selected.selectedVoiceIndex in it.variantIndices
     } ?: selected.anitubeVoices.firstOrNull()
     val detailsFocusRequester = remember(title.type, title.id) { FocusRequester() }
+    val seasonEpisodeFocusRequester = remember(title.type, title.id,
+        selected.selectedSeasonNumber) { FocusRequester() }
     var detailsFocused by remember(title.type, title.id) { mutableStateOf(false) }
     val detailsFocusProgress by animateFloatAsState(
         targetValue = if (detailsFocused) 1f else 0f,
@@ -578,6 +611,7 @@ private fun WatchlistHomeSection(
         ua.any2b.tvplayer.data.TmdbWatchlistEntry.Source.IN_PROGRESS) {
         "Продовжити перегляд"
     } else "Дивитись"
+    var continueFocused by remember(title.type, title.id) { mutableStateOf(false) }
     val season = selected.seasons.firstOrNull {
         it.number == selected.selectedSeasonNumber
     }
@@ -666,15 +700,22 @@ private fun WatchlistHomeSection(
                                 var verticalLogo by remember(selected.logoUrl) { mutableStateOf(false) }
                                 // Keep the logo inside the left information column so it never
                                 // overlaps the confined backdrop on narrower TV layouts.
-                                val logoWidth = if (verticalLogo) 114.dp else 300.dp
-                                val logoHeight = if (verticalLogo) 140.dp else 86.dp
+                                val logoHeight = if (verticalLogo) 118.dp else 70.dp
+                                var logoAspectRatio by remember(selected.logoUrl) {
+                                    mutableStateOf(2.4f)
+                                }
+                                val logoWidth = if (verticalLogo) 96.dp
+                                    else (logoHeight * logoAspectRatio).coerceAtMost(240.dp)
                                 Box(Modifier.width(logoWidth).height(logoHeight),
-                                    contentAlignment = Alignment.Center) {
+                                    contentAlignment = Alignment.CenterStart) {
                                     AsyncImage(model = selected.logoUrl, contentDescription = title.title,
                                         contentScale = ContentScale.Fit,
                                         onSuccess = { result ->
                                             val image = result.result.drawable
                                             verticalLogo = image.intrinsicHeight > image.intrinsicWidth
+                                            if (image.intrinsicHeight > 0)
+                                                logoAspectRatio = image.intrinsicWidth.toFloat() /
+                                                    image.intrinsicHeight
                                         },
                                         modifier = Modifier.fillMaxSize())
                                 }
@@ -696,8 +737,14 @@ private fun WatchlistHomeSection(
                     }
                     if (selected.playbackProgress != null &&
                         selected.playbackProgress < 0.98f) {
-                        Column(Modifier.fillMaxWidth().padding(end = 8.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Column(Modifier.fillMaxWidth(0.82f).padding(end = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(watchProgressLabel(title.type == TmdbMediaType.TV,
+                                selected.displaySeasonNumber ?: selected.selectedSeasonNumber,
+                                selected.playbackEpisodeNumber, selected.playbackRemainingMs),
+                                color = AppColors.TextSecondary,
+                                style = MaterialTheme.typography.labelSmall, maxLines = 1,
+                                overflow = TextOverflow.Ellipsis)
                             Box(Modifier.fillMaxWidth().height(3.dp)
                                 .background(Color.White.copy(alpha = 0.2f),
                                     RoundedCornerShape(2.dp))) {
@@ -705,14 +752,9 @@ private fun WatchlistHomeSection(
                                     .height(3.dp).background(AppColors.NeonCyan,
                                         RoundedCornerShape(2.dp)))
                             }
-                            Text(watchProgressLabel(title.type == TmdbMediaType.TV,
-                                selected.displaySeasonNumber ?: selected.selectedSeasonNumber,
-                                selected.playbackEpisodeNumber, selected.playbackRemainingMs),
-                                color = AppColors.TextSecondary,
-                                style = MaterialTheme.typography.labelSmall, maxLines = 1,
-                                overflow = TextOverflow.Ellipsis)
                         }
                     }
+                    Spacer(Modifier.height(8.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically) {
                         Button(onClick = {
@@ -721,29 +763,56 @@ private fun WatchlistHomeSection(
                                 ?: selected.nextEpisodes.firstOrNull()?.episode
                             onContinue(title.copy(matchedSeasonNumber = selected.selectedSeasonNumber),
                                 resumeEpisode)
-                        }, contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
-                            modifier = Modifier.height(42.dp)
+                        }, scale = ButtonDefaults.scale(scale = 1f, focusedScale = 1f),
+                            shape = ButtonDefaults.shape(RoundedCornerShape(12.dp)),
+                            glow = ButtonDefaults.glow(glow = Glow.None,
+                                focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 8.dp)),
+                            colors = ButtonDefaults.colors(
+                                containerColor = AppColors.SurfaceCard,
+                                contentColor = Color.White,
+                                focusedContainerColor = AppColors.NeonCyan,
+                                focusedContentColor = AppColors.ButtonDarkText),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
+                            modifier = Modifier.height(48.dp)
                             .then(continueFocusRequester?.let(Modifier::focusRequester) ?: Modifier)
                             .focusProperties {
                                 up = detailsFocusRequester
                                 drawerFocusRequester?.let { left = it }
                             }
+                            .onFocusChanged { continueFocused = it.isFocused }
+                            .neonGlow(focused = continueFocused, borderRadius = 12.dp)
                             .onFocusChanged {
                                 if (it.isFocused) continueFocusRequester?.let(onContentFocusRequester)
                             }) {
-                            Text(continueLabel)
+                            Text(continueLabel, color = if (continueFocused)
+                                AppColors.ButtonDarkText else Color.White)
                         }
                         if (selectedVoiceOption != null) {
                             OutlinedButton(onClick = { voiceMenuExpanded = true },
-                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-                                modifier = Modifier.height(42.dp)) {
+                                scale = OutlinedButtonDefaults.scale(scale = 1f, focusedScale = 1f),
+                                shape = OutlinedButtonDefaults.shape(RoundedCornerShape(12.dp)),
+                                border = OutlinedButtonDefaults.border(
+                                    border = Border(BorderStroke(1.dp, AppColors.TextMuted)),
+                                    focusedBorder = Border(BorderStroke(2.dp, AppColors.NeonCyan)),
+                                ),
+                                colors = OutlinedButtonDefaults.colors(
+                                    containerColor = Color.Transparent,
+                                    contentColor = Color.White,
+                                    focusedContainerColor = AppColors.NeonCyanLight,
+                                    focusedContentColor = AppColors.ButtonDarkText,
+                                ),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                                modifier = Modifier.height(48.dp).widthIn(max = 210.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    PlaybackTrackIcon(selectedVoiceOption.category,
-                                        Modifier.size(17.dp))
-                                    Text(selectedVoiceOption.name,
-                                        style = MaterialTheme.typography.labelMedium,
-                                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Column(horizontalAlignment = Alignment.Start) {
+                                        Text("Озвучення", style = MaterialTheme.typography.labelSmall,
+                                            color = AppColors.TextSecondary, maxLines = 1)
+                                        Text(selectedVoiceOption.name,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    }
+                                    Text("⌄", style = MaterialTheme.typography.titleMedium)
                                 }
                             }
                         }
@@ -751,31 +820,31 @@ private fun WatchlistHomeSection(
                 }
             }
             Spacer(Modifier.weight(1f))
-            Row(Modifier.fillMaxWidth().height(34.dp).padding(horizontal = 4.dp),
+            Row(Modifier.fillMaxWidth().height(40.dp).padding(start = 40.dp, end = 4.dp),
                 verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                Box(Modifier.width(230.dp), contentAlignment = Alignment.CenterStart) {
                     if (title.type == TmdbMediaType.TV) {
                         Row(verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text("<", color = if (previousSeason != null) Color.White
-                                else AppColors.TextSecondary.copy(alpha = 0.4f),
-                                style = MaterialTheme.typography.titleMedium,
-                                modifier = Modifier.clickable(enabled = previousSeason != null) {
-                                    previousSeason?.let { onSelectSeason(title, it.number) }
-                                }.focusable(previousSeason != null)
-                                    .padding(horizontal = 6.dp, vertical = 2.dp))
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            WatchlistSeasonArrow("<", "Попередній сезон",
+                                enabled = previousSeason != null,
+                                downTo = seasonEpisodeFocusRequester.takeIf {
+                                    selected.nextEpisodes.isNotEmpty()
+                                },
+                                onClick = { previousSeason?.let { onSelectSeason(title, it.number) } })
                             Text("Сезон ${selected.displaySeasonNumber
                                 ?: selected.selectedSeasonNumber ?: season?.number ?: 1}",
+                                modifier = Modifier.width(130.dp),
                                 color = Color.White, style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.SemiBold, maxLines = 1,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                                 overflow = TextOverflow.Ellipsis)
-                            Text(">", color = if (nextAvailableSeason != null) Color.White
-                                else AppColors.TextSecondary.copy(alpha = 0.4f),
-                                style = MaterialTheme.typography.titleMedium,
-                                modifier = Modifier.clickable(enabled = nextAvailableSeason != null) {
-                                    nextAvailableSeason?.let { onSelectSeason(title, it.number) }
-                                }.focusable(nextAvailableSeason != null)
-                                    .padding(horizontal = 6.dp, vertical = 2.dp))
+                            WatchlistSeasonArrow(">", "Наступний сезон",
+                                enabled = nextAvailableSeason != null,
+                                downTo = seasonEpisodeFocusRequester.takeIf {
+                                    selected.nextEpisodes.isNotEmpty()
+                                },
+                                onClick = { nextAvailableSeason?.let { onSelectSeason(title, it.number) } })
                         }
                     }
                 }
@@ -808,7 +877,7 @@ private fun WatchlistHomeSection(
                 }
             }
             if (title.type == TmdbMediaType.TV) {
-                Column(Modifier.fillMaxWidth().height(210.dp)) {
+                Column(Modifier.fillMaxWidth().height(176.dp)) {
                     if (selected.episodesLoading) {
                         Text("Завантаження серій…", color = AppColors.TextSecondary,
                             modifier = Modifier.padding(horizontal = 4.dp))
@@ -825,13 +894,17 @@ private fun WatchlistHomeSection(
                                 (it.episodeCount ?: 0) > 0 }
                             .minByOrNull { it.number }
                         LazyRow(state = episodeListState,
-                            modifier = Modifier.fillMaxWidth().weight(1f),
+                                modifier = Modifier.fillMaxWidth().weight(1f),
                             horizontalArrangement = Arrangement.spacedBy(14.dp),
-                            contentPadding = PaddingValues(horizontal = 4.dp)) {
+                            contentPadding = PaddingValues(start = 40.dp, end = 40.dp)) {
                             items(selected.nextEpisodes, key = {
                                 "${it.episode.seasonNumber}:${it.episode.episodeNumber}"
                             }) { card ->
                                 val episodeFocusRequester = remember(card.episode.id) { FocusRequester() }
+                                val isSeasonFocusTarget = card ==
+                                    selected.nextEpisodes.getOrNull(firstUnwatched)
+                                val cardFocusRequester = if (isSeasonFocusTarget)
+                                    seasonEpisodeFocusRequester else episodeFocusRequester
                                 Card(onClick = { onOpenEpisode(title, card.episode) },
                                     scale = CardDefaults.scale(scale = 1f, focusedScale = 1f),
                                     colors = CardDefaults.colors(
@@ -840,15 +913,15 @@ private fun WatchlistHomeSection(
                                         focusedContainerColor = if (card.watched) AppColors.AccentPurple
                                             else AppColors.SkeletonBg),
                                     shape = CardDefaults.shape(RoundedCornerShape(10.dp)),
-                                    modifier = Modifier.width(204.dp).height(204.dp)
-                                        .focusRequester(episodeFocusRequester)
+                                    modifier = Modifier.width(204.dp).height(164.dp)
+                                        .focusRequester(cardFocusRequester)
                                         .focusProperties {
                                             if (card == selected.nextEpisodes.firstOrNull()) {
                                                 drawerFocusRequester?.let { left = it }
                                             }
                                         }
                                         .onFocusChanged {
-                                            if (it.isFocused) onContentFocusRequester(episodeFocusRequester)
+                                            if (it.isFocused) onContentFocusRequester(cardFocusRequester)
                                         }) {
                                     Column {
                                         AsyncImage(model = card.cachedImagePath?.let(::File)
@@ -858,18 +931,21 @@ private fun WatchlistHomeSection(
                                             modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f)
                                                 .background(AppColors.SurfaceCard)
                                                 .then(if (card.watched) Modifier.blur(1.dp) else Modifier))
-                                        Text(if (card.watched) "Переглянуто · " +
-                                            "S${card.episode.seasonNumber} · E${card.episode.episodeNumber}"
-                                            else "S${card.episode.seasonNumber} · E${card.episode.episodeNumber}",
-                                            color = if (card.watched) AppColors.TextWatched
-                                                else AppColors.TextSecondary,
-                                            style = MaterialTheme.typography.labelMedium,
-                                            modifier = Modifier.padding(start = 8.dp, top = 7.dp))
-                                        Text(card.episode.name, color = Color.White,
-                                            fontWeight = FontWeight.Medium, maxLines = 2,
-                                            minLines = 2, overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                                .heightIn(min = 38.dp))
+                                        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp,
+                                            vertical = 8.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                            Text("${if (card.watched) "✓ " else ""}E${card.episode.episodeNumber}",
+                                                color = if (card.watched) AppColors.TextWatched
+                                                    else AppColors.TextSecondary,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                maxLines = 1)
+                                            Text(card.episode.name, color = Color.White,
+                                                fontWeight = FontWeight.Medium, maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.weight(1f),
+                                                style = MaterialTheme.typography.labelLarge)
+                                        }
                                     }
                                 }
                             }
@@ -880,7 +956,7 @@ private fun WatchlistHomeSection(
                                         containerColor = AppColors.SurfaceDark,
                                         focusedContainerColor = AppColors.AccentPurple),
                                     shape = CardDefaults.shape(RoundedCornerShape(10.dp)),
-                                    modifier = Modifier.width(204.dp).height(204.dp)) {
+                                    modifier = Modifier.width(204.dp).height(164.dp)) {
                                     Column(Modifier.fillMaxSize().padding(16.dp),
                                         verticalArrangement = Arrangement.Center,
                                         horizontalAlignment = Alignment.CenterHorizontally) {

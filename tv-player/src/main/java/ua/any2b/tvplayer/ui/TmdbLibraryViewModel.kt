@@ -462,13 +462,17 @@ class TmdbLibraryViewModel(application: Application,
             for (entry in entries) {
                 try {
                     val title = entry.title
-                    val requiresDetails = !watchlist.hasCachedLogo(title.type, title.id) ||
+                    val logoLanguagePriority = settings.logoLanguagePriority()
+                    val requiresDetails = !watchlist.hasCachedLogo(title.type, title.id,
+                        logoLanguagePriority) ||
                         title.originCountries.isEmpty() || title.ukrainianTitle.isNullOrBlank() ||
                         (title.type == TmdbMediaType.TV && watchlist.cachedSeasons(title.id) == null)
                     val details = if (requiresDetails) connection.client.details(title.type,
-                        title.id, connection.accessKey) else null
+                        title.id, connection.accessKey,
+                        logoLanguagePriority = logoLanguagePriority) else null
                     if (details != null) {
-                        watchlist.saveLogo(title.type, title.id, details.logoUrl)
+                        watchlist.saveLogo(title.type, title.id, details.logoUrl,
+                            logoLanguagePriority)
                         val enrichedTitle = details.title.copy(
                             matchedSeasonTitle = title.matchedSeasonTitle,
                             matchedSeasonYear = title.matchedSeasonYear,

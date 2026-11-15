@@ -39,7 +39,7 @@ object BiosSettingsTheme {
 @Composable
 fun SettingsScreen(
     experimentalAppearance: Boolean,
-    dynamicLogo: Boolean,
+    logoLanguagePriority: List<String>,
     fanartKeyConfigured: Boolean,
     tmdbTokenConfigured: Boolean,
     malClientIdConfigured: Boolean,
@@ -67,7 +67,7 @@ fun SettingsScreen(
     onCheckWorker: () -> Unit,
     onCheckTorrServer: () -> Unit,
     onExperimentalAppearanceChanged: (Boolean) -> Unit,
-    onDynamicLogoChanged: (Boolean) -> Unit,
+    onMoveLogoLanguagePriority: (String, Int) -> Unit,
     onFanartKeyChanged: (String) -> Unit,
     onTmdbTokenChanged: (String) -> Unit,
     onMalClientIdChanged: (String) -> Unit,
@@ -101,7 +101,7 @@ fun SettingsScreen(
     if (showMainHomeSectionsMenu) {
         HomeSectionsMenu(
             sections = mainHomeSections,
-            heading = "НАЛАШТУВАТИ НОВУ ГОЛОВНУ",
+            heading = "НАЛАШТУВАТИ ГОЛОВНУ",
             onToggle = onMainHomeSectionEnabled,
             onMove = onMoveMainHomeSection,
             onBack = { showMainHomeSectionsMenu = false },
@@ -111,9 +111,9 @@ fun SettingsScreen(
     if (showAppearanceMenu) {
         AppearanceMenu(
             experimentalAppearance = experimentalAppearance,
-            dynamicLogo = dynamicLogo,
+            logoLanguagePriority = logoLanguagePriority,
             onExperimentalAppearanceChanged = onExperimentalAppearanceChanged,
-            onDynamicLogoChanged = onDynamicLogoChanged,
+            onMoveLogoLanguagePriority = onMoveLogoLanguagePriority,
             onBack = { showAppearanceMenu = false },
         )
         return
@@ -387,7 +387,7 @@ fun SettingsScreen(
 private fun SettingsScreenPreview() {
     SettingsScreen(
         experimentalAppearance = true,
-        dynamicLogo = false,
+        logoLanguagePriority = ua.any2b.tvplayer.data.LogoLanguagePreference.defaults,
         fanartKeyConfigured = true,
         tmdbTokenConfigured = false,
         malClientIdConfigured = true,
@@ -418,7 +418,7 @@ private fun SettingsScreenPreview() {
         onCheckWorker = {},
         onCheckTorrServer = {},
         onExperimentalAppearanceChanged = {},
-        onDynamicLogoChanged = {},
+        onMoveLogoLanguagePriority = { _, _ -> },
         onFanartKeyChanged = {},
         onTmdbTokenChanged = {},
         onMalClientIdChanged = {},

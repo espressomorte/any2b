@@ -300,7 +300,13 @@ class TmdbClient(
         }
     }
 
-    suspend fun details(type: TmdbMediaType, id: Int, token: String, language: String = "uk-UA"): TmdbDetails {
+    suspend fun details(
+        type: TmdbMediaType,
+        id: Int,
+        token: String,
+        language: String = "uk-UA",
+        logoLanguagePriority: List<String> = listOf("original", "en", "uk"),
+    ): TmdbDetails {
         require(id > 0) { "Некоректний TMDB ID" }
         val json = request(listOf(type.path, id.toString()), token, language,
             *if (type == TmdbMediaType.TV) arrayOf("append_to_response" to "external_ids")
@@ -352,9 +358,17 @@ class TmdbClient(
                 mapOf("JP" to "ja", "US" to "en", "GB" to "en", "UA" to "uk",
                     "KR" to "ko", "CN" to "zh", "FR" to "fr", "DE" to "de")[country]
             }
+        val preferredLogoLanguages = logoLanguagePriority.mapNotNull { preference ->
+            when (preference) {
+                "original" -> imageLanguage
+                "en", "uk" -> preference
+                else -> null
+            }
+        }.distinct()
+        val logoLanguages = preferredLogoLanguages + listOf(null)
         val images = try {
             request(listOf(type.path, id.toString(), "images"), token, "",
-                "include_image_language" to listOfNotNull("null", imageLanguage, "uk", "en")
+                "include_image_language" to (listOf("null") + preferredLogoLanguages)
                     .distinct().joinToString(","))
         } catch (error: CancellationException) {
             throw error
@@ -364,7 +378,7 @@ class TmdbClient(
         val poster = images?.optJSONArray("posters")?.preferredImage(
             listOf(null, imageLanguage, "uk", "en"))
         val logo = images?.optJSONArray("logos")?.preferredImage(
-            listOf(imageLanguage, "uk", "en", null))
+            logoLanguages)
         return TmdbDetails(
             title = title.copy(posterUrl = poster?.let { "https://image.tmdb.org/t/p/w780$it" }
                 ?: title.posterUrl),

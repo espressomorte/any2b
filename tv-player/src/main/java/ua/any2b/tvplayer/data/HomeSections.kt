@@ -16,5 +16,6 @@ object MainHomeSections {
         HomeSectionSetting("animation_tv", "Популярні анімаційні серіали"),
         HomeSectionSetting("animation_movie", "Популярні повнометражні анімаційні фільми"),
         HomeSectionSetting("mal_top", "Аніме з найвищими оцінками"),
+        HomeSectionSetting("toloka_animation", "Анімація Toloka"),
     )
 }

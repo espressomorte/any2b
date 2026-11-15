@@ -47,11 +47,26 @@ class SettingsManager(context: Context) {
         prefs.edit().putBoolean("experimental_appearance", enabled).apply()
     }
 
-    fun isDynamicLogoEnabled(): Boolean = prefs.getBoolean("dynamic_logo", false)
-
-    fun setDynamicLogoEnabled(enabled: Boolean) {
-        prefs.edit().putBoolean("dynamic_logo", enabled).apply()
+    fun logoLanguagePriority(): List<String> = synchronized(homeSectionsLock) {
+        val stored = prefs.getString("logo_language_priority", null)
+            ?: return@synchronized LogoLanguagePreference.defaults
+        val allowed = LogoLanguagePreference.defaults.toSet()
+        val parsed = stored.split(',').map(String::trim).filter { it in allowed }.distinct()
+        parsed + LogoLanguagePreference.defaults.filterNot(parsed::contains)
     }
+
+    fun moveLogoLanguagePriority(language: String, offset: Int): List<String> =
+        synchronized(homeSectionsLock) {
+            val updated = logoLanguagePriority().toMutableList()
+            val index = updated.indexOf(language)
+            val target = index + offset
+            if (index >= 0 && target in updated.indices) {
+                java.util.Collections.swap(updated, index, target)
+                prefs.edit().putString("logo_language_priority", updated.joinToString(","))
+                    .apply()
+            }
+            updated
+        }
 
     fun mainHomeSections(): List<HomeSectionSetting> = synchronized(homeSectionsLock) {
         readHomeSections("main_home_sections", MainHomeSections.defaults)

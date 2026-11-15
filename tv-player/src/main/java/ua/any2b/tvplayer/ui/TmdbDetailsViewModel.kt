@@ -24,6 +24,7 @@ import ua.any2b.tvplayer.data.TmdbEpisodeProgress
 import ua.any2b.core.anitube.AnitubeSearchResult
 import ua.any2b.tvplayer.data.workerTmdbConnection
 import ua.any2b.tvplayer.data.ExplicitRelatedCatalog
+import ua.any2b.tvplayer.data.SettingsManager
 
 sealed interface TmdbDetailsState {
     data object Loading : TmdbDetailsState
@@ -51,6 +52,7 @@ class TmdbDetailsViewModel(
     private val watchHistory = TmdbWatchHistoryStore(application)
     private val favorites = TmdbFavoritesStore(application)
     private val watchlist = TmdbWatchlistStore(application)
+    private val settings = SettingsManager(application)
     private val explicitRelated = ExplicitRelatedCatalog(application)
     private val _state = MutableStateFlow<TmdbDetailsState>(TmdbDetailsState.Loading)
     val state: StateFlow<TmdbDetailsState> = _state
@@ -91,7 +93,7 @@ class TmdbDetailsViewModel(
             if (ready.details.title.type == TmdbMediaType.TV)
                 watchlist.saveSeasons(ready.details.title.id, ready.details.seasonEntries)
             watchlist.saveLogo(ready.details.title.type, ready.details.title.id,
-                ready.details.logoUrl)
+                ready.details.logoUrl, settings.logoLanguagePriority())
             watchlist.addManual(ready.details.title)
             _state.value = ready.copy(isWatchlisted = true)
         }
@@ -158,7 +160,9 @@ class TmdbDetailsViewModel(
             try {
                 val connection = workerTmdbConnection(getApplication())
                     ?: throw TmdbFailure.MissingToken()
-                val fetched = connection.client.details(type, id, connection.accessKey)
+                val logoLanguagePriority = settings.logoLanguagePriority()
+                val fetched = connection.client.details(type, id, connection.accessKey,
+                    logoLanguagePriority = logoLanguagePriority)
                 if (type == TmdbMediaType.TV) watchlist.saveSeasons(id, fetched.seasonEntries)
                 val selectedSeason = fetched.seasonEntries.firstOrNull {
                     it.number == seasonNumber

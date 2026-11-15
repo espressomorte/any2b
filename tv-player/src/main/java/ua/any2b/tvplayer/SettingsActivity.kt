@@ -115,8 +115,8 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     private val _experimentalAppearance = MutableStateFlow(settingsManager.isExperimentalAppearanceEnabled())
     val experimentalAppearance: StateFlow<Boolean> = _experimentalAppearance
-    private val _dynamicLogo = MutableStateFlow(settingsManager.isDynamicLogoEnabled())
-    val dynamicLogo: StateFlow<Boolean> = _dynamicLogo
+    private val _logoLanguagePriority = MutableStateFlow(settingsManager.logoLanguagePriority())
+    val logoLanguagePriority: StateFlow<List<String>> = _logoLanguagePriority
     private val _mainHomeSections = MutableStateFlow(settingsManager.mainHomeSections())
     val mainHomeSections: StateFlow<List<HomeSectionSetting>> = _mainHomeSections
     private val _availablePlayers = MutableStateFlow<List<ExternalVideoPlayer>>(emptyList())
@@ -147,9 +147,8 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         _experimentalAppearance.value = enabled
     }
 
-    fun setDynamicLogo(enabled: Boolean) {
-        settingsManager.setDynamicLogoEnabled(enabled)
-        _dynamicLogo.value = enabled
+    fun moveLogoLanguagePriority(language: String, offset: Int) {
+        _logoLanguagePriority.value = settingsManager.moveLogoLanguagePriority(language, offset)
     }
 
     fun setEncryptedConfigEnabled(enabled: Boolean) {
@@ -515,7 +514,7 @@ class SettingsActivity : ComponentActivity() {
                 val encryptedConfigStatus = viewModel.encryptedConfigStatus.collectAsStateWithLifecycle().value
                 val encryptedConfigUrl = viewModel.encryptedConfigUrl.collectAsStateWithLifecycle().value
                 val experimentalAppearance = viewModel.experimentalAppearance.collectAsStateWithLifecycle().value
-                val dynamicLogo = viewModel.dynamicLogo.collectAsStateWithLifecycle().value
+                val logoLanguagePriority = viewModel.logoLanguagePriority.collectAsStateWithLifecycle().value
                 val workerCheck = viewModel.workerCheck.collectAsStateWithLifecycle().value
                 val torrServerCheck = viewModel.torrServerCheck.collectAsStateWithLifecycle().value
                 SettingsScreen(
@@ -538,7 +537,7 @@ class SettingsActivity : ComponentActivity() {
                     encryptedConfigStatus = encryptedConfigStatus,
                     encryptedConfigUrl = encryptedConfigUrl,
                     experimentalAppearance = experimentalAppearance,
-                    dynamicLogo = dynamicLogo,
+                    logoLanguagePriority = logoLanguagePriority,
                     workerCheck = workerCheck,
                     torrServerCheck = torrServerCheck,
                     onWorkerUrlChanged = viewModel::setWorkerUrl,
@@ -548,7 +547,7 @@ class SettingsActivity : ComponentActivity() {
                     onCheckWorker = viewModel::checkWorker,
                     onCheckTorrServer = viewModel::checkTorrServer,
                     onExperimentalAppearanceChanged = viewModel::setExperimentalAppearance,
-                    onDynamicLogoChanged = viewModel::setDynamicLogo,
+                    onMoveLogoLanguagePriority = viewModel::moveLogoLanguagePriority,
                     onFanartKeyChanged = viewModel::setFanartKey,
                     onTmdbTokenChanged = viewModel::setTmdbToken,
                     onMalClientIdChanged = viewModel::setMalClientId,

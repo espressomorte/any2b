@@ -32,25 +32,84 @@ import ua.any2b.tvplayer.data.HomeSectionSetting
 @Composable
 internal fun AppearanceMenu(
     experimentalAppearance: Boolean,
-    dynamicLogo: Boolean,
+    logoLanguagePriority: List<String>,
     onExperimentalAppearanceChanged: (Boolean) -> Unit,
-    onDynamicLogoChanged: (Boolean) -> Unit,
+    onMoveLogoLanguagePriority: (String, Int) -> Unit,
     onBack: () -> Unit,
 ) {
     BackHandler(enabled = true, onBack = onBack)
-    Column(Modifier.fillMaxSize().background(BiosSettingsTheme.Background).padding(32.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("ВИГЛЯД", color = BiosSettingsTheme.TextNormal,
-            fontFamily = IbmPlexMono, style = MaterialTheme.typography.titleLarge)
-        BiosSettingRow(label = "Експериментальний вигляд",
-            value = if (experimentalAppearance) "X" else " ",
-            onFocus = {}, onClick = { onExperimentalAppearanceChanged(!experimentalAppearance) })
-        BiosSettingRow(label = "Динамічне лого",
-            value = if (dynamicLogo) "X" else " ",
-            onFocus = {}, enabled = experimentalAppearance,
-            onClick = { if (experimentalAppearance) onDynamicLogoChanged(!dynamicLogo) })
-        Text("Динамічне лого доступне, коли ввімкнений експериментальний вигляд.",
-            color = BiosSettingsTheme.TextDim)
+    Box(Modifier.fillMaxSize().background(BiosSettingsTheme.Background).padding(24.dp)) {
+        Column(Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier.fillMaxWidth()
+                    .border(BorderStroke(1.dp, BiosSettingsTheme.BorderColor), BiosSettingsTheme.Shape)
+                    .padding(vertical = 12.dp, horizontal = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text("ANIMARIUM — SETUP UTILITY", style = MaterialTheme.typography.titleLarge,
+                    fontFamily = IbmPlexMono, color = BiosSettingsTheme.TextNormal,
+                    fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.height(16.dp))
+            Row(Modifier.fillMaxWidth().weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Column(Modifier.weight(1f).fillMaxHeight()
+                    .border(BorderStroke(1.dp, BiosSettingsTheme.BorderColor), BiosSettingsTheme.Shape)
+                    .verticalScroll(rememberScrollState()).padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("[ ВИГЛЯД ]", style = MaterialTheme.typography.titleMedium,
+                        fontFamily = IbmPlexMono, color = BiosSettingsTheme.TextNormal,
+                        fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(8.dp))
+                    BiosSettingRow(label = "Експериментальний вигляд",
+                        value = if (experimentalAppearance) "[X]" else "[ ]",
+                        onFocus = {}, onClick = {
+                            onExperimentalAppearanceChanged(!experimentalAppearance)
+                        })
+                    Text("Застосовує оформлення деталей на основі постера та палітри.",
+                        color = BiosSettingsTheme.TextDim,
+                        fontFamily = IbmPlexMono, style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.weight(1f))
+                    BiosSettingRow(label = "Повернутися назад", value = "Вихід",
+                        onFocus = {}, onClick = onBack)
+                }
+                Column(Modifier.weight(1.3f).fillMaxHeight()
+                    .border(BorderStroke(1.dp, BiosSettingsTheme.BorderColor), BiosSettingsTheme.Shape)
+                    .verticalScroll(rememberScrollState()).padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("[ ПРІОРИТЕТ МОВ ЛОГОТИПА ]", style = MaterialTheme.typography.titleMedium,
+                        fontFamily = IbmPlexMono, color = BiosSettingsTheme.TextNormal,
+                        fontWeight = FontWeight.Bold)
+                    Text("↑ / ↓ змінюють порядок вибору для деталей і вочліста.",
+                        color = BiosSettingsTheme.TextDim,
+                        fontFamily = IbmPlexMono, style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(8.dp))
+                    logoLanguagePriority.forEachIndexed { index, language ->
+                        key(language) {
+                            Row(Modifier.fillMaxWidth().heightIn(min = 44.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically) {
+                                Text("${index + 1}.", color = BiosSettingsTheme.TextNormal,
+                                    fontFamily = IbmPlexMono)
+                                Text(ua.any2b.tvplayer.data.LogoLanguagePreference.label(language),
+                                    modifier = Modifier.weight(1f),
+                                    color = BiosSettingsTheme.TextNormal,
+                                    fontFamily = IbmPlexMono,
+                                    style = MaterialTheme.typography.bodyLarge)
+                                if (index > 0) BiosSmallButton("▲") {
+                                    onMoveLogoLanguagePriority(language, -1)
+                                } else Spacer(Modifier.size(36.dp))
+                                if (index < logoLanguagePriority.lastIndex)
+                                    BiosSmallButton("▼") {
+                                        onMoveLogoLanguagePriority(language, 1)
+                                    }
+                                else Spacer(Modifier.size(36.dp))
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
