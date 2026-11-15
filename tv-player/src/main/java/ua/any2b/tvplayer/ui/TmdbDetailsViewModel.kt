@@ -137,7 +137,7 @@ class TmdbDetailsViewModel(
     fun load(
         type: TmdbMediaType, id: Int, query: String, preferredTitle: String?,
         originalLanguage: String?, originalTitle: String?, torrentsOnly: Boolean = false,
-        seasonNumber: Int? = null, force: Boolean = false,
+        seasonNumber: Int? = null, aniListId: Int? = null, force: Boolean = false,
     ) {
         val key = type to id
         if (!force && loadedKey == key) return
@@ -150,6 +150,7 @@ class TmdbDetailsViewModel(
         _state.value = TmdbDetailsState.Loading
         if (torrentsOnly) anitubeController.cancel() else
             anitubeController.start(type, id, season = seasonNumber,
+                aniListId = aniListId,
                 names = listOfNotNull(preferredTitle, query, originalTitle),
                 format = if (type == TmdbMediaType.MOVIE) "MOVIE" else "TV",
                 resumeProgress = watchHistory.episodeProgress(type, id))
@@ -162,10 +163,12 @@ class TmdbDetailsViewModel(
                 val selectedSeason = fetched.seasonEntries.firstOrNull {
                     it.number == seasonNumber
                 }
-                val details = if (selectedSeason == null) fetched else fetched.copy(
+                // Keep the caller's season even when TMDB omits it from seasonEntries.
+                // AniTube can still have an exact release for that season (e.g. newsId 6085).
+                val details = if (seasonNumber == null) fetched else fetched.copy(
                     title = fetched.title.copy(matchedSeasonNumber = seasonNumber,
-                        matchedSeasonTitle = selectedSeason.name,
-                        matchedSeasonYear = selectedSeason.year))
+                        matchedSeasonTitle = selectedSeason?.name ?: fetched.title.matchedSeasonTitle,
+                        matchedSeasonYear = selectedSeason?.year ?: fetched.title.matchedSeasonYear))
                 if (!torrentsOnly) anitubeController.addNames(listOfNotNull(details.title.ukrainianTitle,
                     details.title.title, details.title.englishTitle, details.title.originalTitle) +
                     details.alternativeTitles)

@@ -93,7 +93,9 @@ class PlayerActivity : FragmentActivity() {
         const val EXTRA_TMDB_POSTER_URL = "TMDB_POSTER_URL"
         const val EXTRA_TMDB_RATING = "TMDB_RATING"
         const val EXTRA_TMDB_GENRE_IDS = "TMDB_GENRE_IDS"
+        const val EXTRA_ANI_LIST_ID = "ANI_LIST_ID"
         const val EXTRA_TMDB_SEASON = "TMDB_SEASON"
+        const val EXTRA_ANIME_SEASON = "ANIME_SEASON"
         const val EXTRA_TMDB_EPISODE = "TMDB_EPISODE"
         const val EXTRA_NEXT_STREAM_URL = "NEXT_STREAM_URL"
         const val EXTRA_NEXT_EPISODE_AVAILABLE = "NEXT_EPISODE_AVAILABLE"
@@ -723,7 +725,8 @@ class PlayerActivity : FragmentActivity() {
         val type = intent.getStringExtra(EXTRA_TMDB_TYPE)
         if (type != TmdbMediaType.TV.path) return
         val title = intent.getStringExtra(EXTRA_TMDB_TITLE)?.takeIf(String::isNotBlank) ?: return
-        val season = intent.getIntExtra(EXTRA_TMDB_SEASON, -1).takeIf { it >= 0 }
+        val season = intent.getIntExtra(EXTRA_ANIME_SEASON, -1).takeIf { it > 0 }
+            ?: intent.getIntExtra(EXTRA_TMDB_SEASON, -1).takeIf { it >= 0 }
         val episode = intent.getIntExtra(EXTRA_TMDB_EPISODE, episodeNumber)
         val episodeLabel = if (season != null) {
             "$season сезон · $episode серія"
@@ -872,7 +875,8 @@ class PlayerActivity : FragmentActivity() {
                     putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_TORRENT_TOPIC, it)
                 }
             } else {
-                putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_ANITUBE_SEASON, season)
+                putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_ANITUBE_SEASON,
+                    intent.getIntExtra(EXTRA_ANIME_SEASON, season))
                 putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_ANITUBE_RELEASE,
                     intent.getIntExtra(EXTRA_TMDB_ANITUBE_RELEASE, -1))
                 putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_ANITUBE_VOICE, voiceIndex)
@@ -914,10 +918,17 @@ class PlayerActivity : FragmentActivity() {
                 intent.getDoubleExtra(EXTRA_TMDB_RATING, Double.NaN).takeIf(Double::isFinite),
                 genreIds = intent.getIntArrayExtra(EXTRA_TMDB_GENRE_IDS)
                     ?.toSet().orEmpty(),
+                matchedSeasonNumber = intent.getIntExtra(EXTRA_TMDB_SEASON, 0)
+                    .takeIf { it > 0 },
+                matchedAniListId = intent.getIntExtra(EXTRA_ANI_LIST_ID, 0)
+                    .takeIf { it > 0 },
+                matchedAnimeSeasonNumber = intent.getIntExtra(EXTRA_ANIME_SEASON, 0)
+                    .takeIf { it > 0 },
             ),
             voiceIndex, episodeIndex, episodeNumber, progress,
             seasonNumber = intent.getIntExtra(EXTRA_TMDB_SEASON, 1).coerceAtLeast(1),
             positionMs = positionMs, durationMs = durationMs,
+            animeSeasonNumber = intent.getIntExtra(EXTRA_ANIME_SEASON, 0).takeIf { it > 0 },
         )
     }
 
@@ -948,6 +959,11 @@ class PlayerActivity : FragmentActivity() {
             intent.getStringExtra(EXTRA_TMDB_POSTER_URL), null,
             intent.getDoubleExtra(EXTRA_TMDB_RATING, Double.NaN).takeIf(Double::isFinite),
             genreIds = intent.getIntArrayExtra(EXTRA_TMDB_GENRE_IDS)?.toSet().orEmpty(),
+            matchedSeasonNumber = intent.getIntExtra(EXTRA_TMDB_SEASON, 0)
+                .takeIf { it > 0 },
+            matchedAniListId = intent.getIntExtra(EXTRA_ANI_LIST_ID, 0).takeIf { it > 0 },
+            matchedAnimeSeasonNumber = intent.getIntExtra(EXTRA_ANIME_SEASON, 0)
+                .takeIf { it > 0 },
         )
     }
 

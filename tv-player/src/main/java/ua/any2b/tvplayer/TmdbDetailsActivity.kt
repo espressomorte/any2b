@@ -22,6 +22,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import ua.any2b.core.tmdb.TmdbEpisode
 import ua.any2b.core.tmdb.TmdbMediaType
 import ua.any2b.core.toloka.TorrServerBasicAuth
 import ua.any2b.core.toloka.TorrServerProbe
@@ -56,6 +57,7 @@ class TmdbDetailsActivity : ComponentActivity() {
         const val EXTRA_TMDB_ID = "TMDB_ID"
         const val EXTRA_TMDB_TYPE = "TMDB_TYPE"
         const val EXTRA_TMDB_SEASON = "TMDB_SEASON"
+        const val EXTRA_ANI_LIST_ID = "ANI_LIST_ID"
         const val EXTRA_SEARCH_QUERY = "SEARCH_QUERY"
         const val EXTRA_PREFERRED_TITLE = "PREFERRED_TITLE"
         const val EXTRA_ORIGINAL_LANGUAGE = "ORIGINAL_LANGUAGE"
@@ -176,6 +178,7 @@ class TmdbDetailsActivity : ComponentActivity() {
         val originalLanguage = intent.getStringExtra(EXTRA_ORIGINAL_LANGUAGE)
         val originalTitle = intent.getStringExtra(EXTRA_ORIGINAL_TITLE)
         val seasonNumber = intent.getIntExtra(EXTRA_TMDB_SEASON, -1).takeIf { it >= 0 }
+        val aniListId = intent.getIntExtra(EXTRA_ANI_LIST_ID, -1).takeIf { it > 0 }
         val torrentsOnly = intent.getBooleanExtra(EXTRA_TORRENTS_ONLY, false)
         if (intent.getBooleanExtra(EXTRA_RETURN_TO_WATCHLIST, false)) {
             Log.i("WatchlistPlayback", "Playback resolver started tmdb=$tmdbType:$tmdbId " +
@@ -190,7 +193,7 @@ class TmdbDetailsActivity : ComponentActivity() {
         }
         val experimental = SettingsManager(this).isExperimentalAppearanceEnabled()
         detailsViewModel.load(type, id, query, preferredTitle, originalLanguage, originalTitle,
-            torrentsOnly = torrentsOnly, seasonNumber = seasonNumber)
+            torrentsOnly = torrentsOnly, seasonNumber = seasonNumber, aniListId = aniListId)
         setContent {
             AppTheme {
                 val artworkState = artworkViewModel.state.collectAsStateWithLifecycle().value
@@ -267,19 +270,30 @@ class TmdbDetailsActivity : ComponentActivity() {
                 LaunchedEffect(anitubeState, readyDetails?.title?.id) {
                     val details = readyDetails ?: return@LaunchedEffect
                     val found = anitubeState as? AnitubeState.Found ?: return@LaunchedEffect
-                    val targetSeason = found.catalog?.candidates?.firstOrNull {
-                        it.release.newsId == found.release.newsId
-                    }?.seasonNumber ?: details.title.matchedSeasonNumber
+                    val targetSeason = details.title.matchedSeasonNumber
+                        ?: seasonNumber
                         ?: TmdbWatchHistoryStore(this@TmdbDetailsActivity)
                             .episodeProgress(details.title.type, details.title.id)?.seasonNumber
-                        ?: seasonNumber ?: return@LaunchedEffect
+                        ?: 1
                     val store = TmdbWatchlistStore(this@TmdbDetailsActivity)
+                    store.saveAniTubeVoices(details.title.type, details.title.id, targetSeason,
+                        found.release.newsId,
+                        ua.any2b.core.anitube.groupedVoices(found.voices).map { group ->
+                            ua.any2b.tvplayer.data.AniTubeVoiceOption(group.category,
+                                group.name, group.primaryIndex,
+                                group.variants.map { variant -> variant.index })
+                        })
                     found.voices.forEachIndexed { voiceIndex, voice ->
                         store.savePlayableEpisodes(details.title.type, details.title.id,
                             "anitube_${found.release.newsId}_$voiceIndex",
                             mapOf(targetSeason to voice.episodes.map {
                                 it.episodeNumber
                             }.toSet()))
+                        store.saveEpisodes(details.title.id, targetSeason, voice.episodes.map { episode ->
+                            val episodeId = (episode.id.hashCode() and Int.MAX_VALUE).coerceAtLeast(1)
+                            TmdbEpisode(episodeId, targetSeason, episode.episodeNumber,
+                                episode.title, null, null, null)
+                        })
                     }
                 }
                 LaunchedEffect(anitubeState, tolokaState.transfer, autoPlayEpisode,
@@ -363,7 +377,7 @@ class TmdbDetailsActivity : ComponentActivity() {
                     onRetryDetails = {
                         detailsViewModel.load(type, id, query, preferredTitle,
                             originalLanguage, originalTitle, torrentsOnly = torrentsOnly,
-                            seasonNumber = seasonNumber, force = true)
+                            seasonNumber = seasonNumber, aniListId = aniListId, force = true)
                     },
                     onSearchTorrent = { query ->
                         val details = (detailsViewModel.state.value as? TmdbDetailsState.Ready)?.details
@@ -474,16 +488,18 @@ class TmdbDetailsActivity : ComponentActivity() {
             .takeIf { it > 0 }
         val requestedRelease = intent.getIntExtra(EXTRA_AUTO_PLAY_ANITUBE_RELEASE, -1)
             .takeIf { it > 0 }
-            ?.takeIf { savedSeason == null || savedSeason == autoPlaySeason }
+        val animeSeason = savedSeason
+        fun preferredAnimeSeason(resolution: ua.any2b.tvplayer.data.AnitubeResolution) =
+            animeSeason ?: resolution.preferredSeason ?: autoPlaySeason
         if (autoTargetAniTubeReleaseId == null) autoTargetAniTubeReleaseId = requestedRelease
         when (state) {
             is AnitubeState.Catalog -> {
                 val seasonCandidate = if (tmdbType == TmdbMediaType.MOVIE.path) {
                     state.resolution.confidentBest
                 } else state.resolution.candidates.firstOrNull {
-                    it.seasonNumber == autoPlaySeason
+                    it.seasonNumber == preferredAnimeSeason(state.resolution)
                 } ?: state.resolution.seasons.firstOrNull {
-                    it.number == autoPlaySeason
+                    it.number == preferredAnimeSeason(state.resolution)
                 }?.releases?.firstOrNull()
                 val candidate = autoTargetAniTubeReleaseId?.let { releaseId ->
                     state.resolution.candidates.firstOrNull { it.release.newsId == releaseId }
@@ -498,16 +514,16 @@ class TmdbDetailsActivity : ComponentActivity() {
                 if (autoTargetAniTubeReleaseId == null) {
                     autoTargetAniTubeReleaseId = if (tmdbType == TmdbMediaType.MOVIE.path) {
                         state.catalog?.confidentBest?.release?.newsId
-                    } else state.catalog?.candidates?.firstOrNull {
-                        it.seasonNumber == autoPlaySeason
-                    }?.release?.newsId
+                    } else state.catalog?.let { catalog -> catalog.candidates.firstOrNull {
+                        it.seasonNumber == preferredAnimeSeason(catalog)
+                    }?.release?.newsId }
                 }
                 val targetReleaseId = autoTargetAniTubeReleaseId
                 val currentSeason = state.catalog?.candidates?.firstOrNull {
                     it.release.newsId == state.release.newsId
                 }?.seasonNumber
                 if (tmdbType != TmdbMediaType.MOVIE.path && targetReleaseId == null && currentSeason != null &&
-                    currentSeason != autoPlaySeason) {
+                    currentSeason != state.catalog?.let(::preferredAnimeSeason)) {
                     failWatchlistPlayback("Не знайдено реліз AniTube для цього сезону")
                     return
                 }
@@ -794,15 +810,20 @@ class TmdbDetailsActivity : ComponentActivity() {
                     ua.any2b.tvplayer.data.AnitubeState.Found)?.release?.newsId
                 val found = detailsViewModel.anitubeState.value as?
                     ua.any2b.tvplayer.data.AnitubeState.Found
-                val selectedSeason = found?.catalog?.candidates?.firstOrNull {
+                val selectedTmdbSeason = title.matchedSeasonNumber
+                    ?: autoPlaySeason.takeIf { title.type == TmdbMediaType.TV }
+                val selectedAnimeSeason = found?.catalog?.candidates?.firstOrNull {
                     it.release.newsId == selectedRelease
-                }?.seasonNumber ?: title.matchedSeasonNumber
+                }?.seasonNumber ?: intent.getIntExtra(EXTRA_AUTO_PLAY_ANITUBE_SEASON, -1)
+                    .takeIf { it > 0 } ?: found?.catalog?.preferredSeason
                 TmdbWatchHistoryStore(this).savePlaybackSelection(title.type, title.id,
                     TmdbPlaybackSelection(TmdbPlaybackSelection.Source.ANITUBE,
                         anitubeReleaseId = selectedRelease,
-                        anitubeSeasonNumber = selectedSeason,
+                        anitubeSeasonNumber = selectedAnimeSeason,
+                        tmdbSeasonNumber = selectedTmdbSeason,
                         voiceIndex = voiceIndex,
-                        voiceName = found?.voices?.getOrNull(voiceIndex)?.name))
+                        voiceName = found?.voices?.getOrNull(voiceIndex)?.name),
+                    seasonNumber = selectedTmdbSeason)
                 val selectedPackage = SettingsManager(this).selectedPlayerPackage()
                 if (selectedPackage != null) {
                     val externalIntent = ExternalVideoPlayers(this).intentFor(url, selectedPackage)
@@ -812,20 +833,26 @@ class TmdbDetailsActivity : ComponentActivity() {
                             val storedProgress = history.episodeProgress(title.type, title.id)
                                 ?.takeIf { it.voiceIndex == voiceIndex &&
                                     it.episodeNumber == episodeNumber &&
-                                    (selectedSeason == null || it.seasonNumber == selectedSeason) }
+                                    (selectedTmdbSeason == null || it.seasonNumber == selectedTmdbSeason) }
                             val positionMs = storedProgress?.positionMs?.takeIf { it > 0L }
                                 ?: if (storedProgress != null && storedProgress.durationMs > 0L)
                                     (storedProgress.durationMs * resumeProgress).toLong() else 0L
                             val vimuContext = PendingVimuPlayback(title,
                                 TmdbPlaybackSelection.Source.ANITUBE,
-                                episodeNumber = episodeNumber, seasonNumber = selectedSeason,
+                                episodeNumber = episodeNumber, seasonNumber = selectedTmdbSeason,
                                 voiceIndex = voiceIndex, episodeIndex = episodeIndex)
                             launchExternalPlayer(externalIntent, selectedPackage,
                                 positionMs, vimuContext)
-                            history.saveEpisodeProgress(title, voiceIndex, episodeIndex,
-                                episodeNumber, resumeProgress, selectedSeason ?: 1,
+                            val aniListId = title.matchedAniListId
+                                ?: intent.getIntExtra(EXTRA_ANI_LIST_ID, -1).takeIf { it > 0 }
+                            history.saveEpisodeProgress(title.copy(
+                                matchedSeasonNumber = selectedTmdbSeason,
+                                matchedAnimeSeasonNumber = selectedAnimeSeason,
+                                matchedAniListId = aniListId), voiceIndex, episodeIndex,
+                                episodeNumber, resumeProgress, selectedTmdbSeason ?: 1,
                                 storedProgress?.positionMs ?: 0L,
-                                storedProgress?.durationMs ?: 0L)
+                                storedProgress?.durationMs ?: 0L,
+                                animeSeasonNumber = selectedAnimeSeason)
                             if (!ExternalVideoPlayers(this).isVimu(selectedPackage))
                                 finishDetailsForWatchlistPlayback()
                             returningFromAnitubePlayer = true
@@ -848,6 +875,9 @@ class TmdbDetailsActivity : ComponentActivity() {
                     putExtra(PlayerActivity.EXTRA_EPISODE_NUMBER, episodeNumber)
                     putExtra(PlayerActivity.EXTRA_TMDB_ID, title.id)
                     putExtra(PlayerActivity.EXTRA_TMDB_TYPE, title.type.path)
+                    (title.matchedAniListId
+                        ?: intent.getIntExtra(EXTRA_ANI_LIST_ID, -1).takeIf { it > 0 })
+                        ?.let { putExtra(PlayerActivity.EXTRA_ANI_LIST_ID, it) }
                     putExtra(PlayerActivity.EXTRA_TMDB_TITLE, title.title)
                     (detailsViewModel.state.value as? TmdbDetailsState.Ready)?.details?.logoUrl
                         ?.let { logo -> putExtra(PlayerActivity.EXTRA_TMDB_LOGO_URL, logo) }
@@ -857,8 +887,11 @@ class TmdbDetailsActivity : ComponentActivity() {
                     putExtra(PlayerActivity.EXTRA_TMDB_RATING, title.rating ?: Double.NaN)
                     putExtra(PlayerActivity.EXTRA_TMDB_GENRE_IDS, title.genreIds.toIntArray())
                     putExtra(PlayerActivity.EXTRA_TMDB_RESUME_PROGRESS, resumeProgress)
-                    (selectedSeason ?: title.matchedSeasonNumber)?.let {
+                    selectedTmdbSeason?.let {
                         putExtra(PlayerActivity.EXTRA_TMDB_SEASON, it)
+                    }
+                    selectedAnimeSeason?.let {
+                        putExtra(PlayerActivity.EXTRA_ANIME_SEASON, it)
                     }
                     putExtra(PlayerActivity.EXTRA_TMDB_EPISODE, episodeNumber)
                     putExtra(PlayerActivity.EXTRA_NEXT_EPISODE_AVAILABLE,

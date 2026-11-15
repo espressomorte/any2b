@@ -60,12 +60,13 @@ class AnitubeController(
         type: TmdbMediaType,
         tmdbId: Int,
         season: Int?,
+        aniListId: Int? = null,
         names: List<String>,
         format: String,
         resumeProgress: TmdbEpisodeProgress? = null,
     ) {
         _aniListAvailability.value = AniListAvailability.CHECKING
-        request = Lookup(type, tmdbId, season, names, format, resumeProgress)
+        request = Lookup(type, tmdbId, season, aniListId, names, format, resumeProgress)
         search(request!!)
     }
 
@@ -127,7 +128,7 @@ class AnitubeController(
         resumeProgress: TmdbEpisodeProgress?,
     ) {
         if (newsId <= 0) return
-        val lookup = Lookup(type, tmdbId, season, names, format, resumeProgress)
+        val lookup = Lookup(type, tmdbId, season, null, names, format, resumeProgress)
         request = lookup
         job?.cancel()
         _state.value = AnitubeState.Searching
@@ -241,7 +242,8 @@ class AnitubeController(
         _state.value = AnitubeState.Searching
         job = scope.launch {
             try {
-                val resolution = resolver.find(lookup.type, lookup.tmdbId, lookup.season, lookup.names) {
+                val resolution = resolver.find(lookup.type, lookup.tmdbId, lookup.season,
+                    lookup.names, lookup.aniListId) {
                     _aniListAvailability.value = it
                 }
                 _aniListAvailability.value = resolution.aniListAvailability
@@ -312,6 +314,7 @@ class AnitubeController(
         val type: TmdbMediaType,
         val tmdbId: Int,
         val season: Int?,
+        val aniListId: Int?,
         val names: List<String>,
         val format: String,
         val resumeProgress: TmdbEpisodeProgress?,

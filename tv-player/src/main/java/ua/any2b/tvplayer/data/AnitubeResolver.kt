@@ -38,6 +38,7 @@ data class AnitubeCandidate(
     val kind: AnitubeReleaseKind,
     val seasonNumber: Int? = null,
     val format: String? = null,
+    val episodeMappings: List<EpisodeMapping> = emptyList(),
 )
 
 data class AnitubeSeasonGroup(
@@ -91,6 +92,7 @@ class AnitubeResolver(
     context: Context,
     private val anilist: AniListClient = AniListClient(),
     private val anitube: AnitubeClient = AnitubeClient(),
+    private val mappings: AnimeMappingRepository = LocalAnimeMappingRepository.get(context),
 ) {
     private val appContext = context.applicationContext
 
@@ -99,8 +101,15 @@ class AnitubeResolver(
         tmdbId: Int,
         tmdbSeason: Int?,
         tmdbNames: List<String>,
+        aniListId: Int? = null,
         onAniListAvailability: (AniListAvailability) -> Unit = {},
     ): AnitubeResolution {
+        aniListId?.takeIf { it > 0 }?.let { id ->
+            resolveFromAniListIndex(id, tmdbSeason)?.let { return it }
+        }
+        resolveFromLocalIndex(type, tmdbId, tmdbSeason)?.let { return it }
+        val unscopedNewsIds = mappings.findUnscopedNewsIds(type, tmdbId)
+
         val bridge = try {
             withTimeoutOrNull(8000) { AniBridgeMappingRepository.get(appContext) }
         } catch (error: CancellationException) {
@@ -143,6 +152,7 @@ class AnitubeResolver(
         val failures = responses.filter { it.isFailure }
         val releases = responses.mapNotNull { it.getOrNull() }.flatten()
             .distinctBy(AnitubeSearchResult::newsId)
+            .filterNot { it.newsId in unscopedNewsIds }
         if (releases.isEmpty() && failures.size == responses.size) {
             return AnitubeResolution(emptyList(), emptyList(), emptyList(),
                 failures.first().exceptionOrNull()?.message ?: "Не вдалося зв’язатися з AniTube")
@@ -216,6 +226,112 @@ class AnitubeResolver(
             }.distinct(),
             preferredSeason = tmdbSeason,
             preferFilm = type == TmdbMediaType.MOVIE,
+        )
+    }
+
+    /** Uses exact-season identities and their direct AniTube page URLs from the packaged index. */
+    private suspend fun resolveFromLocalIndex(
+        type: TmdbMediaType,
+        tmdbId: Int,
+        tmdbSeason: Int?,
+    ): AnitubeResolution? {
+        val entries = mappings.findByTmdb(type, tmdbId, tmdbSeason)
+        if (entries.isEmpty()) return null
+        val hitByRelease = entries.flatMap { entry ->
+            entry.tmdbMappings.filter { it.type == type && it.tmdbId == tmdbId &&
+                (tmdbSeason == null || it.season == tmdbSeason) }
+                .map { mapping -> entry to mapping }
+        }.distinctBy { (entry, mapping) -> Triple(entry.newsId, mapping.season, entry.malId) }
+        val candidates = hitByRelease.mapNotNull { (entry, mapping) ->
+            if (entry.pageUrl.isBlank()) return@mapNotNull null
+            val release = AnitubeSearchResult(
+                newsId = entry.newsId,
+                title = entry.titleUa.ifBlank { entry.hikkaTitleUa },
+                pageUrl = entry.pageUrl,
+            )
+            AnitubeCandidate(
+                release = release,
+                score = AUTO_SCORE + 3.0,
+                aniListId = entry.aniListIds.firstOrNull() ?: 0,
+                titleSimilarity = 1.0,
+                metadataMatches = 3,
+                conflictingMetadata = false,
+                kind = if (type == TmdbMediaType.MOVIE) AnitubeReleaseKind.FILM
+                    else AnitubeReleaseKind.SEASON,
+                seasonNumber = mapping.season,
+                format = if (type == TmdbMediaType.MOVIE) "MOVIE" else "TV",
+                episodeMappings = mapping.episodeMappings,
+            )
+        }.distinctBy { Triple(it.release.newsId, it.seasonNumber, it.kind) }
+        if (candidates.isEmpty()) return null
+        val seasonGroups = candidates.filter { it.kind == AnitubeReleaseKind.SEASON }
+            .groupBy { it.seasonNumber ?: 1 }.toSortedMap().map { (number, seasonCandidates) ->
+                val title = hitByRelease.firstOrNull { it.second.season == number }
+                    ?.first?.titleEnglish?.firstOrNull()
+                    ?: hitByRelease.firstOrNull { it.second.season == number }
+                        ?.first?.titleRomaji?.firstOrNull()
+                    ?: "Сезон $number"
+                AnitubeSeasonGroup(number, title,
+                    hitByRelease.filter { it.second.season == number }
+                        .flatMap { it.first.aniListIds }.distinct(),
+                    seasonCandidates.sortedByDescending(AnitubeCandidate::score))
+            }
+        return AnitubeResolution(
+            seasons = seasonGroups,
+            films = candidates.filter { it.kind == AnitubeReleaseKind.FILM },
+            other = emptyList(),
+            aniListAvailability = AniListAvailability.AVAILABLE,
+            preferredSeason = tmdbSeason,
+            preferFilm = type == TmdbMediaType.MOVIE,
+        )
+    }
+
+    /** An AniList-origin card carries the season identity even when AniBridge has no TMDB target. */
+    private suspend fun resolveFromAniListIndex(
+        aniListId: Int,
+        requestedSeason: Int?,
+    ): AnitubeResolution? {
+        val entries = mappings.findByAniList(aniListId)
+            .filter { it.pageUrl.isNotBlank() }
+        if (entries.isEmpty()) return null
+        val candidates = entries.map { entry ->
+            val mapping = entry.tmdbMappings.firstOrNull()
+            AnitubeCandidate(
+                release = AnitubeSearchResult(entry.newsId,
+                    entry.titleUa.ifBlank { entry.hikkaTitleUa }, entry.pageUrl),
+                score = AUTO_SCORE + 3.0,
+                aniListId = aniListId,
+                titleSimilarity = 1.0,
+                metadataMatches = 3,
+                conflictingMetadata = false,
+                kind = if (mapping?.type == TmdbMediaType.MOVIE) AnitubeReleaseKind.FILM
+                    else AnitubeReleaseKind.SEASON,
+                seasonNumber = entry.seasonScope ?: mapping?.season ?: requestedSeason ?: 1,
+                format = if (mapping?.type == TmdbMediaType.MOVIE) "MOVIE" else "TV",
+                episodeMappings = mapping?.episodeMappings.orEmpty(),
+            )
+        }.distinctBy { Triple(it.release.newsId, it.seasonNumber, it.kind) }
+        val seasons = candidates.filter { it.kind == AnitubeReleaseKind.SEASON }
+            .groupBy { it.seasonNumber ?: 1 }.toSortedMap().map { (number, items) ->
+                val title = entries.firstOrNull { it.seasonScope == number }
+                    ?.titleEnglish?.firstOrNull()
+                    ?: entries.firstOrNull { it.seasonScope == number }
+                        ?.titleRomaji?.firstOrNull()
+                    ?: "Сезон $number"
+                AnitubeSeasonGroup(number, title, listOf(aniListId),
+                    items.sortedByDescending(AnitubeCandidate::score))
+            }
+        val identitySeason = entries.mapNotNull(AniTubeEntry::seasonScope).distinct()
+            .singleOrNull()
+        return AnitubeResolution(
+            seasons = seasons,
+            films = candidates.filter { it.kind == AnitubeReleaseKind.FILM },
+            other = emptyList(),
+            aniListAvailability = AniListAvailability.AVAILABLE,
+            // An AniList ID identifies a season-specific anime entry. Prefer that
+            // franchise season over TMDB's local season index when they disagree.
+            preferredSeason = identitySeason ?: requestedSeason,
+            preferFilm = candidates.any { it.kind == AnitubeReleaseKind.FILM },
         )
     }
 

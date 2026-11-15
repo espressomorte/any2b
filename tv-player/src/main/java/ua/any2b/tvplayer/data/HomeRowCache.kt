@@ -44,6 +44,7 @@ class HomeRowCache(context: Context) {
         .put("matchedSeasonTitle", title.matchedSeasonTitle)
         .put("matchedSeasonYear", title.matchedSeasonYear)
         .put("matchedSeasonNumber", title.matchedSeasonNumber)
+        .put("matchedAniListId", title.matchedAniListId)
         .put("popularity", title.popularity).put("airDate", title.airDate)
 
     private fun decode(row: JSONObject): TmdbTitle? {
@@ -75,7 +76,9 @@ class HomeRowCache(context: Context) {
                 .takeIf { row.has("matchedSeasonNumber") && !row.isNull("matchedSeasonNumber") && it >= 0 },
             backdropUrl = optional("backdropUrl"),
             popularity = row.optDouble("popularity", Double.NaN).takeIf(Double::isFinite),
-            airDate = optional("airDate"))
+            airDate = optional("airDate"),
+            matchedAniListId = row.optInt("matchedAniListId")
+                .takeIf { row.has("matchedAniListId") && !row.isNull("matchedAniListId") && it > 0 })
     }
 
     private companion object { val lock = Any() }

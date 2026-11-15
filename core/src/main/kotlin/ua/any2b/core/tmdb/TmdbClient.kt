@@ -48,6 +48,10 @@ data class TmdbTitle(
     val backdropUrl: String? = null,
     val popularity: Double? = null,
     val airDate: String? = null,
+    /** AniList identity retained when this TMDB card originated from an AniList catalog. */
+    val matchedAniListId: Int? = null,
+    /** Franchise season number from MAL/AniList; distinct from TMDB's season number. */
+    val matchedAnimeSeasonNumber: Int? = null,
 ) {
     fun searchNames(query: String): List<String> {
         val original = originalTitle?.takeIf { originalLanguage != "en" && originalLanguage != "uk" }

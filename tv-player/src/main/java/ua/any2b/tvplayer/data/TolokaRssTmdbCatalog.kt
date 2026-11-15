@@ -32,6 +32,7 @@ class TolokaRssTmdbCatalog(context: Context) {
     private val rss = TolokaRssCatalog(appContext)
     private val aniList = AniListClient()
     private val aniListCatalog = AniListTmdbCatalog(appContext)
+    private val animeMappings = LocalAnimeMappingRepository.get(appContext)
     private val file = File(appContext.filesDir, "toloka-rss-tmdb-v2.json")
     private val trendsFile = File(appContext.filesDir, "toloka-rss-trends.json")
 
@@ -43,8 +44,13 @@ class TolokaRssTmdbCatalog(context: Context) {
         val connection = workerTmdbConnection(appContext)
         val now = System.currentTimeMillis()
         val candidates = releases.distinctBy(::key).filter { release ->
-            val checkedAt = mappings[key(release)]?.checkedAt ?: 0L
-            checkedAt == 0L || now - checkedAt >= CACHE_AGE_MS
+            val mapping = mappings[key(release)]
+            val checkedAt = mapping?.checkedAt ?: 0L
+            val needsSeasonIdentity = release.animated && hasSeasonMarker(release.title) &&
+                mapping?.title?.matchedAniListId == null &&
+                ((mapping?.seasonIdentityAttemptedAt ?: 0L) == 0L ||
+                    now - (mapping?.seasonIdentityAttemptedAt ?: 0L) >= SEASON_IDENTITY_RETRY_MS)
+            checkedAt == 0L || now - checkedAt >= CACHE_AGE_MS || needsSeasonIdentity
         }.take(MATCH_BATCH_SIZE)
         if (connection == null && ordered(releases, mappings, readTrends()).isEmpty)
             throw IllegalStateException("Налаштуйте TMDB для каталогу Toloka")
@@ -55,9 +61,13 @@ class TolokaRssTmdbCatalog(context: Context) {
                     async {
                         permits.withPermit {
                             try {
-                                key(release) to Mapping(findMatch(release) { query ->
+                                val checkedAt = System.currentTimeMillis()
+                                val mapping = findMatch(release) { query ->
                                     connection.client.search(query, connection.accessKey)
-                                }, System.currentTimeMillis())
+                                }
+                                key(release) to Mapping(mapping, checkedAt,
+                                    if (release.animated && hasSeasonMarker(release.title)) checkedAt
+                                    else mappings[key(release)]?.seasonIdentityAttemptedAt ?: 0L)
                             } catch (error: CancellationException) {
                                 throw error
                             } catch (_: Exception) {
@@ -131,6 +141,8 @@ class TolokaRssTmdbCatalog(context: Context) {
                         release.tmdbPoster ?: release.thumbnail, null, release.tmdbRating,
                         popularity = release.tmdbPopularity, airDate = release.tmdbAirDate)
                 } ?: return@mapNotNull null
+                if (animated && hasSeasonMarker(release.title) && title.matchedAniListId == null)
+                    return@mapNotNull null
                 title to release.publishedAt
             }.let { TolokaRssRanker.rank(it, trendingIds, System.currentTimeMillis()) }
         return TolokaRssTmdbRows(mapped(true), mapped(false))
@@ -140,6 +152,9 @@ class TolokaRssTmdbCatalog(context: Context) {
         search: suspend (String) -> List<TmdbTitle>): TmdbTitle? {
         val names = names(release.title)
         val year = YEAR.find(release.title)?.value?.toIntOrNull()
+        if (release.animated) {
+            findAnimeMatch(release, names, year)?.let { return it }
+        }
         val expectedType = when {
             release.category.contains("серіал", ignoreCase = true) -> TmdbMediaType.TV
             release.category.contains("фільм", ignoreCase = true) -> TmdbMediaType.MOVIE
@@ -179,6 +194,22 @@ class TolokaRssTmdbCatalog(context: Context) {
 
     private suspend fun findAnimeMatch(release: TolokaRssRelease, names: List<String>,
         year: Int?): TmdbTitle? {
+        val seasonNumber = seasonNumber(release.title)
+        if (seasonNumber != null) {
+            val ids = names.flatMap { query -> animeMappings.search(query, limit = 50) }
+                .filter { it.seasonScope == seasonNumber }
+                .flatMap { it.aniListIds }
+                .distinct()
+            if (ids.size == 1) {
+                try {
+                    aniListCatalog.resolveById(ids.single())?.let { return it }
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    // Keep the normal AniList name lookup as a fallback.
+                }
+            }
+        }
         for (query in names.asReversed().take(2)) {
             val cards = try { aniList.search(query, perPage = 10) }
             catch (error: CancellationException) { throw error }
@@ -206,7 +237,8 @@ class TolokaRssTmdbCatalog(context: Context) {
         val rows = JSONObject(file.readText())
         rows.keys().asSequence().associateWith { key ->
             val row = rows.getJSONObject(key)
-            Mapping(row.optJSONObject("title")?.let(::readTitle), row.optLong("checkedAt"))
+            Mapping(row.optJSONObject("title")?.let(::readTitle), row.optLong("checkedAt"),
+                row.optLong("seasonIdentityAttemptedAt"))
         }
     }.getOrDefault(emptyMap())
 
@@ -214,6 +246,7 @@ class TolokaRssTmdbCatalog(context: Context) {
         val rows = JSONObject()
         mappings.forEach { (key, mapping) ->
             rows.put(key, JSONObject().put("checkedAt", mapping.checkedAt)
+                .put("seasonIdentityAttemptedAt", mapping.seasonIdentityAttemptedAt)
                 .put("title", mapping.title?.let(::writeTitle)))
         }
         val temp = File(file.parentFile, "${file.name}.tmp")
@@ -242,7 +275,13 @@ class TolokaRssTmdbCatalog(context: Context) {
             }.orEmpty(),
             backdropUrl = row.optString("backdropUrl").takeIf(String::isNotBlank),
             popularity = row.optDouble("popularity", Double.NaN).takeIf(Double::isFinite),
-            airDate = row.optString("airDate").takeIf(String::isNotBlank))
+            airDate = row.optString("airDate").takeIf(String::isNotBlank),
+            matchedSeasonTitle = row.optString("matchedSeasonTitle").takeIf(String::isNotBlank),
+            matchedSeasonYear = row.optInt("matchedSeasonYear").takeIf { it > 0 },
+            matchedSeasonNumber = row.optInt("matchedSeasonNumber")
+                .takeIf { row.has("matchedSeasonNumber") && !row.isNull("matchedSeasonNumber") && it >= 0 },
+            matchedAniListId = row.optInt("matchedAniListId")
+                .takeIf { row.has("matchedAniListId") && !row.isNull("matchedAniListId") && it > 0 })
     }
 
     private fun writeTitle(title: TmdbTitle) = JSONObject()
@@ -252,6 +291,10 @@ class TolokaRssTmdbCatalog(context: Context) {
         .put("rating", title.rating).put("ukrainianTitle", title.ukrainianTitle)
         .put("englishTitle", title.englishTitle).put("originalLanguage", title.originalLanguage)
         .put("genreIds", JSONArray(title.genreIds.toList()))
+        .put("matchedSeasonTitle", title.matchedSeasonTitle)
+        .put("matchedSeasonYear", title.matchedSeasonYear)
+        .put("matchedSeasonNumber", title.matchedSeasonNumber)
+        .put("matchedAniListId", title.matchedAniListId)
         .put("backdropUrl", title.backdropUrl)
         .put("popularity", title.popularity).put("airDate", title.airDate)
 
@@ -266,6 +309,13 @@ class TolokaRssTmdbCatalog(context: Context) {
             else title.substring(0, year.range.first)
         return prefix.split(" / ").map { it.replace(BRACKETED, " ").trim() }
             .filter { it.length >= 2 }.distinctBy(::normalize)
+    }
+
+    private fun hasSeasonMarker(title: String): Boolean = SEASON_MARKER.containsMatchIn(title)
+
+    private fun seasonNumber(title: String): Int? {
+        val match = SEASON_NUMBER.find(title) ?: return null
+        return match.groupValues.drop(1).firstNotNullOfOrNull { it.toIntOrNull() }
     }
 
     private fun normalize(name: String) = name.lowercase(Locale.ROOT)
@@ -287,17 +337,29 @@ class TolokaRssTmdbCatalog(context: Context) {
         return 1.0 - previous[right.length].toDouble() / maxOf(left.length, right.length)
     }
 
-    private data class Mapping(val title: TmdbTitle?, val checkedAt: Long)
+    private data class Mapping(val title: TmdbTitle?, val checkedAt: Long,
+        val seasonIdentityAttemptedAt: Long = 0L)
     private data class TrendSnapshot(val fetchedAt: Long, val trending: List<Int>)
 
     companion object {
         private val lock = Mutex()
         private const val CACHE_AGE_MS = 7L * 24 * 60 * 60 * 1000
+        private const val SEASON_IDENTITY_RETRY_MS = 7L * 24 * 60 * 60 * 1000
         private const val MATCH_BATCH_SIZE = 120
         private const val TREND_CACHE_AGE_MS = 6L * 60 * 60 * 1000
         private val YEAR = Regex("(?<!\\d)(?:19|20)\\d{2}(?!\\d)")
         private val BRACKETED = Regex("\\([^)]*\\)|\\[[^]]*]")
         private val NON_WORD = Regex("[^\\p{L}\\p{N}]+")
         private val WHITESPACE = Regex("\\s+")
+        private val SEASON_MARKER = Regex(
+            "(?:\\bseason\\s*\\d+\\b|\\b\\d+\\s*(?:st|nd|rd|th)?\\s+season\\b|" +
+                "\\bсезон\\s*\\d+\\b|\\b\\d+\\s*сезон\\b|\\bs\\s*\\d+\\b)",
+            RegexOption.IGNORE_CASE,
+        )
+        private val SEASON_NUMBER = Regex(
+            "\\bseason\\s*(\\d+)\\b|\\b(\\d+)\\s*(?:st|nd|rd|th)?\\s+season\\b|" +
+                "\\bсезон\\s*(\\d+)\\b|\\b(\\d+)\\s*сезон\\b|\\bs\\s*(\\d+)\\b",
+            RegexOption.IGNORE_CASE,
+        )
     }
 }

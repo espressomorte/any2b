@@ -21,6 +21,13 @@ data class TmdbWatchlistEntry(
     enum class Source { MANUAL, IN_PROGRESS }
 }
 
+data class AniTubeVoiceOption(
+    val category: String,
+    val name: String,
+    val primaryIndex: Int,
+    val variantIndices: List<Int>,
+)
+
 class TmdbWatchlistStore(context: Context) {
     private val appContext = context.applicationContext
     private val prefs = appContext.getSharedPreferences("tmdb_watchlist", Context.MODE_PRIVATE)
@@ -63,6 +70,12 @@ class TmdbWatchlistStore(context: Context) {
             overview = title.overview ?: existing?.title?.overview,
             rating = title.rating ?: existing?.title?.rating,
             genreIds = title.genreIds.ifEmpty { existing?.title?.genreIds.orEmpty() },
+            matchedSeasonTitle = title.matchedSeasonTitle ?: existing?.title?.matchedSeasonTitle,
+            matchedSeasonYear = title.matchedSeasonYear ?: existing?.title?.matchedSeasonYear,
+            matchedSeasonNumber = title.matchedSeasonNumber ?: existing?.title?.matchedSeasonNumber,
+            matchedAnimeSeasonNumber = title.matchedAnimeSeasonNumber
+                ?: existing?.title?.matchedAnimeSeasonNumber,
+            matchedAniListId = title.matchedAniListId ?: existing?.title?.matchedAniListId,
         )
         entries[key] = if (existing?.source == TmdbWatchlistEntry.Source.MANUAL) {
             existing.copy(title = enrichedTitle)
@@ -101,6 +114,50 @@ class TmdbWatchlistStore(context: Context) {
                 put("airDate", episode.airDate)
             }) }
         }.toString()).apply()
+    }
+
+    fun saveAniTubeVoices(type: TmdbMediaType, titleId: Int, seasonNumber: Int,
+        releaseId: Int, voices: List<AniTubeVoiceOption>) = synchronized(lock) {
+        if (titleId <= 0 || seasonNumber <= 0 || releaseId <= 0 || voices.isEmpty())
+            return@synchronized
+        prefs.edit().putString(aniTubeVoicesKey(type, titleId, seasonNumber, releaseId),
+            JSONArray().apply {
+                voices.forEach { voice -> put(JSONObject().apply {
+                    put("category", voice.category)
+                    put("name", voice.name)
+                    put("primaryIndex", voice.primaryIndex)
+                    put("variantIndices", JSONArray(voice.variantIndices))
+                }) }
+            }.toString()).apply()
+    }
+
+    fun cachedAniTubeVoices(type: TmdbMediaType, titleId: Int, seasonNumber: Int,
+        releaseId: Int): List<AniTubeVoiceOption> = synchronized(lock) {
+        val raw = prefs.getString(aniTubeVoicesKey(type, titleId, seasonNumber, releaseId), null)
+            ?: return@synchronized emptyList()
+        try {
+            val values = JSONArray(raw)
+            val parsed = (0 until values.length()).mapIndexedNotNull { index, _ ->
+                val row = values.optJSONObject(index)
+                if (row == null) values.optString(index).takeIf(String::isNotBlank)?.let {
+                    AniTubeVoiceOption("ОЗВУЧЕННЯ", it, index, listOf(index))
+                } else row.optString("name").takeIf(String::isNotBlank)?.let {
+                    val indices = row.optJSONArray("variantIndices")?.let { array ->
+                        (0 until array.length()).map { array.optInt(it) }.filter { it >= 0 }
+                    }.orEmpty().ifEmpty {
+                        listOf(row.optInt("primaryIndex", index).coerceAtLeast(0))
+                    }
+                    AniTubeVoiceOption(row.optString("category", "ОЗВУЧЕННЯ"), it,
+                        row.optInt("primaryIndex", indices.first()).coerceAtLeast(0), indices)
+                }
+            }
+            parsed.groupBy { it.category.trim().lowercase() to it.name.trim().lowercase() }
+                .values.map { group ->
+                    val first = group.first()
+                    val variants = group.flatMap(AniTubeVoiceOption::variantIndices).distinct().sorted()
+                    first.copy(primaryIndex = variants.first(), variantIndices = variants)
+                }
+        } catch (_: Exception) { emptyList() }
     }
 
     /** Caches the episode numbers available in a source playlist already loaded by Details. */
@@ -252,7 +309,16 @@ class TmdbWatchlistStore(context: Context) {
                 originCountries = item.optJSONArray("originCountries")?.let { countries ->
                     (0 until countries.length()).map { countries.optString(it) }.filter(String::isNotBlank)
                 }?.toSet().orEmpty(),
-                backdropUrl = item.optString("backdropUrl").takeIf(String::isNotBlank))
+                backdropUrl = item.optString("backdropUrl").takeIf(String::isNotBlank),
+                matchedSeasonTitle = item.optString("matchedSeasonTitle").takeIf(String::isNotBlank),
+                matchedSeasonYear = item.optInt("matchedSeasonYear").takeIf { it > 0 },
+                matchedSeasonNumber = item.optInt("matchedSeasonNumber")
+                    .takeIf { item.has("matchedSeasonNumber") && !item.isNull("matchedSeasonNumber") && it > 0 },
+                matchedAnimeSeasonNumber = item.optInt("matchedAnimeSeasonNumber")
+                    .takeIf { item.has("matchedAnimeSeasonNumber") &&
+                        !item.isNull("matchedAnimeSeasonNumber") && it > 0 },
+                matchedAniListId = item.optInt("matchedAniListId")
+                    .takeIf { item.has("matchedAniListId") && !item.isNull("matchedAniListId") && it > 0 })
             val source = TmdbWatchlistEntry.Source.entries.firstOrNull {
                 it.name == item.optString("source")
             } ?: TmdbWatchlistEntry.Source.IN_PROGRESS
@@ -283,6 +349,11 @@ class TmdbWatchlistStore(context: Context) {
                 put("rating", title.rating)
                 put("genreIds", JSONArray(title.genreIds.sorted()))
                 put("originCountries", JSONArray(title.originCountries.sorted()))
+                put("matchedSeasonTitle", title.matchedSeasonTitle)
+                put("matchedSeasonYear", title.matchedSeasonYear)
+                put("matchedSeasonNumber", title.matchedSeasonNumber)
+                put("matchedAnimeSeasonNumber", title.matchedAnimeSeasonNumber)
+                put("matchedAniListId", title.matchedAniListId)
                 put("source", entry.source.name)
                 put("addedAt", entry.addedAt)
             }) }
@@ -292,6 +363,8 @@ class TmdbWatchlistStore(context: Context) {
 
     private fun titleKey(type: TmdbMediaType, id: Int) = "${type.path}_$id"
     private fun episodeKey(seriesId: Int, seasonNumber: Int) = "episodes_${seriesId}_$seasonNumber"
+    private fun aniTubeVoicesKey(type: TmdbMediaType, titleId: Int, seasonNumber: Int,
+        releaseId: Int) = "anitube_voices_${type.path}_${titleId}_${seasonNumber}_$releaseId"
     private fun seasonKey(seriesId: Int) = "seasons_$seriesId"
     private fun logoKey(type: TmdbMediaType, id: Int) = "logo_${type.path}_$id"
     private fun playableEpisodesKey(type: TmdbMediaType, id: Int, playlistKey: String) =

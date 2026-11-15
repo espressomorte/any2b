@@ -16,6 +16,7 @@ data class TmdbEpisodeProgress(
     val positionMs: Long = 0L,
     val durationMs: Long = 0L,
     val updatedAt: Long = 0L,
+    val animeSeasonNumber: Int? = null,
 )
 
 data class TmdbTorrentProgress(
@@ -31,6 +32,7 @@ data class TmdbPlaybackSelection(
     val fileName: String? = null,
     val anitubeReleaseId: Int? = null,
     val anitubeSeasonNumber: Int? = null,
+    val tmdbSeasonNumber: Int? = null,
     val voiceIndex: Int = 0,
     val voiceName: String? = null,
 ) {
@@ -82,6 +84,7 @@ class TmdbWatchHistoryStore(context: Context) {
         seasonNumber: Int = title.matchedSeasonNumber ?: 1,
         positionMs: Long = 0L,
         durationMs: Long = 0L,
+        animeSeasonNumber: Int? = title.matchedAnimeSeasonNumber,
     ) = synchronized(lock) {
         record(title)
         val watchlist = TmdbWatchlistStore(appContext)
@@ -107,6 +110,7 @@ class TmdbWatchHistoryStore(context: Context) {
             put("episodeIndex", episodeIndex)
             put("episodeNumber", episodeNumber)
             put("seasonNumber", seasonNumber)
+            put("animeSeasonNumber", animeSeasonNumber)
             put("progress", progress.coerceIn(0f, 1f).toDouble())
             put("positionMs", positionMs.coerceAtLeast(0L))
             put("durationMs", durationMs.coerceAtLeast(0L))
@@ -136,6 +140,8 @@ class TmdbWatchHistoryStore(context: Context) {
                 positionMs = data.optLong("positionMs", 0L).coerceAtLeast(0L),
                 durationMs = data.optLong("durationMs", 0L).coerceAtLeast(0L),
                 updatedAt = data.optLong("updatedAt", 0L),
+                animeSeasonNumber = data.optInt("animeSeasonNumber", 0)
+                    .takeIf { it > 0 },
             )
         } catch (_: Exception) { null }
     }
@@ -174,28 +180,35 @@ class TmdbWatchHistoryStore(context: Context) {
                     topicId = torrent.topicId, fileId = torrent.fileId)
             } else if (episode != null) {
                 TmdbPlaybackSelection(TmdbPlaybackSelection.Source.ANITUBE,
-                    anitubeSeasonNumber = episode.seasonNumber,
+                    anitubeSeasonNumber = episode.animeSeasonNumber,
+                    tmdbSeasonNumber = episode.seasonNumber,
                     voiceIndex = episode.voiceIndex)
             } else null
         }
 
-    fun savePlaybackSelection(type: TmdbMediaType, id: Int, selection: TmdbPlaybackSelection) =
+    fun savePlaybackSelection(type: TmdbMediaType, id: Int, selection: TmdbPlaybackSelection,
+        seasonNumber: Int? = selection.tmdbSeasonNumber) =
         synchronized(lock) {
             if (id <= 0) return@synchronized
             val key = TitleKey.Tmdb(type, id).storageKey
             val values = try { JSONObject(prefs.getString("playback_selection", "{}").orEmpty()) }
                 catch (_: Exception) { JSONObject() }
-            values.put(key, JSONObject().apply {
+            val encoded = JSONObject().apply {
                 put("source", selection.source.name)
                 put("topicId", selection.topicId)
                 put("fileId", selection.fileId)
                 put("fileName", selection.fileName)
                 put("anitubeReleaseId", selection.anitubeReleaseId)
                 put("anitubeSeasonNumber", selection.anitubeSeasonNumber)
+                put("tmdbSeasonNumber", seasonNumber ?: selection.tmdbSeasonNumber)
                 put("voiceIndex", selection.voiceIndex)
                 put("voiceName", selection.voiceName)
                 put("updatedAt", System.currentTimeMillis())
-            })
+            }
+            values.put(key, encoded)
+            seasonNumber?.takeIf { it > 0 }?.let {
+                values.put(seasonPlaybackKey(key, it), JSONObject(encoded.toString()))
+            }
             prefs.edit().putString("playback_selection", values.toString()).apply()
             Log.i("WatchlistPlayback", "Playback source saved tmdb=${type.path}:$id " +
                 "source=${selection.source} release=${selection.anitubeReleaseId} " +
@@ -203,24 +216,41 @@ class TmdbWatchHistoryStore(context: Context) {
                 "topic=${selection.topicId} file=${selection.fileId}")
         }
 
-    fun playbackSelection(type: TmdbMediaType, id: Int): TmdbPlaybackSelection? =
+    fun playbackSelection(type: TmdbMediaType, id: Int,
+        seasonNumber: Int? = null): TmdbPlaybackSelection? =
         synchronized(lock) {
             try {
-                val value = JSONObject(prefs.getString("playback_selection", "{}").orEmpty())
-                    .optJSONObject(TitleKey.Tmdb(type, id).storageKey) ?: return@synchronized null
+                val values = JSONObject(prefs.getString("playback_selection", "{}").orEmpty())
+                val baseKey = TitleKey.Tmdb(type, id).storageKey
+                val scoped = seasonNumber?.takeIf { it > 0 }
+                    ?.let { values.optJSONObject(seasonPlaybackKey(baseKey, it)) }
+                val value = scoped ?: values.optJSONObject(baseKey)
+                    ?: return@synchronized null
                 val source = TmdbPlaybackSelection.Source.entries.firstOrNull {
                     it.name == value.optString("source")
                 } ?: return@synchronized null
+                val savedSeason = value.optInt("tmdbSeasonNumber",
+                    value.optInt("anitubeSeasonNumber"))
+                    .takeIf { it > 0 }
+                if (scoped == null && seasonNumber != null &&
+                    source == TmdbPlaybackSelection.Source.ANITUBE && savedSeason != seasonNumber)
+                    return@synchronized null
                 TmdbPlaybackSelection(source,
                     value.optString("topicId").takeIf(String::isNotBlank),
                     value.optInt("fileId").takeIf { it > 0 },
                     value.optString("fileName").takeIf(String::isNotBlank),
                     value.optInt("anitubeReleaseId").takeIf { it > 0 },
                     value.optInt("anitubeSeasonNumber").takeIf { it > 0 },
+                    value.optInt("tmdbSeasonNumber")
+                        .takeIf { it > 0 } ?: value.optInt("anitubeSeasonNumber")
+                        .takeIf { it > 0 },
                     value.optInt("voiceIndex").coerceAtLeast(0),
                     value.optString("voiceName").takeIf(String::isNotBlank))
             } catch (_: Exception) { null }
         }
+
+    private fun seasonPlaybackKey(baseKey: String, seasonNumber: Int) =
+        "${baseKey}|season:$seasonNumber"
 
     fun saveTorrentProgress(
         title: TmdbTitle,

@@ -94,7 +94,8 @@ class AniListTmdbCatalog(context: Context) {
             }
             if (target == null) unresolved += card else mapped += target
         }
-        return (mapped + fallbackSearch(unresolved, saved)).distinctBy { it.type to it.id }
+        return (mapped + fallbackSearch(unresolved, saved))
+            .distinctBy { Triple(it.type, it.id, it.matchedAniListId ?: it.matchedSeasonNumber) }
     }
 
     private suspend fun fallbackSearch(cards: List<AnimeCard>,
@@ -116,7 +117,7 @@ class AniListTmdbCatalog(context: Context) {
                             seasons = { candidate ->
                                 connection.client.details(candidate.type, candidate.id,
                                     connection.accessKey).seasonEntries
-                            })
+                            })?.copy(matchedAniListId = card.id)
                     } catch (error: CancellationException) {
                         throw error
                     } catch (_: Exception) {
@@ -142,6 +143,7 @@ private fun AnimeCard.tmdbTitle(type: ua.any2b.core.tmdb.TmdbMediaType,
     year = seasonYear, posterUrl = cover, overview = null,
     rating = score?.div(10.0), englishTitle = title.english,
     matchedSeasonNumber = season,
+    matchedAniListId = id,
 )
 
 internal suspend fun match(card: AnimeCard,

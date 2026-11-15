@@ -3,6 +3,8 @@ package ua.any2b.tvplayer.ui
 import android.util.Log
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.BringIntoViewSpec
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
@@ -110,6 +112,7 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
     onOpenFavorite: (TmdbTitle) -> Unit = onOpen,
     onRemoveFromHistory: (TmdbTitle) -> Unit = {},
     onSelectWatchlistSeason: (TmdbTitle, Int) -> Unit = { _, _ -> },
+    onSelectWatchlistVoice: (TmdbTitle, Int, Int) -> Unit = { _, _, _ -> },
     onOpenEpisode: (TmdbTitle, TmdbEpisode) -> Unit = { title, _ -> onOpen(title) },
     onContinueWatchlist: (TmdbTitle, TmdbEpisode?) -> Unit = { title, episode ->
         if (episode == null) onOpen(title) else onOpenEpisode(title, episode)
@@ -169,6 +172,7 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
             if (animationOnly) {
                 if (state.watchlist.isNotEmpty()) item(key = "watchlist") {
                     WatchlistHomeSection(state.watchlist, onSelectWatchlistSeason,
+                        onSelectWatchlistVoice,
                         onOpenEpisode, onContinueWatchlist, onOpen,
                         onSectionFocus = restoreWatchlist,
                         modifier = Modifier.height(watchlistViewportHeight),
@@ -517,6 +521,7 @@ private fun FloatingIconButton(
 private fun WatchlistHomeSection(
     items: List<TmdbWatchlistHomeItem>,
     onSelectSeason: (TmdbTitle, Int) -> Unit,
+    onSelectVoice: (TmdbTitle, Int, Int) -> Unit,
     onOpenEpisode: (TmdbTitle, TmdbEpisode) -> Unit,
     onContinue: (TmdbTitle, TmdbEpisode?) -> Unit,
     onOpenDetails: (TmdbTitle) -> Unit,
@@ -534,6 +539,20 @@ private fun WatchlistHomeSection(
     }.takeIf { it >= 0 } ?: 0
     val selected = items[selectedIndex]
     val title = selected.entry.title
+    val availableSeasons = selected.seasons.filter {
+        it.number > 0 && (it.episodeCount ?: 0) > 0
+    }.sortedBy { it.number }
+    val selectedSeasonIndex = availableSeasons.indexOfFirst {
+        it.number == selected.selectedSeasonNumber
+    }
+    val previousSeason = availableSeasons.getOrNull(selectedSeasonIndex - 1)
+    val nextAvailableSeason = availableSeasons.getOrNull(selectedSeasonIndex + 1)
+    var voiceMenuExpanded by remember(title.type, title.id, selected.selectedSeasonNumber) {
+        mutableStateOf(false)
+    }
+    val selectedVoiceOption = selected.anitubeVoices.firstOrNull {
+        selected.selectedVoiceIndex in it.variantIndices
+    } ?: selected.anitubeVoices.firstOrNull()
     val detailsFocusRequester = remember(title.type, title.id) { FocusRequester() }
     var detailsFocused by remember(title.type, title.id) { mutableStateOf(false) }
     val detailsFocusProgress by animateFloatAsState(
@@ -675,15 +694,35 @@ private fun WatchlistHomeSection(
                                 overflow = TextOverflow.Ellipsis)
                         }
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    if (selected.playbackProgress != null &&
+                        selected.playbackProgress < 0.98f) {
+                        Column(Modifier.fillMaxWidth().padding(end = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Box(Modifier.fillMaxWidth().height(3.dp)
+                                .background(Color.White.copy(alpha = 0.2f),
+                                    RoundedCornerShape(2.dp))) {
+                                Box(Modifier.fillMaxWidth(selected.playbackProgress.coerceIn(0f, 1f))
+                                    .height(3.dp).background(AppColors.NeonCyan,
+                                        RoundedCornerShape(2.dp)))
+                            }
+                            Text(watchProgressLabel(title.type == TmdbMediaType.TV,
+                                selected.displaySeasonNumber ?: selected.selectedSeasonNumber,
+                                selected.playbackEpisodeNumber, selected.playbackRemainingMs),
+                                color = AppColors.TextSecondary,
+                                style = MaterialTheme.typography.labelSmall, maxLines = 1,
+                                overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
                         Button(onClick = {
                             val resumeEpisode = selected.nextEpisodes
                                 .firstOrNull { !it.watched }?.episode
                                 ?: selected.nextEpisodes.firstOrNull()?.episode
                             onContinue(title.copy(matchedSeasonNumber = selected.selectedSeasonNumber),
                                 resumeEpisode)
-                        }, contentPadding = PaddingValues(horizontal = 18.dp, vertical = 4.dp),
-                            modifier = Modifier.height(48.dp)
+                        }, contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
+                            modifier = Modifier.height(42.dp)
                             .then(continueFocusRequester?.let(Modifier::focusRequester) ?: Modifier)
                             .focusProperties {
                                 up = detailsFocusRequester
@@ -694,6 +733,20 @@ private fun WatchlistHomeSection(
                             }) {
                             Text(continueLabel)
                         }
+                        if (selectedVoiceOption != null) {
+                            OutlinedButton(onClick = { voiceMenuExpanded = true },
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                                modifier = Modifier.height(42.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    PlaybackTrackIcon(selectedVoiceOption.category,
+                                        Modifier.size(17.dp))
+                                    Text(selectedVoiceOption.name,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -702,17 +755,57 @@ private fun WatchlistHomeSection(
                 verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
                     if (title.type == TmdbMediaType.TV) {
-                        Text(season?.name?.takeIf(String::isNotBlank)
-                            ?: "Сезон ${selected.selectedSeasonNumber}",
-                            color = Color.White, style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold, maxLines = 1,
-                            overflow = TextOverflow.Ellipsis)
+                        Row(verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("<", color = if (previousSeason != null) Color.White
+                                else AppColors.TextSecondary.copy(alpha = 0.4f),
+                                style = MaterialTheme.typography.titleMedium,
+                                modifier = Modifier.clickable(enabled = previousSeason != null) {
+                                    previousSeason?.let { onSelectSeason(title, it.number) }
+                                }.focusable(previousSeason != null)
+                                    .padding(horizontal = 6.dp, vertical = 2.dp))
+                            Text("Сезон ${selected.displaySeasonNumber
+                                ?: selected.selectedSeasonNumber ?: season?.number ?: 1}",
+                                color = Color.White, style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold, maxLines = 1,
+                                overflow = TextOverflow.Ellipsis)
+                            Text(">", color = if (nextAvailableSeason != null) Color.White
+                                else AppColors.TextSecondary.copy(alpha = 0.4f),
+                                style = MaterialTheme.typography.titleMedium,
+                                modifier = Modifier.clickable(enabled = nextAvailableSeason != null) {
+                                    nextAvailableSeason?.let { onSelectSeason(title, it.number) }
+                                }.focusable(nextAvailableSeason != null)
+                                    .padding(horizontal = 6.dp, vertical = 2.dp))
+                        }
                     }
                 }
                 Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
                     WatchlistPositionIndicator(items.size, selectedIndex)
                 }
                 Spacer(Modifier.weight(1f))
+            }
+            if (voiceMenuExpanded) Dialog(onDismissRequest = { voiceMenuExpanded = false }) {
+                Column(Modifier.width(480.dp).background(AppColors.SurfaceCard,
+                    RoundedCornerShape(16.dp)).padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Доріжка · Сезон ${selected.displaySeasonNumber
+                        ?: selected.selectedSeasonNumber ?: 1}",
+                        style = MaterialTheme.typography.titleLarge, color = Color.White)
+                    selected.anitubeVoices.forEachIndexed { index, voice ->
+                        Button(onClick = {
+                            voiceMenuExpanded = false
+                            onSelectVoice(title, selected.selectedSeasonNumber ?: 1, index)
+                        }, modifier = Modifier.fillMaxWidth()) {
+                            Row(verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                PlaybackTrackIcon(voice.category, Modifier.size(18.dp))
+                                if (selected.selectedVoiceIndex in voice.variantIndices)
+                                    Text("✓", fontWeight = FontWeight.Bold)
+                                Text(voice.name)
+                            }
+                        }
+                    }
+                }
             }
             if (title.type == TmdbMediaType.TV) {
                 Column(Modifier.fillMaxWidth().height(210.dp)) {
@@ -823,6 +916,33 @@ private fun WatchlistHomeSection(
             }
         }
     }
+}
+
+@Composable
+private fun PlaybackTrackIcon(category: String, modifier: Modifier = Modifier) {
+    val isSubtitle = category.equals("СУБТИТРИ", ignoreCase = true)
+    FontAwesomeIcon(if (isSubtitle) FaIcons.COMMENTING_O else FaIcons.MICROPHONE,
+        color = Color.White, size = 13.sp, modifier = modifier)
+}
+
+private fun watchProgressLabel(isTv: Boolean, season: Int?, episode: Int?, remainingMs: Long?): String {
+    val parts = buildList {
+        if (isTv) {
+            season?.let { add("Сезон $it") }
+            episode?.let { add("Серія $it") }
+        }
+        remainingMs?.takeIf { it > 0L }?.let { millis ->
+            val minutes = kotlin.math.ceil(millis / 60_000.0).toInt()
+            val hours = minutes / 60
+            val rest = minutes % 60
+            add(when {
+                hours > 0 && rest > 0 -> "$hours год $rest хв залишилось"
+                hours > 0 -> "$hours год залишилось"
+                else -> "$minutes хв залишилось"
+            })
+        }
+    }
+    return parts.joinToString(" · ")
 }
 
 @Composable

@@ -61,6 +61,7 @@ class TmdbLibraryActivity : ComponentActivity() {
                             })
                         }
                     },
+                    onSelectWatchlistVoice = viewModel::selectWatchlistVoice,
                     onOpenEpisode = ::openWatchlistPlayback,
                     onContinueWatchlist = ::openWatchlistPlayback,
                     onBack = ::returnHome,
@@ -87,11 +88,19 @@ class TmdbLibraryActivity : ComponentActivity() {
         episode: ua.any2b.core.tmdb.TmdbEpisode?) {
         val history = TmdbWatchHistoryStore(this)
         val progress = history.episodeProgress(title.type, title.id)
-        val selection = history.playbackSelection(title.type, title.id)
-            ?: history.inferredPlaybackSelection(title.type, title.id)
+        val requestedSeasonContext = episode?.seasonNumber ?: title.matchedSeasonNumber
+            ?: progress?.seasonNumber
+        val inferred = history.inferredPlaybackSelection(title.type, title.id)
+        val selection = if (requestedSeasonContext != null) {
+            history.playbackSelection(title.type, title.id, requestedSeasonContext)
+                ?: inferred?.takeIf {
+                    it.source == ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.TORRENT ||
+                        (it.tmdbSeasonNumber ?: it.anitubeSeasonNumber) == requestedSeasonContext
+                }
+        } else history.playbackSelection(title.type, title.id) ?: inferred
         val source = selection?.source?.name
-        val playbackSeason = episode?.seasonNumber ?: title.matchedSeasonNumber
-            ?: progress?.seasonNumber ?: selection?.anitubeSeasonNumber
+        val playbackSeason = requestedSeasonContext
+            ?: selection?.tmdbSeasonNumber ?: selection?.anitubeSeasonNumber
         val requestedEpisode = episode?.episodeNumber ?: progress?.let {
             if (it.progress >= 0.95f) it.episodeNumber + 1 else it.episodeNumber
         } ?: if (title.type == ua.any2b.core.tmdb.TmdbMediaType.TV && selection != null) 1 else null
