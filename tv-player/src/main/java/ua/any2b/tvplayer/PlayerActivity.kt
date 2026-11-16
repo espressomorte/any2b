@@ -55,7 +55,6 @@ import ua.any2b.tvplayer.ui.PlayerControlsController
 import ua.any2b.tvplayer.ui.PlayerTrackSelectionMenu
 import ua.any2b.tvplayer.databinding.ActivityPlayerBinding
 import java.util.concurrent.TimeUnit
-import kotlin.random.Random
 
 @OptIn(UnstableApi::class)
 class PlayerActivity : FragmentActivity() {
@@ -73,7 +72,6 @@ class PlayerActivity : FragmentActivity() {
         private const val TORRENT_BUFFER_TIMEOUT_MS = 30_000L
         private const val TORRENT_SEEK_BUFFER_TIMEOUT_MS = 45_000L
         private const val TORRENT_RETRY_BUFFER_TIMEOUT_MS = 60_000L
-        private const val MAX_STREAM_RETRIES = 4
         const val EXTRA_STREAM_URL = "STREAM_URL"
         const val EXTRA_VOICE_INDEX = "VOICE_INDEX"
         const val EXTRA_EPISODE_INDEX = "EPISODE_INDEX"
@@ -100,6 +98,7 @@ class PlayerActivity : FragmentActivity() {
         const val EXTRA_NEXT_STREAM_URL = "NEXT_STREAM_URL"
         const val EXTRA_NEXT_EPISODE_AVAILABLE = "NEXT_EPISODE_AVAILABLE"
         const val EXTRA_TMDB_ANITUBE_RELEASE = "TMDB_ANITUBE_RELEASE"
+        const val EXTRA_TMDB_ANITUBE_PAGE_URL = "TMDB_ANITUBE_PAGE_URL"
         const val EXTRA_TMDB_ANITUBE_VOICE_NAME = "TMDB_ANITUBE_VOICE_NAME"
         const val EXTRA_TMDB_RESUME_PROGRESS = "TMDB_RESUME_PROGRESS"
         const val EXTRA_TORRENT_RESUME_POSITION_MS = "TORRENT_RESUME_POSITION_MS"
@@ -309,13 +308,17 @@ class PlayerActivity : FragmentActivity() {
                             hideBufferingIndicator()
                             binding.statusOverlay.visibility = View.GONE
                             if (isToloka) {
-                                if (!torrentResumeApplied && torrentResumePositionMs > 0 && exo.duration > 0) {
-                                    exo.seekTo(torrentResumePositionMs.coerceAtMost(exo.duration - 1))
+                                val resumePosition = torrentResumePositionMs(
+                                    torrentResumePositionMs, exo.duration)
+                                if (!torrentResumeApplied && resumePosition != null) {
+                                    exo.seekTo(resumePosition)
                                     torrentResumeApplied = true
                                 }
                             } else {
-                                if (isTmdbAnitube && !tmdbResumeApplied && tmdbResumeProgress in 0.01f..0.98f && exo.duration > 0) {
-                                    exo.seekTo((exo.duration * tmdbResumeProgress).toLong())
+                                val resumePosition = anitubeResumePositionMs(
+                                    tmdbResumeProgress, exo.duration)
+                                if (isTmdbAnitube && !tmdbResumeApplied && resumePosition != null) {
+                                    exo.seekTo(resumePosition)
                                     tmdbResumeApplied = true
                                 }
                             }
@@ -508,32 +511,14 @@ class PlayerActivity : FragmentActivity() {
         exo.playWhenReady = true
     }
 
-    private enum class StreamFailure { TRANSIENT, AUTH, MISSING, PARSING, SUBTITLE, DECODER, OTHER }
-
     private fun classifyPlaybackError(error: PlaybackException): StreamFailure {
         if (generateSequence(error as Throwable) { it.cause }.any { cause ->
                 cause.stackTrace.any { it.className == "androidx.media3.extractor.text.ssa.SsaParser" }
             }) return StreamFailure.SUBTITLE
         val http = generateSequence(error as Throwable) { it.cause }
             .filterIsInstance<HttpDataSource.InvalidResponseCodeException>().firstOrNull()
-        if (http != null) return when (http.responseCode) {
-            401, 403 -> StreamFailure.AUTH
-            404, 410, 416 -> StreamFailure.MISSING
-            in 500..599, 408, 429 -> StreamFailure.TRANSIENT
-            else -> StreamFailure.OTHER
-        }
-        return when (error.errorCode) {
-            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
-            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> StreamFailure.TRANSIENT
-            PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND,
-            PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE -> StreamFailure.MISSING
-            PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
-            PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED -> StreamFailure.PARSING
-            PlaybackException.ERROR_CODE_DECODING_FAILED,
-            PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
-            PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES -> StreamFailure.DECODER
-            else -> StreamFailure.OTHER
-        }
+        if (http != null) return classifyHttpPlaybackStatus(http.responseCode)
+        return classifyPlaybackErrorCode(error.errorCode)
     }
 
     private fun failureMessage(failure: StreamFailure): String = when (failure) {
@@ -547,13 +532,12 @@ class PlayerActivity : FragmentActivity() {
     }
 
     private fun scheduleStreamRetry(exo: ExoPlayer): Boolean {
-        if (streamRetryCount >= MAX_STREAM_RETRIES || streamRetryJob?.isActive == true) return false
+        if (streamRetryJob?.isActive == true) return false
+        val waitMs = StreamRetryPolicy.nextDelayMs(streamRetryCount) ?: return false
         val position = exo.currentPosition.coerceAtLeast(0L)
         val shouldPlay = exo.playWhenReady
-        val base = (1_000L shl streamRetryCount).coerceAtMost(8_000L)
-        val waitMs = Random.nextLong(base / 2, base + base / 2 + 1)
         streamRetryCount++
-        Log.i(TAG, "Stream retry $streamRetryCount/$MAX_STREAM_RETRIES in ${waitMs}ms at $position")
+        Log.i(TAG, "Stream retry $streamRetryCount/${StreamRetryPolicy.MAX_RETRIES} in ${waitMs}ms at $position")
         streamRetryJob = lifecycleScope.launch {
             delay(waitMs)
             if (isFinishing || isDestroyed || player !== exo || networkInterrupted) return@launch
@@ -736,9 +720,10 @@ class PlayerActivity : FragmentActivity() {
         binding.playerControls.nowPlayingLabel.text = "$title  •  $episodeLabel"
         binding.playerControls.nowPlayingRow.visibility = View.VISIBLE
         if (canGoNextEpisode()) {
-            binding.playerControls.nextEpisodeButton.text = "${episode + 1} серія"
+            val nextEpisode = nextEpisodeNumber(episode, canAdvance = true) ?: return
+            binding.playerControls.nextEpisodeButton.text = "$nextEpisode серія"
             binding.playerControls.nextEpisodeButton.contentDescription =
-                "Перейти до ${episode + 1} серії"
+                "Перейти до $nextEpisode серії"
             binding.playerControls.nextEpisodeButton.visibility = View.VISIBLE
             binding.playerControls.nextEpisodeButton.setOnClickListener { launchNextEpisode() }
         }
@@ -770,16 +755,14 @@ class PlayerActivity : FragmentActivity() {
         }
     }
 
-    private fun canGoNextEpisode(): Boolean =
-        intent.getStringExtra(EXTRA_TMDB_TYPE) == TmdbMediaType.TV.path &&
-            intent.getIntExtra(EXTRA_TMDB_SEASON, -1) > 0 &&
-            intent.getIntExtra(EXTRA_TMDB_EPISODE, -1) > 0 &&
-            when {
-                isToloka -> !intent.getStringExtra(EXTRA_TOLOKA_TOPIC_ID).isNullOrBlank() &&
-                    intent.getBooleanExtra(EXTRA_NEXT_EPISODE_AVAILABLE, false)
-                isTmdbAnitube -> intent.getBooleanExtra(EXTRA_NEXT_EPISODE_AVAILABLE, false)
-                else -> false
-            }
+    private fun canGoNextEpisode(): Boolean = canAdvanceToNextEpisode(
+        mediaType = intent.getStringExtra(EXTRA_TMDB_TYPE),
+        seasonNumber = intent.getIntExtra(EXTRA_TMDB_SEASON, -1),
+        episodeNumber = intent.getIntExtra(EXTRA_TMDB_EPISODE, -1),
+        source = intent.getStringExtra(EXTRA_SOURCE_TYPE),
+        nextEpisodeAvailable = intent.getBooleanExtra(EXTRA_NEXT_EPISODE_AVAILABLE, false),
+        tolokaTopicId = intent.getStringExtra(EXTRA_TOLOKA_TOPIC_ID),
+    )
 
     private fun showPlayerPrompt(prompt: PlayerPrompt) {
         if (activePlayerPrompt == prompt) return
@@ -855,13 +838,22 @@ class PlayerActivity : FragmentActivity() {
         val tmdbId = intent.getIntExtra(EXTRA_TMDB_ID, -1).takeIf { it > 0 } ?: return false
         val type = intent.getStringExtra(EXTRA_TMDB_TYPE)
             ?.takeIf { it == TmdbMediaType.TV.path } ?: return false
-        val nextEpisode = (intent.getIntExtra(EXTRA_TMDB_EPISODE, episodeNumber) + 1)
+        val nextEpisode = nextEpisodeNumber(
+            intent.getIntExtra(EXTRA_TMDB_EPISODE, episodeNumber), canAdvance = true)
+            ?: return false
         val season = intent.getIntExtra(EXTRA_TMDB_SEASON, -1).takeIf { it > 0 } ?: return false
         val source = when {
             isToloka -> ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.TORRENT
             isTmdbAnitube -> ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.ANITUBE
             else -> return false
         }
+        val animeSeason = if (source ==
+            ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.ANITUBE) {
+            TmdbWatchHistoryStore(this).playbackSelection(TmdbMediaType.TV, tmdbId, season)
+                ?.anitubeSeasonNumber
+                ?: intent.getIntExtra(EXTRA_ANIME_SEASON, -1).takeIf { it > 0 }
+                ?: season
+        } else null
         val nextIntent = android.content.Intent(this, TmdbDetailsActivity::class.java).apply {
             putExtra(TmdbDetailsActivity.EXTRA_TMDB_ID, tmdbId)
             putExtra(TmdbDetailsActivity.EXTRA_TMDB_TYPE, type)
@@ -876,9 +868,12 @@ class PlayerActivity : FragmentActivity() {
                 }
             } else {
                 putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_ANITUBE_SEASON,
-                    intent.getIntExtra(EXTRA_ANIME_SEASON, season))
+                    animeSeason ?: season)
                 putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_ANITUBE_RELEASE,
                     intent.getIntExtra(EXTRA_TMDB_ANITUBE_RELEASE, -1))
+                intent.getStringExtra(EXTRA_TMDB_ANITUBE_PAGE_URL)?.let {
+                    putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_ANITUBE_PAGE_URL, it)
+                }
                 putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_ANITUBE_VOICE, voiceIndex)
                 intent.getStringExtra(EXTRA_TMDB_ANITUBE_VOICE_NAME)?.let {
                     putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_ANITUBE_VOICE_NAME, it)

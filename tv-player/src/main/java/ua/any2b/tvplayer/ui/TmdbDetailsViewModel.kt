@@ -259,13 +259,13 @@ class TmdbDetailsViewModel(
 
     fun loadSavedAnitubeRelease(
         releaseId: Int,
+        pageUrl: String?,
         seasonNumber: Int?,
-        names: List<String>,
         format: String,
     ) {
         val title = (_state.value as? TmdbDetailsState.Ready)?.details?.title ?: return
         anitubeController.loadSavedRelease(releaseId, title.type, title.id, seasonNumber,
-            names, format, watchHistory.episodeProgress(title.type, title.id))
+            pageUrl, format, watchHistory.episodeProgress(title.type, title.id))
     }
 
     fun restoreAnitubeProgress(progress: TmdbEpisodeProgress?) =

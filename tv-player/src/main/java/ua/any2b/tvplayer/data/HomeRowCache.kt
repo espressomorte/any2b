@@ -18,6 +18,17 @@ class HomeRowCache(context: Context) {
         }.getOrDefault(emptyList())
     }
 
+    /** Decode several cached rows from one disk read during home initialization. */
+    fun readRows(keys: Set<String>): Map<String, List<TmdbTitle>> = synchronized(lock) {
+        runCatching {
+            val root = JSONObject(file.readText())
+            keys.associateWith { key ->
+                val rows = root.optJSONArray(key) ?: return@associateWith emptyList()
+                (0 until rows.length()).mapNotNull { rows.optJSONObject(it)?.let(::decode) }
+            }
+        }.getOrElse { keys.associateWith { emptyList() } }
+    }
+
     fun save(key: String, titles: List<TmdbTitle>) = synchronized(lock) {
         if (titles.isEmpty()) return@synchronized
         val root = runCatching { JSONObject(file.readText()) }.getOrElse { JSONObject() }

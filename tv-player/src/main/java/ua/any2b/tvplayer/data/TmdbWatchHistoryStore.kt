@@ -35,6 +35,7 @@ data class TmdbPlaybackSelection(
     val tmdbSeasonNumber: Int? = null,
     val voiceIndex: Int = 0,
     val voiceName: String? = null,
+    val anitubePageUrl: String? = null,
 ) {
     enum class Source { TORRENT, ANITUBE }
 }
@@ -203,6 +204,7 @@ class TmdbWatchHistoryStore(context: Context) {
                 put("tmdbSeasonNumber", seasonNumber ?: selection.tmdbSeasonNumber)
                 put("voiceIndex", selection.voiceIndex)
                 put("voiceName", selection.voiceName)
+                put("anitubePageUrl", selection.anitubePageUrl)
                 put("updatedAt", System.currentTimeMillis())
             }
             values.put(key, encoded)
@@ -245,7 +247,8 @@ class TmdbWatchHistoryStore(context: Context) {
                         .takeIf { it > 0 } ?: value.optInt("anitubeSeasonNumber")
                         .takeIf { it > 0 },
                     value.optInt("voiceIndex").coerceAtLeast(0),
-                    value.optString("voiceName").takeIf(String::isNotBlank))
+                    value.optString("voiceName").takeIf(String::isNotBlank),
+                    value.optString("anitubePageUrl").takeIf(String::isNotBlank))
             } catch (_: Exception) { null }
         }
 

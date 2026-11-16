@@ -32,6 +32,7 @@ dependencies {
     implementation(libs.coroutines.core)
     implementation(libs.okhttp)
     implementation(libs.json)
+    testImplementation("junit:junit:4.13.2")
 }
 
 kotlin {

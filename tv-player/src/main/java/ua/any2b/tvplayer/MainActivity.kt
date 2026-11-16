@@ -29,6 +29,7 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_HOME_RESET = "home_reset"
     }
     private var homeResetToken by mutableLongStateOf(0L)
+    private var hasResumedOnce = false
     private val viewModel: TmdbLibraryViewModel by viewModels {
         object : ViewModelProvider.Factory {
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -83,6 +84,7 @@ class MainActivity : ComponentActivity() {
                     onRetryMal = viewModel::refreshMalTop,
                     onRetryAniList = viewModel::refreshAniListHome,
                     onRetryTolokaRss = viewModel::refreshTolokaRss,
+                    onLoadTolokaRss = viewModel::loadTolokaRssIfNeeded,
                     onRemoveFromHistory = viewModel::removeFromHistory,
                     onSelectWatchlistSeason = { title, seasonNumber ->
                         if (viewModel.hasPlayableWatchlistSeason(title, seasonNumber)) {
@@ -111,8 +113,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        homeResetToken = android.os.SystemClock.elapsedRealtimeNanos()
-        viewModel.refreshPersonalLists()
+        if (hasResumedOnce) {
+            homeResetToken = android.os.SystemClock.elapsedRealtimeNanos()
+            viewModel.refreshPersonalLists()
+        } else {
+            // The ViewModel has already loaded personal lists during cold start.
+            // Avoid repeating synchronous preference parsing before the first frame.
+            hasResumedOnce = true
+        }
     }
 
     private fun openWatchlistPlayback(title: TmdbTitle, episode: TmdbEpisode?) {

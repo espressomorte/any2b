@@ -8,9 +8,12 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import ua.any2b.core.tmdb.TmdbMediaType
 import ua.any2b.core.tmdb.TmdbFailure
@@ -97,6 +100,14 @@ data class TmdbEpisodeHomeCard(
     val watched: Boolean = false,
 )
 
+private data class PersonalListsSnapshot(
+    val watched: List<TmdbTitle>,
+    val favorites: List<TmdbTitle>,
+    val watchlist: List<TmdbWatchlistEntry>,
+    val sections: List<HomeSectionSetting>,
+    val watchlistItems: List<TmdbWatchlistHomeItem>,
+)
+
 class TmdbLibraryViewModel(application: Application,
     private val animationOnly: Boolean = false) : AndroidViewModel(application) {
     private val malTmdbCatalog = MalTmdbCatalog(application)
@@ -109,57 +120,7 @@ class TmdbLibraryViewModel(application: Application,
     private val tolokaRss = TolokaRssTmdbCatalog(application)
     private val homeRows = HomeRowCache(application)
     private val _state = MutableStateFlow(TmdbLibraryState(
-        watchlist = if (animationOnly) watchlist.all().map { entry ->
-            val savedProgressSeason = history.episodeProgress(entry.title.type,
-                entry.title.id)?.seasonNumber ?: entry.title.matchedSeasonNumber
-            val savedSelection = savedProgressSeason?.let {
-                history.playbackSelection(entry.title.type, entry.title.id, it)
-            } ?: history.playbackSelection(entry.title.type, entry.title.id)
-            TmdbWatchlistHomeItem(entry,
-                logoUrl = watchlist.cachedLogo(entry.title.type, entry.title.id),
-                seasons = if (entry.title.type == TmdbMediaType.TV)
-                    watchlist.cachedSeasons(entry.title.id).orEmpty() else emptyList(),
-                selectedSeasonNumber = savedProgressSeason,
-                displaySeasonNumber = history.episodeProgress(entry.title.type,
-                    entry.title.id)?.animeSeasonNumber ?: entry.title.matchedAnimeSeasonNumber
-                        ?: savedSelection?.anitubeSeasonNumber,
-                playbackProgress = history.episodeProgress(entry.title.type, entry.title.id)
-                    ?.takeIf { it.durationMs > 0L }?.progress,
-                playbackRemainingMs = history.episodeProgress(entry.title.type, entry.title.id)
-                    ?.takeIf { it.durationMs > 0L }?.let {
-                        (it.durationMs - it.positionMs).coerceAtLeast(0L)
-                    },
-                playbackEpisodeNumber = history.episodeProgress(entry.title.type,
-                    entry.title.id)?.episodeNumber,
-                anitubeVoices = if (savedSelection?.source ==
-                    ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.ANITUBE)
-                    watchlist.cachedAniTubeVoices(entry.title.type, entry.title.id,
-                        savedProgressSeason ?: 1, savedSelection.anitubeReleaseId ?: -1)
-                    else emptyList(),
-                selectedVoiceIndex = savedSelection?.voiceIndex ?: 0)
-        } else emptyList(),
-        history = history.all().filter(::visibleInCurrentCatalog),
-        favorites = favorites.all().filter(::visibleInCurrentCatalog),
-        recommendations = homeRows.read("recommendations"),
-        mainSections = if (animationOnly) settings.mainHomeSections() else emptyList(),
-        tv = homeRows.read(if (animationOnly) "animation_tv" else "general_tv")
-            .takeIf(List<TmdbTitle>::isNotEmpty)?.let(TmdbPopularState::Results)
-            ?: TmdbPopularState.Loading,
-        movies = homeRows.read(if (animationOnly) "animation_movie" else "general_movie")
-            .takeIf(List<TmdbTitle>::isNotEmpty)?.let(TmdbPopularState::Results)
-            ?: TmdbPopularState.Loading,
-        malTop = homeRows.read("mal_top").takeIf(List<TmdbTitle>::isNotEmpty)
-            ?.let { MalTopState.Results(it, hasMore = true) } ?: MalTopState.Loading,
-        trending = homeRows.read("trending").takeIf(List<TmdbTitle>::isNotEmpty)
-            ?.let(AniListHomeState::Results) ?: AniListHomeState.Loading,
-        popularSeason = homeRows.read("popular_season").takeIf(List<TmdbTitle>::isNotEmpty)
-            ?.let(AniListHomeState::Results) ?: AniListHomeState.Loading,
-        tolokaReleases = tolokaRss.cached().let { cached ->
-            if (cached.isEmpty) TolokaRssState.Loading else TolokaRssState.Results(cached)
-        },
-        // Render cached home content immediately. Network refreshes must not hold
-        // the full-screen loading artwork over the watchlist.
-        initialHomeLoading = false))
+        initialHomeLoading = animationOnly))
     val state: StateFlow<TmdbLibraryState> = _state
     private fun visibleInCurrentCatalog(title: TmdbTitle): Boolean = animationOnly ||
         title.genreIds.isNotEmpty() && TmdbGeneralCatalog.accepts(title)
@@ -168,12 +129,86 @@ class TmdbLibraryViewModel(application: Application,
     private var aniListHomeJob: Job? = null
     private var legacyMigrationJob: Job? = null
     private var watchlistEpisodesJob: Job? = null
+    private var personalListsJob: Job? = null
+    private var tolokaRefreshJob: Job? = null
+    private var lastTolokaRefreshAtMs = 0L
+    private val popularJobs = mutableMapOf<TmdbMediaType, Job>()
+    private var malTopJob: Job? = null
+    private val homeNetworkPermits = Semaphore(2)
+    private val stillCachePermits = Semaphore(1)
     // Network rows must never keep the watchlist behind the initial loading screen.
     private val initialSectionsPending = mutableSetOf("personal_lists")
 
     init {
+        viewModelScope.launch {
+            val cached = withContext(Dispatchers.IO) { readCachedHomeState() }
+            _state.value = cached.copy(initialHomeLoading = false)
+            // Let Compose draw the cached screen before starting metadata/image work.
+            delay(200L)
+            startHomeRefreshes()
+        }
+    }
+
+    private fun readCachedHomeState(): TmdbLibraryState {
+        val watchlistItems = if (animationOnly) watchlist.all().map { entry ->
+            val savedProgress = history.episodeProgress(entry.title.type, entry.title.id)
+            val savedProgressSeason = savedProgress?.seasonNumber
+                ?: entry.title.matchedSeasonNumber
+            val savedSelection = savedProgressSeason?.let {
+                history.playbackSelection(entry.title.type, entry.title.id, it)
+            } ?: history.playbackSelection(entry.title.type, entry.title.id)
+            TmdbWatchlistHomeItem(entry,
+                logoUrl = watchlist.cachedLogo(entry.title.type, entry.title.id),
+                seasons = if (entry.title.type == TmdbMediaType.TV)
+                    watchlist.cachedSeasons(entry.title.id).orEmpty() else emptyList(),
+                selectedSeasonNumber = savedProgressSeason,
+                displaySeasonNumber = savedProgress?.animeSeasonNumber
+                    ?: entry.title.matchedAnimeSeasonNumber ?: savedSelection?.anitubeSeasonNumber,
+                playbackProgress = savedProgress?.takeIf { it.durationMs > 0L }?.progress,
+                playbackRemainingMs = savedProgress?.takeIf { it.durationMs > 0L }?.let {
+                    (it.durationMs - it.positionMs).coerceAtLeast(0L)
+                },
+                playbackEpisodeNumber = savedProgress?.episodeNumber,
+                anitubeVoices = if (savedSelection?.source ==
+                    ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.ANITUBE)
+                    watchlist.cachedAniTubeVoices(entry.title.type, entry.title.id,
+                        savedProgressSeason ?: 1, savedSelection.anitubeReleaseId ?: -1)
+                    else emptyList(),
+                selectedVoiceIndex = savedSelection?.voiceIndex ?: 0)
+        } else emptyList()
+        val cacheKeys = setOf("recommendations", "mal_top", "trending", "popular_season",
+            if (animationOnly) "animation_tv" else "general_tv",
+            if (animationOnly) "animation_movie" else "general_movie")
+        val cachedRows = homeRows.readRows(cacheKeys)
+        fun cachedRow(key: String) = cachedRows[key].orEmpty()
+        fun cachedPopular(key: String) = cachedRow(key)
+            .takeIf(List<TmdbTitle>::isNotEmpty)?.let(TmdbPopularState::Results)
+            ?: TmdbPopularState.Loading
+        fun cachedAnime(key: String) = cachedRow(key)
+            .takeIf(List<TmdbTitle>::isNotEmpty)?.let(AniListHomeState::Results)
+            ?: AniListHomeState.Loading
+        val toloka = tolokaRss.cached()
+        return TmdbLibraryState(
+            watchlist = watchlistItems,
+            history = history.all().filter(::visibleInCurrentCatalog),
+            favorites = favorites.all().filter(::visibleInCurrentCatalog),
+            recommendations = cachedRow("recommendations"),
+            mainSections = if (animationOnly) settings.mainHomeSections() else emptyList(),
+            tv = cachedPopular(if (animationOnly) "animation_tv" else "general_tv"),
+            movies = cachedPopular(if (animationOnly) "animation_movie" else "general_movie"),
+            malTop = cachedRow("mal_top").takeIf(List<TmdbTitle>::isNotEmpty)
+                ?.let { MalTopState.Results(it, hasMore = true) } ?: MalTopState.Loading,
+            trending = cachedAnime("trending"),
+            popularSeason = cachedAnime("popular_season"),
+            tolokaReleases = if (toloka.isEmpty) TolokaRssState.Loading
+                else TolokaRssState.Results(toloka),
+            initialHomeLoading = false,
+        )
+    }
+
+    private fun startHomeRefreshes() {
         migrateLegacyAniListData()
-        refreshTolokaRss()
+        refreshPersonalLists()
         if (animationOnly) {
             val enabled = _state.value.mainSections.filter { it.enabled }.map { it.id }.toSet()
             Log.i(TAG, "Home load started animationOnly=true enabledSections=${enabled.sorted()}")
@@ -181,20 +216,28 @@ class TmdbLibraryViewModel(application: Application,
             if ("animation_movie" in enabled) refreshPopular(TmdbMediaType.MOVIE)
             if ("mal_top" in enabled) refreshMalTop()
             if (enabled.any { it == "trending" || it == "popular_season" }) refreshAniListHome()
-            refreshPersonalLists()
-            completeInitialSection("personal_lists")
         } else {
-            refreshPersonalLists()
             refreshPopular(TmdbMediaType.TV)
             refreshPopular(TmdbMediaType.MOVIE)
         }
     }
 
-    fun refreshTolokaRss() {
-        viewModelScope.launch {
+    fun loadTolokaRssIfNeeded() = refreshTolokaRss(force = false)
+
+    fun refreshTolokaRss() = refreshTolokaRss(force = true)
+
+    private fun refreshTolokaRss(force: Boolean) {
+        if (tolokaRefreshJob?.isActive == true) return
+        val now = SystemClock.elapsedRealtime()
+        if (!force && lastTolokaRefreshAtMs > 0L && now - lastTolokaRefreshAtMs <
+            TOLOKA_VISIBLE_REFRESH_COOLDOWN_MS) return
+        lastTolokaRefreshAtMs = now
+        tolokaRefreshJob = viewModelScope.launch {
             try {
-                _state.value = _state.value.copy(tolokaReleases =
-                    TolokaRssState.Results(tolokaRss.refresh()))
+                val rows = homeNetworkPermits.withPermit {
+                    withContext(Dispatchers.IO) { tolokaRss.refresh() }
+                }
+                _state.value = _state.value.copy(tolokaReleases = TolokaRssState.Results(rows))
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -207,13 +250,16 @@ class TmdbLibraryViewModel(application: Application,
     }
 
     fun refreshMalTop() {
+        if (malTopJob?.isActive == true) return
         if (_state.value.malTop !is MalTopState.Results)
             _state.value = _state.value.copy(malTop = MalTopState.Loading)
-        viewModelScope.launch {
+        malTopJob = viewModelScope.launch {
             val startedAt = SystemClock.elapsedRealtime()
             Log.i(TAG, "Home section load started section=mal_top source=MAL+Fribb")
             try {
-                val page = malTmdbCatalog.page(page = 1)
+                val page = homeNetworkPermits.withPermit {
+                    malTmdbCatalog.page(page = 1)
+                }
                 _state.value = _state.value.copy(malTop =
                     MalTopState.Results(page.titles, page.hasMore))
                 withContext(Dispatchers.IO) { homeRows.save("mal_top", page.titles) }
@@ -235,7 +281,7 @@ class TmdbLibraryViewModel(application: Application,
     }
 
     fun refreshAniListHome() {
-        aniListHomeJob?.cancel()
+        if (aniListHomeJob?.isActive == true) return
         _state.value = _state.value.copy(
             trending = _state.value.trending.takeIf { it is AniListHomeState.Results }
                 ?: AniListHomeState.Loading,
@@ -245,7 +291,9 @@ class TmdbLibraryViewModel(application: Application,
             val startedAt = SystemClock.elapsedRealtime()
             Log.i(TAG, "Home section load started section=trending,popular_season source=AniList")
             try {
-                val rows = aniListCatalog.homeRows(perRow = HOME_FETCH_SIZE)
+                val rows = homeNetworkPermits.withPermit {
+                    aniListCatalog.homeRows(perRow = HOME_FETCH_SIZE)
+                }
                 val freshTrending = rows["trending"].orEmpty()
                 val freshSeason = rows["popular_season"].orEmpty()
                 _state.value = _state.value.copy(
@@ -282,59 +330,64 @@ class TmdbLibraryViewModel(application: Application,
     }
 
     fun refreshPersonalLists() {
-        val watched = history.all()
-        val saved = favorites.all()
-        val savedWatchlist = if (animationOnly) watchlist.all() else emptyList()
-        if (animationOnly) Log.i(TAG, "Home watchlist loaded entries=${savedWatchlist.size}")
-        val sections = if (animationOnly) settings.mainHomeSections() else emptyList()
-        val previouslyEnabled = _state.value.mainSections.filter { it.enabled }.map { it.id }.toSet()
-        val nowEnabled = sections.filter { it.enabled }.map { it.id }.toSet()
-        _state.value = _state.value.copy(
-            watchlist = savedWatchlist.map { entry ->
-                val previous = _state.value.watchlist.firstOrNull {
+        if (personalListsJob?.isActive == true) return
+        personalListsJob = viewModelScope.launch {
+        val oldWatchlist = _state.value.watchlist
+        val snapshot = withContext(Dispatchers.IO) {
+            val watched = history.all()
+            val saved = favorites.all()
+            val savedWatchlist = if (animationOnly) watchlist.all() else emptyList()
+            val sections = if (animationOnly) settings.mainHomeSections() else emptyList()
+            val items = savedWatchlist.map { entry ->
+                val previous = oldWatchlist.firstOrNull {
                     it.entry.title.type == entry.title.type && it.entry.title.id == entry.title.id
                 }
-                val progressSeason = history.episodeProgress(entry.title.type,
-                    entry.title.id)?.seasonNumber
+                val progress = history.episodeProgress(entry.title.type, entry.title.id)
+                val progressSeason = progress?.seasonNumber
+                val selection = history.playbackSelection(entry.title.type, entry.title.id,
+                    progressSeason ?: entry.title.matchedSeasonNumber)
                 TmdbWatchlistHomeItem(entry,
                     logoUrl = watchlist.cachedLogo(entry.title.type, entry.title.id),
                     seasons = if (entry.title.type == TmdbMediaType.TV)
                         watchlist.cachedSeasons(entry.title.id).orEmpty() else emptyList(),
                     selectedSeasonNumber = when {
                         previous == null -> progressSeason ?: entry.title.matchedSeasonNumber
-                        progressSeason != null &&
-                            previous.selectedSeasonNumber != progressSeason -> progressSeason
+                        progressSeason != null && previous.selectedSeasonNumber != progressSeason ->
+                            progressSeason
                         else -> previous.selectedSeasonNumber
                     },
                     nextEpisodes = previous?.nextEpisodes.orEmpty(),
                     episodesLoading = entry.title.type == TmdbMediaType.TV,
-                    anitubeVoices = watchlist.cachedAniTubeVoices(entry.title.type,
-                        entry.title.id, progressSeason ?: entry.title.matchedSeasonNumber ?: 1,
-                        history.playbackSelection(entry.title.type, entry.title.id,
-                            progressSeason ?: entry.title.matchedSeasonNumber)?.anitubeReleaseId
-                            ?: -1),
-                    selectedVoiceIndex = history.playbackSelection(entry.title.type,
-                        entry.title.id, progressSeason ?: entry.title.matchedSeasonNumber)
-                        ?.voiceIndex ?: 0,
-                    displaySeasonNumber = history.episodeProgress(entry.title.type,
-                        entry.title.id)?.animeSeasonNumber ?: entry.title.matchedAnimeSeasonNumber
-                        ?: history.playbackSelection(entry.title.type, entry.title.id,
-                            progressSeason ?: entry.title.matchedSeasonNumber)?.anitubeSeasonNumber,
-                    playbackProgress = history.episodeProgress(entry.title.type, entry.title.id)
-                        ?.takeIf { it.durationMs > 0L }?.progress,
-                    playbackRemainingMs = history.episodeProgress(entry.title.type, entry.title.id)
-                        ?.takeIf { it.durationMs > 0L }?.let {
-                            (it.durationMs - it.positionMs).coerceAtLeast(0L)
-                        },
-                    playbackEpisodeNumber = history.episodeProgress(entry.title.type,
-                        entry.title.id)?.episodeNumber)
-            },
+                    anitubeVoices = selection?.anitubeReleaseId?.let { releaseId ->
+                        watchlist.cachedAniTubeVoices(entry.title.type, entry.title.id,
+                            progressSeason ?: entry.title.matchedSeasonNumber ?: 1, releaseId)
+                    }.orEmpty(),
+                    selectedVoiceIndex = selection?.voiceIndex ?: 0,
+                    displaySeasonNumber = progress?.animeSeasonNumber
+                        ?: entry.title.matchedAnimeSeasonNumber ?: selection?.anitubeSeasonNumber,
+                    playbackProgress = progress?.takeIf { it.durationMs > 0L }?.progress,
+                    playbackRemainingMs = progress?.takeIf { it.durationMs > 0L }?.let {
+                        (it.durationMs - it.positionMs).coerceAtLeast(0L)
+                    },
+                    playbackEpisodeNumber = progress?.episodeNumber)
+            }
+            PersonalListsSnapshot(watched, saved, savedWatchlist, sections, items)
+        }
+        val watched = snapshot.watched
+        val saved = snapshot.favorites
+        val savedWatchlist = snapshot.watchlist
+        val sections = snapshot.sections
+        if (animationOnly) Log.i(TAG, "Home watchlist loaded entries=${savedWatchlist.size}")
+        val previouslyEnabled = _state.value.mainSections.filter { it.enabled }.map { it.id }.toSet()
+        val nowEnabled = sections.filter { it.enabled }.map { it.id }.toSet()
+        _state.value = _state.value.copy(
+            watchlist = snapshot.watchlistItems,
             history = watched.filter(::visibleInCurrentCatalog),
             favorites = saved.filter(::visibleInCurrentCatalog),
             mainSections = sections)
         if (animationOnly) refreshWatchlistEpisodes(savedWatchlist)
         if (!animationOnly) {
-            return
+            return@launch
         }
         if ("animation_tv" in nowEnabled && "animation_tv" !in previouslyEnabled &&
             _state.value.tv == TmdbPopularState.Loading) refreshPopular(TmdbMediaType.TV)
@@ -346,28 +399,30 @@ class TmdbLibraryViewModel(application: Application,
             (_state.value.trending == AniListHomeState.Loading || _state.value.popularSeason == AniListHomeState.Loading) &&
             nowEnabled.intersect(setOf("trending", "popular_season")) != previouslyEnabled.intersect(setOf("trending", "popular_season"))) refreshAniListHome()
         if (sections.none { it.id == "recommendations" && it.enabled }) {
-            recommendationsJob?.cancel()
+                recommendationsJob?.cancel()
             recommendationSources = null
             _state.value = _state.value.copy(recommendations = emptyList())
             completeInitialSection("recommendations")
-            return
+            return@launch
         }
         val sources = (watched + saved).distinctBy { it.type to it.id }
             .take(4).map { it.type to it.id }
-        if (sources == recommendationSources) return
+        if (sources == recommendationSources) return@launch
         recommendationSources = sources
         recommendationsJob?.cancel()
         // Keep the last successful row visible until the new suggestions arrive.
         if (sources.isEmpty()) {
             completeInitialSection("recommendations")
-            return
+            return@launch
         }
         recommendationsJob = viewModelScope.launch {
             val startedAt = SystemClock.elapsedRealtime()
             Log.i(TAG, "Home section load started section=recommendations source=TMDB " +
                 "seedCount=${sources.size}")
             try {
-                val titles = tmdbHomeRecommendations(getApplication())
+                val titles = homeNetworkPermits.withPermit {
+                    tmdbHomeRecommendations(getApplication())
+                }
                 if (recommendationSources == sources) {
                     _state.value = _state.value.copy(recommendations = titles)
                     withContext(Dispatchers.IO) { homeRows.save("recommendations", titles) }
@@ -387,6 +442,7 @@ class TmdbLibraryViewModel(application: Application,
                     completeInitialSection("recommendations")
                 }
             }
+        }
         }
     }
 
@@ -452,8 +508,10 @@ class TmdbLibraryViewModel(application: Application,
     private fun refreshWatchlistEpisodes(entries: List<TmdbWatchlistEntry>) {
         watchlistEpisodesJob?.cancel()
         if (entries.isEmpty()) return
-        watchlistEpisodesJob = viewModelScope.launch {
-            val connection = workerTmdbConnection(getApplication()) ?: run {
+        watchlistEpisodesJob = viewModelScope.launch(Dispatchers.IO) {
+            val connection = withContext(Dispatchers.IO) {
+                workerTmdbConnection(getApplication())
+            } ?: run {
                 _state.value = _state.value.copy(watchlist = _state.value.watchlist.map {
                     it.copy(episodesLoading = false)
                 })
@@ -467,9 +525,10 @@ class TmdbLibraryViewModel(application: Application,
                         logoLanguagePriority) ||
                         title.originCountries.isEmpty() || title.ukrainianTitle.isNullOrBlank() ||
                         (title.type == TmdbMediaType.TV && watchlist.cachedSeasons(title.id) == null)
-                    val details = if (requiresDetails) connection.client.details(title.type,
-                        title.id, connection.accessKey,
-                        logoLanguagePriority = logoLanguagePriority) else null
+                    val details = if (requiresDetails) homeNetworkPermits.withPermit {
+                        connection.client.details(title.type, title.id, connection.accessKey,
+                            logoLanguagePriority = logoLanguagePriority)
+                    } else null
                     if (details != null) {
                         watchlist.saveLogo(title.type, title.id, details.logoUrl,
                             logoLanguagePriority)
@@ -508,8 +567,10 @@ class TmdbLibraryViewModel(application: Application,
                         if (it.progress >= 0.95f) it.episodeNumber + 1 else it.episodeNumber
                     } ?: 1
                     suspend fun seasonEpisodes(number: Int): List<TmdbEpisode> =
-                        watchlist.cachedEpisodes(title.id, number) ?: connection.client
-                            .seasonDetails(title.id, number, connection.accessKey).episodes.also {
+                        watchlist.cachedEpisodes(title.id, number) ?: homeNetworkPermits.withPermit {
+                            connection.client.seasonDetails(title.id, number,
+                                connection.accessKey).episodes
+                        }.also {
                                 watchlist.saveEpisodes(title.id, number, it)
                             }
                     val isAniTubeSeason = selection?.source ==
@@ -583,12 +644,18 @@ class TmdbLibraryViewModel(application: Application,
                     val visibleUpcoming = upcoming.take(12)
                     val visibleEpisodes = (watchedEpisodes + visibleUpcoming)
                         .distinctBy { it.episodeNumber }
-                    watchlist.cacheStills(title.id, visibleUpcoming + watchedEpisodes)
-                    updateWatchlistEpisodes(title, visibleEpisodes.map { episode ->
+                    val cards = visibleEpisodes.map { episode ->
                         TmdbEpisodeHomeCard(episode,
                             watchlist.cachedStill(title.id, episode)?.absolutePath,
                             watched = episode in watchedEpisodes)
-                    }, false)
+                    }
+                    updateWatchlistEpisodes(title, cards, false)
+                    // Fill the visible episode still cache after the row is already usable.
+                    if (visibleUpcoming.isNotEmpty()) viewModelScope.launch(Dispatchers.IO) {
+                        stillCachePermits.withPermit {
+                            watchlist.cacheStills(title.id, visibleUpcoming.take(5))
+                        }
+                    }
                 } catch (error: CancellationException) {
                     throw error
                 } catch (error: Exception) {
@@ -640,7 +707,7 @@ class TmdbLibraryViewModel(application: Application,
     private fun migrateLegacyAniListData() {
         if (legacyMigrationJob?.isActive == true) return
         legacyMigrationJob = viewModelScope.launch {
-            if (localDataMigrator.migrate()) {
+            if (withContext(Dispatchers.IO) { localDataMigrator.migrate() }) {
                 Log.i(TAG, "Migrated legacy AniList favorites and playback history into TMDB lists")
                 refreshPersonalLists()
             }
@@ -648,22 +715,29 @@ class TmdbLibraryViewModel(application: Application,
     }
 
     fun refreshPopular(type: TmdbMediaType) {
+        if (popularJobs[type]?.isActive == true) return
         if ((if (type == TmdbMediaType.TV) _state.value.tv else _state.value.movies)
             !is TmdbPopularState.Results) setRow(type, TmdbPopularState.Loading)
-        viewModelScope.launch {
+        popularJobs[type] = viewModelScope.launch {
             val startedAt = SystemClock.elapsedRealtime()
             val section = if (type == TmdbMediaType.TV) "animation_tv" else "animation_movie"
             Log.i(TAG, "Home section load started section=$section source=TMDB " +
                 "query=popular genreId=${if (animationOnly) 16 else "none"}")
             try {
-                val connection = workerTmdbConnection(getApplication())
+                val connection = withContext(Dispatchers.IO) {
+                    workerTmdbConnection(getApplication())
+                }
                     ?: throw IllegalStateException("Налаштуйте інтеграцію TMDB у конфігу")
-                val connectionMode = if (settings.isEncryptedConfigEnabled()) "direct_config" else "worker"
+                val connectionMode = withContext(Dispatchers.IO) {
+                    if (settings.isEncryptedConfigEnabled()) "direct_config" else "worker"
+                }
                 Log.d(TAG, "TMDB connection ready section=$section mode=$connectionMode")
-                val titles = connection.client.popular(type, connection.accessKey,
-                    genreId = if (animationOnly) 16 else null,
-                    excludedGenreIds = if (animationOnly) emptySet() else
-                        ua.any2b.core.tmdb.TmdbGeneralCatalog.excludedGenreIds)
+                val titles = homeNetworkPermits.withPermit {
+                    connection.client.popular(type, connection.accessKey,
+                        genreId = if (animationOnly) 16 else null,
+                        excludedGenreIds = if (animationOnly) emptySet() else
+                            ua.any2b.core.tmdb.TmdbGeneralCatalog.excludedGenreIds)
+                }
                 setRow(type, TmdbPopularState.Results(titles))
                 val cacheKey = if (animationOnly) section else
                     if (type == TmdbMediaType.TV) "general_tv" else "general_movie"
@@ -708,5 +782,6 @@ class TmdbLibraryViewModel(application: Application,
 
     private companion object {
         const val TAG = "HomeCatalog"
+        const val TOLOKA_VISIBLE_REFRESH_COOLDOWN_MS = 30L * 60L * 1_000L
     }
 }

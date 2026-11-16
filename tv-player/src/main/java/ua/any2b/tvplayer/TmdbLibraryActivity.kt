@@ -36,6 +36,7 @@ class TmdbLibraryActivity : ComponentActivity() {
                     },
                     onRetry = viewModel::refreshPopular,
                     onRetryTolokaRss = viewModel::refreshTolokaRss,
+                    onLoadTolokaRss = viewModel::loadTolokaRssIfNeeded,
                     onMore = { category ->
                         startActivity(Intent(this, TmdbListActivity::class.java).apply {
                             putExtra(TmdbListActivity.EXTRA_CATEGORY, category)
@@ -144,6 +145,9 @@ class TmdbLibraryActivity : ComponentActivity() {
             }
             selection?.anitubeReleaseId?.let {
                 putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_ANITUBE_RELEASE, it)
+            }
+            selection?.anitubePageUrl?.let {
+                putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_ANITUBE_PAGE_URL, it)
             }
             selection?.anitubeSeasonNumber?.let {
                 putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_ANITUBE_SEASON, it)

@@ -225,6 +225,9 @@ internal fun TmdbPosterCard(title: TmdbTitle, query: String = "",
     var longPressTriggered by remember { mutableStateOf(false) }
     var longPressJob by remember { mutableStateOf<Job?>(null) }
     val returnFocusRequester = remember(title.type, title.id) { FocusRequester() }
+    val activeFocusRequester = focusRequester ?: returnFocusRequester.takeIf {
+        onFocusTarget != null
+    }
     val keyScope = rememberCoroutineScope()
     val longPressTimeout = AndroidViewConfiguration.getLongPressTimeout().toLong()
     Column(Modifier.width(160.dp).padding(4.dp)) {
@@ -244,8 +247,7 @@ internal fun TmdbPosterCard(title: TmdbTitle, query: String = "",
             scale = CardDefaults.scale(scale = 1f, focusedScale = 1f),
             shape = CardDefaults.shape(RoundedCornerShape(12.dp)),
             modifier = Modifier.fillMaxWidth().aspectRatio(2f / 3f)
-                .then((focusRequester ?: returnFocusRequester.takeIf { onFocusTarget != null })
-                    ?.let(Modifier::focusRequester) ?: Modifier)
+                .then(activeFocusRequester?.let(Modifier::focusRequester) ?: Modifier)
                 .focusProperties { navigateLeftTo?.let { left = it } }
                 .onPreviewKeyEvent { event ->
                     val native = event.nativeKeyEvent
@@ -291,7 +293,7 @@ internal fun TmdbPosterCard(title: TmdbTitle, query: String = "",
                     }
                     if (it.isFocused) {
                         onFocused?.invoke()
-                        onFocusTarget?.invoke(returnFocusRequester)
+                        activeFocusRequester?.let { onFocusTarget?.invoke(it) }
                     }
                 },
         ) { TmdbPosterArt(title, Modifier.fillMaxSize()) }

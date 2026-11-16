@@ -96,6 +96,13 @@ class AnitubeResolver(
 ) {
     private val appContext = context.applicationContext
 
+    suspend fun savedRelease(newsId: Int): AnitubeSearchResult? =
+        mappings.findByAniTube(newsId)?.takeIf { it.pageUrl.isNotBlank() }?.let { entry ->
+            AnitubeSearchResult(newsId = entry.newsId,
+                title = entry.titleUa.ifBlank { entry.hikkaTitleUa },
+                pageUrl = entry.pageUrl)
+        }
+
     suspend fun find(
         type: TmdbMediaType,
         tmdbId: Int,

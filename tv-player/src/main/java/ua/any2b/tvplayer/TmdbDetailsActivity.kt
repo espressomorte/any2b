@@ -68,6 +68,7 @@ class TmdbDetailsActivity : ComponentActivity() {
         const val EXTRA_AUTO_PLAY_TORRENT_TOPIC = "AUTO_PLAY_TORRENT_TOPIC"
         const val EXTRA_AUTO_PLAY_TORRENT_FILE = "AUTO_PLAY_TORRENT_FILE"
         const val EXTRA_AUTO_PLAY_ANITUBE_RELEASE = "AUTO_PLAY_ANITUBE_RELEASE"
+        const val EXTRA_AUTO_PLAY_ANITUBE_PAGE_URL = "AUTO_PLAY_ANITUBE_PAGE_URL"
         const val EXTRA_AUTO_PLAY_ANITUBE_SEASON = "AUTO_PLAY_ANITUBE_SEASON"
         const val EXTRA_AUTO_PLAY_ANITUBE_VOICE = "AUTO_PLAY_ANITUBE_VOICE"
         const val EXTRA_AUTO_PLAY_ANITUBE_VOICE_NAME = "AUTO_PLAY_ANITUBE_VOICE_NAME"
@@ -501,13 +502,19 @@ class TmdbDetailsActivity : ComponentActivity() {
                 } ?: state.resolution.seasons.firstOrNull {
                     it.number == preferredAnimeSeason(state.resolution)
                 }?.releases?.firstOrNull()
-                val candidate = autoTargetAniTubeReleaseId?.let { releaseId ->
+                val targetReleaseId = autoTargetAniTubeReleaseId
+                val candidate = targetReleaseId?.let { releaseId ->
                     state.resolution.candidates.firstOrNull { it.release.newsId == releaseId }
-                } ?: seasonCandidate
+                } ?: seasonCandidate.takeIf { targetReleaseId == null }
                 if (candidate != null) {
                     autoTargetAniTubeReleaseId = candidate.release.newsId
                     autoReleaseRequested = true
                     detailsViewModel.selectAnitubeRelease(candidate.release)
+                } else if (targetReleaseId != null &&
+                    loadSavedAniTubeRelease(targetReleaseId, savedSeason ?: autoPlaySeason,
+                        intent.getStringExtra(EXTRA_AUTO_PLAY_ANITUBE_PAGE_URL))) {
+                    Log.i("WatchlistPlayback", "AniTube release absent from season candidates; " +
+                        "loading saved release directly newsId=$targetReleaseId")
                 } else failWatchlistPlayback("Не знайдено реліз AniTube для цього сезону")
             }
             is AnitubeState.Found -> {
@@ -576,17 +583,11 @@ class TmdbDetailsActivity : ComponentActivity() {
                 val savedReleaseId = autoTargetAniTubeReleaseId
                     ?: intent.getIntExtra(EXTRA_AUTO_PLAY_ANITUBE_RELEASE, -1)
                         .takeIf { it > 0 }
-                val details = (detailsViewModel.state.value as? TmdbDetailsState.Ready)?.details
-                if (savedReleaseId != null && details != null &&
-                    !autoSavedReleaseLookupStarted) {
-                    autoSavedReleaseLookupStarted = true
-                    Log.w("WatchlistPlayback", "AniList lookup failed; loading saved AniTube release directly " +
-                        "tmdb=${details.title.type.path}:${details.title.id} release=$savedReleaseId")
-                    detailsViewModel.loadSavedAnitubeRelease(savedReleaseId,
-                        savedSeason ?: autoPlaySeason,
-                        listOfNotNull(details.title.ukrainianTitle, details.title.title,
-                            details.title.englishTitle, details.title.originalTitle),
-                        if (details.title.type == TmdbMediaType.MOVIE) "MOVIE" else "TV")
+                if (savedReleaseId != null &&
+                    loadSavedAniTubeRelease(savedReleaseId, savedSeason ?: autoPlaySeason,
+                        intent.getStringExtra(EXTRA_AUTO_PLAY_ANITUBE_PAGE_URL))) {
+                    Log.w("WatchlistPlayback", "AniTube lookup failed; loading saved release directly " +
+                        "release=$savedReleaseId")
                 } else {
                     Log.e("WatchlistPlayback", "AniTube autoplay failed: ${state.message}")
                     failWatchlistPlayback(state.message)
@@ -594,6 +595,15 @@ class TmdbDetailsActivity : ComponentActivity() {
             }
             AnitubeState.Idle, AnitubeState.Searching -> Unit
         }
+    }
+
+    private fun loadSavedAniTubeRelease(releaseId: Int, season: Int?, pageUrl: String?): Boolean {
+        if (autoSavedReleaseLookupStarted || releaseId <= 0) return false
+        if (detailsViewModel.state.value !is TmdbDetailsState.Ready) return false
+        autoSavedReleaseLookupStarted = true
+        detailsViewModel.loadSavedAnitubeRelease(releaseId, pageUrl, season,
+            if (tmdbType == TmdbMediaType.MOVIE.path) "MOVIE" else "TV")
+        return true
     }
 
     private fun failWatchlistPlayback(message: String) {
@@ -812,17 +822,24 @@ class TmdbDetailsActivity : ComponentActivity() {
                     ua.any2b.tvplayer.data.AnitubeState.Found
                 val selectedTmdbSeason = title.matchedSeasonNumber
                     ?: autoPlaySeason.takeIf { title.type == TmdbMediaType.TV }
-                val selectedAnimeSeason = found?.catalog?.candidates?.firstOrNull {
-                    it.release.newsId == selectedRelease
-                }?.seasonNumber ?: intent.getIntExtra(EXTRA_AUTO_PLAY_ANITUBE_SEASON, -1)
-                    .takeIf { it > 0 } ?: found?.catalog?.preferredSeason
+                // AniTube season numbering is independent from TMDB's season numbering.
+                // On continuation, keep the explicit AniTube season carried by the player;
+                // catalog candidates can describe the TMDB-wide mapping as season 1.
+                val selectedAnimeSeason = intent
+                    .getIntExtra(EXTRA_AUTO_PLAY_ANITUBE_SEASON, -1)
+                    .takeIf { it > 0 }
+                    ?: found?.catalog?.candidates?.firstOrNull {
+                        it.release.newsId == selectedRelease
+                    }?.seasonNumber
+                    ?: found?.catalog?.preferredSeason
                 TmdbWatchHistoryStore(this).savePlaybackSelection(title.type, title.id,
                     TmdbPlaybackSelection(TmdbPlaybackSelection.Source.ANITUBE,
                         anitubeReleaseId = selectedRelease,
                         anitubeSeasonNumber = selectedAnimeSeason,
                         tmdbSeasonNumber = selectedTmdbSeason,
                         voiceIndex = voiceIndex,
-                        voiceName = found?.voices?.getOrNull(voiceIndex)?.name),
+                        voiceName = found?.voices?.getOrNull(voiceIndex)?.name,
+                        anitubePageUrl = found?.release?.pageUrl),
                     seasonNumber = selectedTmdbSeason)
                 val selectedPackage = SettingsManager(this).selectedPlayerPackage()
                 if (selectedPackage != null) {
@@ -900,6 +917,9 @@ class TmdbDetailsActivity : ComponentActivity() {
                         } == true)
                     selectedRelease?.let {
                         putExtra(PlayerActivity.EXTRA_TMDB_ANITUBE_RELEASE, it)
+                    }
+                    found?.release?.pageUrl?.let {
+                        putExtra(PlayerActivity.EXTRA_TMDB_ANITUBE_PAGE_URL, it)
                     }
                     found?.voices?.getOrNull(voiceIndex)?.name?.let {
                         putExtra(PlayerActivity.EXTRA_TMDB_ANITUBE_VOICE_NAME, it)

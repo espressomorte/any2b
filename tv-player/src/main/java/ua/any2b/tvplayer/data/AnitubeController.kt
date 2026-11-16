@@ -123,38 +123,33 @@ class AnitubeController(
         type: TmdbMediaType,
         tmdbId: Int,
         season: Int?,
-        names: List<String>,
+        pageUrl: String?,
         format: String,
         resumeProgress: TmdbEpisodeProgress?,
     ) {
         if (newsId <= 0) return
-        val lookup = Lookup(type, tmdbId, season, null, names, format, resumeProgress)
+        val lookup = Lookup(type, tmdbId, season, null, emptyList(), format, resumeProgress)
         request = lookup
         job?.cancel()
         _state.value = AnitubeState.Searching
         job = scope.launch {
-            var release: AnitubeSearchResult? = null
-            var lastError: Exception? = null
-            for (name in names.map(String::trim).filter(String::isNotBlank).distinctBy(String::lowercase)) {
-                try {
-                    release = withContext(Dispatchers.IO) { anitube.search(name) }
-                        .firstOrNull { it.newsId == newsId }
-                    if (release != null) break
-                } catch (error: CancellationException) {
-                    throw error
-                } catch (error: Exception) {
-                    lastError = error
-                }
+            val release = pageUrl?.takeIf(String::isNotBlank)?.let {
+                AnitubeSearchResult(newsId = newsId,
+                    title = "AniTube #$newsId", pageUrl = it)
+            } ?: try {
+                withContext(Dispatchers.IO) { resolver.savedRelease(newsId) }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                null
             }
-            val saved = release
-            if (saved == null) {
-                Log.w(TAG, "Saved AniTube release lookup failed newsId=$newsId tmdbId=$tmdbId",
-                    lastError)
-                _state.value = AnitubeState.Error(lastError?.message
-                    ?: "Не вдалося знайти збережений реліз AniTube #$newsId за назвами TMDB")
+            if (release == null) {
+                Log.w(TAG, "Direct AniTube URL unavailable newsId=$newsId tmdbId=$tmdbId")
+                _state.value = AnitubeState.Error(
+                    "Не знайдено пряме посилання для збереженого релізу AniTube #$newsId")
             } else {
-                Log.i(TAG, "Loaded saved AniTube release newsId=$newsId tmdbId=$tmdbId")
-                loadVoices(lookup, saved)
+                Log.i(TAG, "Loaded direct AniTube release newsId=$newsId tmdbId=$tmdbId")
+                loadVoices(lookup, release)
             }
         }
     }
