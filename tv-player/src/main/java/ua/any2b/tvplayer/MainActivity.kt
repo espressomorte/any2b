@@ -125,31 +125,9 @@ class MainActivity : ComponentActivity() {
 
     private fun openWatchlistPlayback(title: TmdbTitle, episode: TmdbEpisode?) {
         val history = TmdbWatchHistoryStore(this)
+        ContinueWatchlistPlayback(history, TmdbWatchlistStore(this)) { targetTitle, selection, episodeNumber ->
+        val playbackSeason = targetTitle.matchedSeasonNumber
         val progress = history.episodeProgress(title.type, title.id)
-        val requestedSeasonContext = episode?.seasonNumber ?: title.matchedSeasonNumber
-            ?: progress?.seasonNumber
-        val inferred = history.inferredPlaybackSelection(title.type, title.id)
-        val selection = if (requestedSeasonContext != null) {
-            history.playbackSelection(title.type, title.id, requestedSeasonContext)
-                ?: inferred?.takeIf {
-                    it.source == TmdbPlaybackSelection.Source.TORRENT ||
-                        (it.tmdbSeasonNumber ?: it.anitubeSeasonNumber) == requestedSeasonContext
-                }
-        } else history.playbackSelection(title.type, title.id) ?: inferred
-        val playbackSeason = requestedSeasonContext
-            ?: selection?.tmdbSeasonNumber ?: selection?.anitubeSeasonNumber
-        val requestedEpisode = episode?.episodeNumber ?: progress?.let {
-            if (it.progress >= 0.95f) it.episodeNumber + 1 else it.episodeNumber
-        } ?: if (title.type == TmdbMediaType.TV && selection != null) 1 else null
-        val cachedEpisode = if (episode == null && playbackSeason != null && requestedEpisode != null)
-            TmdbWatchlistStore(this).cachedEpisodes(title.id, playbackSeason)
-                ?.firstOrNull { candidate -> candidate.episodeNumber >= requestedEpisode &&
-                    candidate.airDate?.let {
-                        runCatching { java.time.LocalDate.parse(it) }.getOrNull()
-                    }?.let { !it.isAfter(java.time.LocalDate.now()) } == true }
-        else null
-        val episodeNumber = episode?.episodeNumber ?: cachedEpisode?.episodeNumber ?: requestedEpisode
-        val targetTitle = title.copy(matchedSeasonNumber = playbackSeason)
         Log.i(TAG, "Continue requested tmdb=${title.type.path}:${title.id} " +
             "episode=${playbackSeason ?: 0}x${episodeNumber ?: 0} " +
             "progress=${progress?.progress} positionMs=${progress?.positionMs} " +
@@ -189,6 +167,7 @@ class MainActivity : ComponentActivity() {
                 putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_ANITUBE_VOICE_NAME, it)
             }
         })
+        }.start(title, episode)
     }
 
 }

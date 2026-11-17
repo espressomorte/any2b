@@ -22,6 +22,11 @@ import ua.any2b.core.tmdb.TmdbEpisode
 import ua.any2b.core.tmdb.TmdbSeason
 import ua.any2b.core.tmdb.TmdbGeneralCatalog
 import ua.any2b.core.anilist.HOME_FETCH_SIZE
+import ua.any2b.core.toloka.TorrServerBasicAuth
+import ua.any2b.core.toloka.TorrServerClient
+import ua.any2b.core.toloka.TorrServerFailure
+import ua.any2b.core.toloka.TolokaReleaseMetadataParser
+import ua.any2b.core.toloka.WorkerFailure
 import ua.any2b.tvplayer.data.AniListTmdbCatalog
 import ua.any2b.tvplayer.data.AniListLocalDataMigrator
 import ua.any2b.tvplayer.data.TmdbFavoritesStore
@@ -33,6 +38,8 @@ import ua.any2b.tvplayer.data.MalTmdbCatalog
 import ua.any2b.tvplayer.data.HomeSectionSetting
 import ua.any2b.tvplayer.data.HomeRowCache
 import ua.any2b.tvplayer.data.SettingsManager
+import ua.any2b.tvplayer.data.TorrServerAuthStore
+import ua.any2b.tvplayer.data.TolokaConnections
 import ua.any2b.tvplayer.data.tmdbHomeRecommendations
 import ua.any2b.tvplayer.data.workerTmdbConnection
 import ua.any2b.tvplayer.data.TolokaRssTmdbCatalog
@@ -117,6 +124,7 @@ class TmdbLibraryViewModel(application: Application,
     private val favorites = TmdbFavoritesStore(application)
     private val localDataMigrator = AniListLocalDataMigrator(application)
     private val settings = SettingsManager(application)
+    private val torrServer = TorrServerClient()
     private val tolokaRss = TolokaRssTmdbCatalog(application)
     private val homeRows = HomeRowCache(application)
     private val _state = MutableStateFlow(TmdbLibraryState(
@@ -599,14 +607,21 @@ class TmdbLibraryViewModel(application: Application,
                     }
                     var playableEpisodes = playlistKey?.let {
                         watchlist.cachedPlayableEpisodes(title.type, title.id, it, seasonNumber)
+                    }?.takeIf { it.isNotEmpty() }
+                    if (playableEpisodes == null && selection?.source ==
+                        ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.TORRENT) {
+                        recoverTolokaEpisodes(title, selection, seasonNumber, seasons)
+                        playableEpisodes = playlistKey?.let {
+                            watchlist.cachedPlayableEpisodes(title.type, title.id, it, seasonNumber)
+                        }?.takeIf { it.isNotEmpty() }
                     }
                     var upcoming = episodes.filter {
                         it.episodeNumber >= episodeNumber && (it.hasAired() || isAniTubeSeason) &&
                             playableEpisodes?.contains(it.episodeNumber) != false
                     }
-                    if (upcoming.isEmpty() && selectedSeason == null && !isAniTubeSeason) {
-                        for (candidate in seasons.filter { it.number > 0 }
-                            .sortedByDescending { it.number }) {
+                    if (upcoming.isEmpty() && !isAniTubeSeason) {
+                        for (candidate in seasons.filter { it.number > seasonNumber }
+                            .sortedBy { it.number }) {
                             val released = seasonEpisodes(candidate.number).filter { it.hasAired() }
                             if (released.isNotEmpty()) {
                                 season = candidate
@@ -616,7 +631,7 @@ class TmdbLibraryViewModel(application: Application,
                                 playableEpisodes = playlistKey?.let {
                                     watchlist.cachedPlayableEpisodes(title.type, title.id, it,
                                         seasonNumber)
-                                }
+                                }?.takeIf { it.isNotEmpty() }
                                 if (playableEpisodes != null)
                                     upcoming = upcoming.filter {
                                         playableEpisodes?.contains(it.episodeNumber) == true
@@ -640,7 +655,7 @@ class TmdbLibraryViewModel(application: Application,
                                 (episode.episodeNumber < (progress?.episodeNumber ?: 1) ||
                                     episode.episodeNumber == progress.episodeNumber &&
                                     (progress?.progress ?: 0f) >= 0.95f)))
-                    }.filter { playableEpisodes?.contains(it.episodeNumber) != false }
+                    }
                     val visibleUpcoming = upcoming.take(12)
                     val visibleEpisodes = (watchedEpisodes + visibleUpcoming)
                         .distinctBy { it.episodeNumber }
@@ -662,6 +677,90 @@ class TmdbLibraryViewModel(application: Application,
                     updateWatchlistEpisodes(entry.title, emptyList(), false)
                 }
             }
+        }
+    }
+
+    /** Rebuilds a missing playlist episode index from TorrServer's persisted file stats. */
+    private suspend fun recoverTolokaEpisodes(
+        title: TmdbTitle,
+        selection: ua.any2b.tvplayer.data.TmdbPlaybackSelection,
+        selectedSeason: Int,
+        seasons: List<TmdbSeason>,
+    ) {
+        val topicId = selection.topicId ?: return
+        val serverUrl = settings.torrServerUrl().trimEnd('/')
+        if (serverUrl.isBlank()) return
+        val hashKey = "$serverUrl|$topicId"
+        try {
+            val credentials = TorrServerAuthStore(getApplication()).read()
+                ?.let { TorrServerBasicAuth(it.username, it.password) }
+            val hashPrefs = getApplication<Application>().getSharedPreferences(
+                "torrserver_topic_hashes", 0)
+            val savedHash = hashPrefs.getString(hashKey, null)
+            val torrent = try {
+                savedHash?.let { torrServer.get(serverUrl, it, credentials) }
+            } catch (error: TorrServerFailure.Http) {
+                if (error.status != 404) throw error
+                Log.i("WatchlistPlayback", "Saved TorrServer hash expired; reloading topic=$topicId")
+                null
+            } ?: run {
+                val bytes = try {
+                    TolokaConnections.torrent(getApplication(), topicId)
+                } catch (_: WorkerFailure.LinkExpired) {
+                    val queries = listOfNotNull(title.ukrainianTitle, title.title,
+                        title.originalTitle, title.englishTitle)
+                        .map(String::trim).filter(String::isNotBlank)
+                        .distinctBy(String::lowercase).take(4)
+                    var refreshed = false
+                    for (query in queries) {
+                        val result = TolokaConnections.search(getApplication(), query)
+                        if (result.results.any { it.id == topicId }) {
+                            refreshed = true
+                            break
+                        }
+                    }
+                    if (!refreshed) throw WorkerFailure.LinkExpired()
+                    TolokaConnections.torrent(getApplication(), topicId)
+                }
+                torrServer.upload(serverUrl, bytes, credentials).also { refreshed ->
+                    hashPrefs.edit().putString(hashKey, refreshed.hash).apply()
+                    Log.i("WatchlistPlayback", "Re-added torrent to TorrServer " +
+                        "topic=$topicId files=${refreshed.files.size}")
+                }
+            }
+            val episodesBySeason = mutableMapOf<Int, MutableSet<Int>>()
+            torrent.videoFiles.forEach { file ->
+                val metadata = TolokaReleaseMetadataParser.parse(file.name)
+                val folderSeason = file.path.substringBeforeLast('/', "")
+                    .takeIf(String::isNotBlank)?.let(TolokaReleaseMetadataParser::parse)?.season
+                val absolute = TolokaReleaseMetadataParser.mapAbsoluteEpisodes(metadata, seasons)
+                if (absolute != null) {
+                    absolute.forEach { range ->
+                        episodesBySeason.getOrPut(range.seasonNumber) { mutableSetOf() }
+                            .addAll(range.episodeStart..range.episodeEnd)
+                    }
+                } else {
+                    val season = metadata.season ?: folderSeason ?: selectedSeason
+                    val first = metadata.episodeStart ?: return@forEach
+                    val last = metadata.episodeEnd ?: first
+                    if (season > 0 && first > 0 && last >= first) {
+                        episodesBySeason.getOrPut(season) { mutableSetOf() }
+                            .addAll(first..last)
+                    }
+                }
+            }
+            if (episodesBySeason.isNotEmpty()) {
+                watchlist.savePlayableEpisodes(title.type, title.id, "torrent_$topicId",
+                    episodesBySeason)
+                Log.i("WatchlistPlayback", "Rebuilt playlist episode index from TorrServer " +
+                    "tmdb=${title.type.path}:${title.id} topic=$topicId " +
+                    "seasons=${episodesBySeason.mapValues { it.value.size }}")
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            Log.w("WatchlistPlayback", "Could not rebuild playlist episode index " +
+                "tmdb=${title.type.path}:${title.id} topic=$topicId: ${error.message}")
         }
     }
 

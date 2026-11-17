@@ -14,7 +14,9 @@ class SettingsManager(context: Context) {
         prefs.edit().putString("worker_url", value.trim().trimEnd('/')).apply()
     }
 
-    fun torrServerUrl(): String = prefs.getString("torrserver_url", "").orEmpty()
+    /** Uses the local TorrServer Matrix default until the user supplies another host. */
+    fun torrServerUrl(): String = prefs.getString("torrserver_url", "")
+        .orEmpty().ifBlank { DEFAULT_TORRSERVER_URL }
 
     fun setTorrServerUrl(value: String) {
         prefs.edit().putString("torrserver_url", value.trim().trimEnd('/')).apply()
@@ -136,6 +138,7 @@ class SettingsManager(context: Context) {
 
     private companion object {
         val homeSectionsLock = Any()
+        const val DEFAULT_TORRSERVER_URL = "http://127.0.0.1:8090"
         const val OLD_CONFIG_URL =
             "https://gist.githubusercontent.com/espressomorte/62c423c03f3f2d54a3a8721b37b0183f/raw/9c1527655734c04e2f6f2f72c116d4a657bb3003/config.txt"
         const val PREVIOUS_DEFAULT_CONFIG_URL =

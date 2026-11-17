@@ -34,6 +34,7 @@ import ua.any2b.tvplayer.data.TmdbWatchHistoryStore
 import ua.any2b.tvplayer.data.TmdbWatchlistStore
 import ua.any2b.tvplayer.data.TmdbPlaybackSelection
 import ua.any2b.tvplayer.data.AnitubeState
+import ua.any2b.tvplayer.source.PlaybackHandoff
 import ua.any2b.tvplayer.ui.AppTheme
 import ua.any2b.tvplayer.ui.TmdbDetailsScreen
 import ua.any2b.tvplayer.ui.TmdbDetailsPreparingScreen
@@ -648,7 +649,9 @@ class TmdbDetailsActivity : ComponentActivity() {
                     SettingsManager(this@TmdbDetailsActivity).torrServerUrl(),
                     credentials?.let { TorrServerBasicAuth(it.username, it.password) },
                 )
-                if (!isFinishing && !isDestroyed) launchFilePlayback(fileId, url, topicId)
+                if (!isFinishing && !isDestroyed) launchFilePlayback(
+                    PlaybackHandoff.Toloka(url, topicId, fileId,
+                        tolokaViewModel.playbackFileName(fileId)))
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -682,8 +685,11 @@ class TmdbDetailsActivity : ComponentActivity() {
             .show()
     }
 
-    private fun launchFilePlayback(fileId: Int, url: String, topicId: String) {
-        val fileName = tolokaViewModel.playbackFileName(fileId)
+    private fun launchFilePlayback(handoff: PlaybackHandoff.Toloka) {
+        val fileId = handoff.fileId
+        val url = handoff.streamUrl
+        val topicId = handoff.topicId
+        val fileName = handoff.fileName
         tolokaViewModel.reportPlaybackStatus("URL потоку сформовано для індексу $fileId. Відкриваємо плеєр…")
         val title = (detailsViewModel.state.value as? TmdbDetailsState.Ready)?.details?.title
         val fileMetadata = fileName?.let(TolokaReleaseMetadataParser::parse)
@@ -810,6 +816,10 @@ class TmdbDetailsActivity : ComponentActivity() {
         detailsViewModel.playAnitube(
             onError = { message -> Toast.makeText(this, message, Toast.LENGTH_LONG).show() },
             onSuccess = { url, voiceIndex, episodeIndex, episodeNumber, resumeProgress, backups ->
+                val handoff = PlaybackHandoff.AniTube(url, voiceIndex, episodeIndex,
+                    episodeNumber, resumeProgress, backups.map {
+                        PlaybackHandoff.BackupStream(it.embedUrl, it.voiceIndex, it.episodeIndex)
+                    })
                 if (launchingPlayer || autoPlaybackFailed || isFinishing || isDestroyed)
                     return@playAnitube
                 Log.i("WatchlistPlayback", "AniTube playback launch tmdb=$tmdbType:$tmdbId " +
@@ -828,6 +838,7 @@ class TmdbDetailsActivity : ComponentActivity() {
                 val selectedAnimeSeason = intent
                     .getIntExtra(EXTRA_AUTO_PLAY_ANITUBE_SEASON, -1)
                     .takeIf { it > 0 }
+                    ?: title.matchedAnimeSeasonNumber
                     ?: found?.catalog?.candidates?.firstOrNull {
                         it.release.newsId == selectedRelease
                     }?.seasonNumber
@@ -885,11 +896,11 @@ class TmdbDetailsActivity : ComponentActivity() {
                 }
                 returningFromAnitubePlayer = true
                 try { startActivity(Intent(this, PlayerActivity::class.java).apply {
-                    putExtra(PlayerActivity.EXTRA_STREAM_URL, url)
+                    putExtra(PlayerActivity.EXTRA_STREAM_URL, handoff.streamUrl)
                     putExtra(PlayerActivity.EXTRA_SOURCE_TYPE, PlayerActivity.SOURCE_ANITUBE_TMDB)
-                    putExtra(PlayerActivity.EXTRA_VOICE_INDEX, voiceIndex)
-                    putExtra(PlayerActivity.EXTRA_EPISODE_INDEX, episodeIndex)
-                    putExtra(PlayerActivity.EXTRA_EPISODE_NUMBER, episodeNumber)
+                    putExtra(PlayerActivity.EXTRA_VOICE_INDEX, handoff.voiceIndex)
+                    putExtra(PlayerActivity.EXTRA_EPISODE_INDEX, handoff.episodeIndex)
+                    putExtra(PlayerActivity.EXTRA_EPISODE_NUMBER, handoff.episodeNumber)
                     putExtra(PlayerActivity.EXTRA_TMDB_ID, title.id)
                     putExtra(PlayerActivity.EXTRA_TMDB_TYPE, title.type.path)
                     (title.matchedAniListId
@@ -903,7 +914,7 @@ class TmdbDetailsActivity : ComponentActivity() {
                     putExtra(PlayerActivity.EXTRA_TMDB_POSTER_URL, title.posterUrl)
                     putExtra(PlayerActivity.EXTRA_TMDB_RATING, title.rating ?: Double.NaN)
                     putExtra(PlayerActivity.EXTRA_TMDB_GENRE_IDS, title.genreIds.toIntArray())
-                    putExtra(PlayerActivity.EXTRA_TMDB_RESUME_PROGRESS, resumeProgress)
+                    putExtra(PlayerActivity.EXTRA_TMDB_RESUME_PROGRESS, handoff.resumeProgress)
                     selectedTmdbSeason?.let {
                         putExtra(PlayerActivity.EXTRA_TMDB_SEASON, it)
                     }
@@ -925,11 +936,11 @@ class TmdbDetailsActivity : ComponentActivity() {
                         putExtra(PlayerActivity.EXTRA_TMDB_ANITUBE_VOICE_NAME, it)
                     }
                     putStringArrayListExtra(PlayerActivity.EXTRA_BACKUP_EMBED_URLS,
-                        ArrayList(backups.map { it.embedUrl }))
+                        ArrayList(handoff.backupStreams.map { it.embedUrl }))
                     putExtra(PlayerActivity.EXTRA_BACKUP_VOICE_INDICES,
-                        backups.map { it.voiceIndex }.toIntArray())
+                        handoff.backupStreams.map { it.voiceIndex }.toIntArray())
                     putExtra(PlayerActivity.EXTRA_BACKUP_EPISODE_INDICES,
-                        backups.map { it.episodeIndex }.toIntArray())
+                        handoff.backupStreams.map { it.episodeIndex }.toIntArray())
                 }) } catch (_: Exception) {
                     launchingPlayer = false
                     returningFromAnitubePlayer = false

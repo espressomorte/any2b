@@ -116,6 +116,8 @@ class PlayerActivity : FragmentActivity() {
     private var introSegments: IntroDbSegments = IntroDbSegments(emptyList(), emptyList())
     private var introLookupStarted = false
     private var introPromptDismissed = false
+    private var restartPromptDismissed = false
+    private var restartPromptUntilElapsedMs = 0L
     private var nextEpisodePromptDismissed = false
     private var nextEpisodeTransitioning = false
     private var nextEpisodePreloadStarted = false
@@ -135,7 +137,7 @@ class PlayerActivity : FragmentActivity() {
         }
     }
 
-    private enum class PlayerPrompt { SKIP_INTRO, NEXT_EPISODE }
+    private enum class PlayerPrompt { RESTART_FROM_BEGINNING, SKIP_INTRO, NEXT_EPISODE }
 
     private var voiceIndex: Int = 0
     private var episodeIndex: Int = 0
@@ -313,6 +315,8 @@ class PlayerActivity : FragmentActivity() {
                                 if (!torrentResumeApplied && resumePosition != null) {
                                     exo.seekTo(resumePosition)
                                     torrentResumeApplied = true
+                                    if (resumePosition > 0L) restartPromptUntilElapsedMs =
+                                        android.os.SystemClock.elapsedRealtime() + 10_000L
                                 }
                             } else {
                                 val resumePosition = anitubeResumePositionMs(
@@ -320,6 +324,8 @@ class PlayerActivity : FragmentActivity() {
                                 if (isTmdbAnitube && !tmdbResumeApplied && resumePosition != null) {
                                     exo.seekTo(resumePosition)
                                     tmdbResumeApplied = true
+                                    if (resumePosition > 0L) restartPromptUntilElapsedMs =
+                                        android.os.SystemClock.elapsedRealtime() + 10_000L
                                 }
                             }
                             startProgressReporting()
@@ -748,6 +754,10 @@ class PlayerActivity : FragmentActivity() {
             position >= it.startMs && position < it.endMs
         }
         when {
+            !restartPromptDismissed && restartPromptUntilElapsedMs >
+                android.os.SystemClock.elapsedRealtime() ->
+                showPlayerPrompt(PlayerPrompt.RESTART_FROM_BEGINNING,
+                    restartPromptUntilElapsedMs - android.os.SystemClock.elapsedRealtime())
             intro != null && !introPromptDismissed -> showPlayerPrompt(PlayerPrompt.SKIP_INTRO)
             nextStartMs != null && position >= nextStartMs && canGoNext &&
                 !nextEpisodePromptDismissed -> showPlayerPrompt(PlayerPrompt.NEXT_EPISODE)
@@ -764,11 +774,12 @@ class PlayerActivity : FragmentActivity() {
         tolokaTopicId = intent.getStringExtra(EXTRA_TOLOKA_TOPIC_ID),
     )
 
-    private fun showPlayerPrompt(prompt: PlayerPrompt) {
+    private fun showPlayerPrompt(prompt: PlayerPrompt, timeoutMs: Long = PLAYER_PROMPT_TIMEOUT_MS) {
         if (activePlayerPrompt == prompt) return
         hidePlayerPrompt()
         activePlayerPrompt = prompt
         binding.btnSkipIntro.text = when (prompt) {
+            PlayerPrompt.RESTART_FROM_BEGINNING -> "ПОЧАТИ СПОЧАТКУ"
             PlayerPrompt.SKIP_INTRO -> "ПРОПУСТИТИ ІНТРО"
             PlayerPrompt.NEXT_EPISODE -> "Перейти до наступної"
         }
@@ -776,6 +787,7 @@ class PlayerActivity : FragmentActivity() {
         binding.btnSkipIntro.requestFocus()
         val timeout = Runnable {
             when (activePlayerPrompt) {
+                PlayerPrompt.RESTART_FROM_BEGINNING -> restartPromptDismissed = true
                 PlayerPrompt.SKIP_INTRO -> introPromptDismissed = true
                 PlayerPrompt.NEXT_EPISODE -> nextEpisodePromptDismissed = true
                 null -> Unit
@@ -783,7 +795,7 @@ class PlayerActivity : FragmentActivity() {
             hidePlayerPrompt()
         }
         promptDismissRunnable = timeout
-        mainHandler.postDelayed(timeout, PLAYER_PROMPT_TIMEOUT_MS)
+        mainHandler.postDelayed(timeout, timeoutMs)
     }
 
     private fun hidePlayerPrompt() {
@@ -796,6 +808,12 @@ class PlayerActivity : FragmentActivity() {
 
     private fun confirmActivePrompt() {
         when (activePlayerPrompt) {
+            PlayerPrompt.RESTART_FROM_BEGINNING -> {
+                restartPromptDismissed = true
+                restartPromptUntilElapsedMs = 0L
+                hidePlayerPrompt()
+                player?.seekTo(0L)
+            }
             PlayerPrompt.SKIP_INTRO -> {
                 val position = player?.currentPosition ?: return
                 val segment = introSegments.intros.firstOrNull {
@@ -849,9 +867,12 @@ class PlayerActivity : FragmentActivity() {
         }
         val animeSeason = if (source ==
             ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.ANITUBE) {
-            TmdbWatchHistoryStore(this).playbackSelection(TmdbMediaType.TV, tmdbId, season)
-                ?.anitubeSeasonNumber
-                ?: intent.getIntExtra(EXTRA_ANIME_SEASON, -1).takeIf { it > 0 }
+            // The player intent describes the stream that is actually playing. Keep its
+            // AniTube season for the next episode; the saved selection is only a fallback
+            // for older player intents that did not carry provider season metadata.
+            intent.getIntExtra(EXTRA_ANIME_SEASON, -1).takeIf { it > 0 }
+                ?: TmdbWatchHistoryStore(this).playbackSelection(TmdbMediaType.TV, tmdbId, season)
+                    ?.anitubeSeasonNumber
                 ?: season
         } else null
         val nextIntent = android.content.Intent(this, TmdbDetailsActivity::class.java).apply {
