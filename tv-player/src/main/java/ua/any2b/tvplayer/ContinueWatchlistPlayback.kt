@@ -16,8 +16,8 @@ internal class ContinueWatchlistPlayback(
 ) {
     fun start(title: TmdbTitle, episode: TmdbEpisode?) {
         val progress = history.episodeProgress(title.type, title.id)
-        val requestedSeason = episode?.seasonNumber ?: title.matchedSeasonNumber
-            ?: progress?.seasonNumber
+        val requestedSeason = watchlistSeason(episode?.seasonNumber,
+            title.matchedSeasonNumber, progress?.seasonNumber)
         val inferred = history.inferredPlaybackSelection(title.type, title.id)
         val selection = if (requestedSeason != null) {
             history.playbackSelection(title.type, title.id, requestedSeason) ?: inferred?.takeIf {
@@ -26,9 +26,8 @@ internal class ContinueWatchlistPlayback(
             }
         } else history.playbackSelection(title.type, title.id) ?: inferred
         val season = requestedSeason ?: selection?.tmdbSeasonNumber ?: selection?.anitubeSeasonNumber
-        val requestedEpisode = episode?.episodeNumber ?: progress?.let {
-            if (it.progress >= 0.95f) it.episodeNumber + 1 else it.episodeNumber
-        } ?: if (title.type == TmdbMediaType.TV && selection != null) 1 else null
+        val requestedEpisode = watchlistEpisode(episode?.episodeNumber, progress,
+            title.type, selection != null)
         val cachedEpisode = if (episode == null && season != null && requestedEpisode != null) {
             watchlist.cachedEpisodes(title.id, season)?.firstOrNull { candidate ->
                 candidate.episodeNumber >= requestedEpisode && candidate.airDate?.let {

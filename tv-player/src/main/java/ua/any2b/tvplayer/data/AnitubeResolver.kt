@@ -10,12 +10,9 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
 import ua.any2b.core.anilist.AniListAnimeLookup
 import ua.any2b.core.anilist.AniListClient
-import ua.any2b.core.anilist.AnimeDetails
-import ua.any2b.core.anilist.Title
 import ua.any2b.core.anitube.AnitubeClient
 import ua.any2b.core.anitube.AnitubeReleaseMetadata
 import ua.any2b.core.anitube.AnitubeSearchResult
-import ua.any2b.core.matcher.TitleMatcher
 import ua.any2b.core.tmdb.FribbAnimeEntry
 import ua.any2b.core.tmdb.TmdbMediaType
 import java.util.concurrent.ConcurrentHashMap
@@ -95,6 +92,7 @@ class AnitubeResolver(
     private val mappings: AnimeMappingRepository = LocalAnimeMappingRepository.get(context),
 ) {
     private val appContext = context.applicationContext
+    private val releaseMatcher = AnitubeReleaseMatcher()
 
     suspend fun savedRelease(newsId: Int): AnitubeSearchResult? =
         mappings.findByAniTube(newsId)?.takeIf { it.pageUrl.isNotBlank() }?.let { entry ->
@@ -152,7 +150,7 @@ class AnitubeResolver(
             val anime = universe[entry.aniListId] ?: return@flatMap emptyList()
             listOfNotNull(anime.title.romaji, anime.title.english, anime.title.native) + anime.synonyms
         }
-        val searchNames = prioritizedSearchNames(preferredNames, allNames, tmdbNames)
+        val searchNames = releaseMatcher.prioritizedSearchNames(preferredNames, allNames, tmdbNames)
         if (searchNames.isEmpty()) return AnitubeResolution(emptyList(), emptyList(), emptyList())
 
         val responses = searchAniTube(searchNames)
@@ -166,9 +164,9 @@ class AnitubeResolver(
         }
 
         val seasonEntries = universe.values.filter { it.format in SERIES_FORMATS }
-        val orderedSeasons = orderSeasonChain(seasonEntries, universe)
+        val orderedSeasons = releaseMatcher.orderSeasonChain(seasonEntries, universe)
         val mappedSeasonNumbers = selectedEntries.associate { it.aniListId to it.tmdbSeason }
-        val seasonNumbers = assignSeasonNumbers(orderedSeasons, mappedSeasonNumbers)
+        val seasonNumbers = releaseMatcher.assignSeasonNumbers(orderedSeasons, mappedSeasonNumbers)
         val seriesGroups = orderedSeasons.mapIndexed { index, anime ->
             val number = seasonNumbers[anime.id] ?: (index + 1)
             number to anime
@@ -180,7 +178,7 @@ class AnitubeResolver(
 
         val filmsInUniverse = universe.values.filter { it.format == "MOVIE" }
         val scores = releases.associate { release ->
-            release.newsId to bestMatch(release, universe.values, tmdbNames)
+            release.newsId to releaseMatcher.bestMatch(release, universe.values, tmdbNames)
         }
         val ambiguous = releases.filter { release ->
             isUnmarked(release.title) && filmsInUniverse.isNotEmpty() &&
@@ -194,7 +192,7 @@ class AnitubeResolver(
         val classified = releases.mapNotNull { release ->
             val match = scores[release.newsId] ?: return@mapNotNull null
             if (match.score <= 0.0 || match.titleSimilarity < MIN_TITLE_SIMILARITY) return@mapNotNull null
-            val explicitSeason = explicitSeason(release.title)
+            val explicitSeason = releaseMatcher.explicitSeason(release.title)
             val markerKind = markerKind(release.title)
             val (kind, seasonNumber) = when {
                 markerKind == MarkerKind.OTHER -> AnitubeReleaseKind.OTHER to null
@@ -351,7 +349,7 @@ class AnitubeResolver(
             frontier.chunked(LOOKUP_BATCH_SIZE).forEach { batch ->
                 anilist.animeLookups(batch).forEach { anime ->
                     records[anime.id] = anime
-                    anime.relations.filter { it.type in CHAIN_RELATIONS }
+                    anime.relations.filter { it.type in ANITUBE_CHAIN_RELATIONS }
                         .map { it.anime.id }.filter { it !in records }
                         .forEach(next::add)
                 }
@@ -376,27 +374,6 @@ class AnitubeResolver(
         }
     }
 
-    private fun prioritizedSearchNames(
-        preferredNames: List<String>, allNames: List<String>, tmdbNames: List<String>,
-    ): List<String> {
-        val prioritized = buildList {
-            // AniList's canonical title and synonyms drive search. TMDB localized names
-            // follow as aliases; remove media labels like "movie/кіно" that are not part
-            // of AniTube release titles.
-            (preferredNames + allNames + tmdbNames).forEach { name ->
-                add(cleanSearchName(name))
-                val base = stripSeasonSuffix(cleanSearchName(name))
-                if (base != cleanSearchName(name)) add(base)
-            }
-        }.map(String::trim).filter(String::isNotBlank)
-            .distinctBy(String::lowercase)
-        return prioritized.take(MAX_SEARCH_NAMES)
-    }
-
-    private fun cleanSearchName(value: String): String = value
-        .replace(Regex("(?i)(?<![\\p{L}\\p{N}])(?:movie|film|фільм|фильм|кіно)(?![\\p{L}\\p{N}])"), " ")
-        .replace(Regex("\\s+"), " ").trim().trim(':', '-', '–', '—', '.', ' ')
-
     private suspend fun loadAmbiguousMetadata(
         releases: List<AnitubeSearchResult>,
     ): Map<Int, AnitubeReleaseMetadata> {
@@ -415,82 +392,6 @@ class AnitubeResolver(
             } }.awaitAll().filterNotNull().toMap()
         }
         return cached + fetched
-    }
-
-    private fun bestMatch(
-        release: AnitubeSearchResult,
-        anime: Collection<AniListAnimeLookup>,
-        tmdbNames: List<String>,
-    ): RankedCandidate? = anime.mapNotNull { entry ->
-        val details = entry.asDetails()
-        TitleMatcher.match(details, listOf(release), tmdbNames).firstOrNull()?.let { match ->
-            RankedCandidate(entry.id, match.score, match.titleSimilarity, match.metadataMatches,
-                match.conflictingMetadata, entry.format)
-        }
-    }.maxByOrNull(RankedCandidate::score)
-
-    private fun orderSeasonChain(
-        entries: List<AniListAnimeLookup>,
-        all: Map<Int, AniListAnimeLookup>,
-    ): List<AniListAnimeLookup> {
-        val ids = entries.map(AniListAnimeLookup::id).toSet()
-        val outgoing = ids.associateWith { mutableSetOf<Int>() }.toMutableMap()
-        val indegree = ids.associateWith { 0 }.toMutableMap()
-        all.values.forEach { current ->
-            current.relations.filter { it.type in CHAIN_RELATIONS }.forEach { relation ->
-                val relatedId = relation.anime.id
-                if (current.id !in ids || relatedId !in ids) return@forEach
-                val (before, after) = when (relation.type) {
-                    "PREQUEL" -> relatedId to current.id
-                    else -> current.id to relatedId
-                }
-                if (outgoing.getValue(before).add(after)) indegree[after] = indegree.getValue(after) + 1
-            }
-        }
-        val byId = entries.associateBy(AniListAnimeLookup::id)
-        val ready = entries.filter { indegree[it.id] == 0 }.toMutableList()
-        val ordered = mutableListOf<AniListAnimeLookup>()
-        fun dateKey(anime: AniListAnimeLookup) = anime.startDate ?: anime.seasonYear?.toString().orEmpty()
-        while (ready.isNotEmpty()) {
-            ready.sortWith(compareBy<AniListAnimeLookup>({ dateKey(it) }, { it.id }))
-            val current = ready.removeAt(0)
-            ordered += current
-            outgoing.getValue(current.id).forEach { next ->
-                indegree[next] = indegree.getValue(next) - 1
-                if (indegree[next] == 0) ready += byId.getValue(next)
-            }
-        }
-        if (ordered.size < entries.size) {
-            ordered += (entries - ordered.toSet()).sortedWith(compareBy({ dateKey(it) }, { it.id }))
-        }
-        return ordered
-    }
-
-    private fun assignSeasonNumbers(
-        ordered: List<AniListAnimeLookup>,
-        mappedSeasonNumbers: Map<Int, Int?>,
-    ): Map<Int, Int> {
-        val anchors = ordered.mapIndexedNotNull { index, anime ->
-            (mappedSeasonNumbers[anime.id]?.takeIf { it > 0 }
-                ?: explicitSeason(anime.title, anime.synonyms))?.let { index to it }
-        }
-        val yearNumbers = ordered.mapNotNull(AniListAnimeLookup::seasonYear).distinct().sorted()
-            .mapIndexed { index, year -> year to index + 1 }.toMap()
-        return ordered.mapIndexed { index, anime ->
-            val sameYearAnchor = anime.seasonYear?.let { year ->
-                anchors.filter { (anchorIndex, _) -> ordered[anchorIndex].seasonYear == year }
-                    .minByOrNull { abs(it.first - index) }
-            }
-            val prior = anchors.lastOrNull { it.first <= index }
-            val following = anchors.firstOrNull { it.first > index }
-            val number = when {
-                sameYearAnchor != null -> sameYearAnchor.second
-                prior != null -> prior.second + index - prior.first
-                following != null -> following.second - (following.first - index)
-                else -> anime.seasonYear?.let(yearNumbers::get) ?: (index + 1)
-            }.coerceAtLeast(1)
-            anime.id to number
-        }.toMap()
     }
 
     private fun classifyAmbiguous(
@@ -522,48 +423,17 @@ class AnitubeResolver(
         }
     }
 
-    private fun isUnmarked(title: String) = explicitSeason(title) == null && markerKind(title) == MarkerKind.NONE
-
-    private fun explicitSeason(title: String, synonyms: List<String> = emptyList()): Int? =
-        (listOf(title) + synonyms).firstNotNullOfOrNull { name ->
-            Regex("(?i)(?:\\bseason\\s*|\\bсезон\\s*|\\bs)(\\d{1,2})\\b|\\b(\\d{1,2})(?:st|nd|rd|th)\\s+season")
-                .find(name)?.groupValues?.drop(1)?.firstNotNullOfOrNull(String::toIntOrNull)
-        }
-
-    private fun explicitSeason(title: Title, synonyms: List<String>): Int? =
-        explicitSeason(listOfNotNull(title.english, title.romaji, title.native).firstOrNull().orEmpty(),
-            synonyms + listOfNotNull(title.english, title.romaji, title.native))
-
-    private fun stripSeasonSuffix(name: String) = name.replace(
-        Regex("(?i)[\\s:,-]*(?:season\\s*\\d+|сезон\\s*\\d+|s\\d+|\\d+(?:st|nd|rd|th)\\s+season).*$"), ""
-    ).trim()
-
-    private fun AniListAnimeLookup.asDetails() = AnimeDetails(
-        id = id, title = title, cover = null, banner = null, description = null,
-        score = null, episodes = episodes, durationMinutes = durationMinutes,
-        format = format, status = status, seasonYear = seasonYear, genres = emptyList(),
-        studios = emptyList(), synonyms = synonyms,
-    )
-
-    private data class RankedCandidate(
-        val aniListId: Int,
-        val score: Double,
-        val titleSimilarity: Double,
-        val metadataMatches: Int,
-        val conflictingMetadata: Boolean,
-        val format: String?,
-    )
+    private fun isUnmarked(title: String) = releaseMatcher.explicitSeason(title) == null &&
+        markerKind(title) == MarkerKind.NONE
 
     private enum class MarkerKind { NONE, FILM, OTHER }
 
     private companion object {
-        const val MAX_SEARCH_NAMES = 16
         const val MAX_PARALLEL_SEARCHES = 4
         const val LOOKUP_BATCH_SIZE = 40
         const val MAX_RELATION_DEPTH = 8
         const val MAX_RELATION_RECORDS = 120
         val SERIES_FORMATS = setOf("TV", "TV_SHORT")
-        val CHAIN_RELATIONS = setOf("PREQUEL", "SEQUEL")
         val releaseMetadataCache = ConcurrentHashMap<Int, AnitubeReleaseMetadata>()
     }
 }

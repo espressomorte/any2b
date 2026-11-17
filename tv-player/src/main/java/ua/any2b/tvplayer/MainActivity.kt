@@ -136,7 +136,7 @@ class MainActivity : ComponentActivity() {
         val movieAniTubeStart = title.type == TmdbMediaType.MOVIE &&
             selection?.source == TmdbPlaybackSelection.Source.ANITUBE
         startActivity(TvNavigation.details(this, targetTitle,
-            torrentsOnly = selection?.source == TmdbPlaybackSelection.Source.TORRENT).apply {
+            torrentsOnly = playbackProvider(selection?.source) == PlaybackProvider.TORRENT).apply {
             putExtra(TmdbDetailsActivity.EXTRA_RETURN_TO_WATCHLIST, true)
             putExtra(TmdbDetailsActivity.EXTRA_PLAYBACK_ONLY, selection != null)
             if (episodeNumber != null && title.type == TmdbMediaType.TV) {

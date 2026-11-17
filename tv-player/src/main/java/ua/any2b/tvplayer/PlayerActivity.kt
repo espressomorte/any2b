@@ -853,51 +853,62 @@ class PlayerActivity : FragmentActivity() {
     private fun launchNextEpisode(): Boolean {
         if (nextEpisodeTransitioning) return true
         if (!canGoNextEpisode()) return false
-        val tmdbId = intent.getIntExtra(EXTRA_TMDB_ID, -1).takeIf { it > 0 } ?: return false
-        val type = intent.getStringExtra(EXTRA_TMDB_TYPE)
-            ?.takeIf { it == TmdbMediaType.TV.path } ?: return false
-        val nextEpisode = nextEpisodeNumber(
-            intent.getIntExtra(EXTRA_TMDB_EPISODE, episodeNumber), canAdvance = true)
-            ?: return false
-        val season = intent.getIntExtra(EXTRA_TMDB_SEASON, -1).takeIf { it > 0 } ?: return false
         val source = when {
             isToloka -> ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.TORRENT
             isTmdbAnitube -> ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.ANITUBE
             else -> return false
         }
-        val animeSeason = if (source ==
-            ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.ANITUBE) {
-            // The player intent describes the stream that is actually playing. Keep its
-            // AniTube season for the next episode; the saved selection is only a fallback
-            // for older player intents that did not carry provider season metadata.
-            intent.getIntExtra(EXTRA_ANIME_SEASON, -1).takeIf { it > 0 }
-                ?: TmdbWatchHistoryStore(this).playbackSelection(TmdbMediaType.TV, tmdbId, season)
-                    ?.anitubeSeasonNumber
-                ?: season
+        val mediaType = TmdbMediaType.entries.firstOrNull {
+            it.path == intent.getStringExtra(EXTRA_TMDB_TYPE)
+        } ?: return false
+        val tmdbId = intent.getIntExtra(EXTRA_TMDB_ID, -1)
+        val season = intent.getIntExtra(EXTRA_TMDB_SEASON, -1).takeIf { it > 0 }
+        val savedAnimeSeason = if (source ==
+            ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.ANITUBE && tmdbId > 0 && season != null) {
+            TmdbWatchHistoryStore(this).playbackSelection(mediaType, tmdbId, season)?.anitubeSeasonNumber
         } else null
+        val request = nextEpisodePlaybackRequest(
+            tmdbId = tmdbId,
+            mediaType = mediaType,
+            season = season,
+            currentEpisode = intent.getIntExtra(EXTRA_TMDB_EPISODE, episodeNumber).takeIf { it > 0 },
+            source = source,
+            nextEpisodeAvailable = intent.getBooleanExtra(EXTRA_NEXT_EPISODE_AVAILABLE, false),
+            torrentTopicId = intent.getStringExtra(EXTRA_TOLOKA_TOPIC_ID),
+            currentAnimeSeason = intent.getIntExtra(EXTRA_ANIME_SEASON, -1).takeIf { it > 0 },
+            savedAnimeSeason = savedAnimeSeason,
+            releaseId = intent.getIntExtra(EXTRA_TMDB_ANITUBE_RELEASE, -1).takeIf { it > 0 },
+            pageUrl = intent.getStringExtra(EXTRA_TMDB_ANITUBE_PAGE_URL),
+            voiceIndex = voiceIndex,
+            voiceName = intent.getStringExtra(EXTRA_TMDB_ANITUBE_VOICE_NAME),
+        ) ?: return false
         val nextIntent = android.content.Intent(this, TmdbDetailsActivity::class.java).apply {
-            putExtra(TmdbDetailsActivity.EXTRA_TMDB_ID, tmdbId)
-            putExtra(TmdbDetailsActivity.EXTRA_TMDB_TYPE, type)
-            putExtra(TmdbDetailsActivity.EXTRA_TMDB_SEASON, season)
-            putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_EPISODE, nextEpisode)
-            putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_SOURCE, source.name)
+            putExtra(TmdbDetailsActivity.EXTRA_TMDB_ID, request.tmdbId)
+            putExtra(TmdbDetailsActivity.EXTRA_TMDB_TYPE, mediaType.path)
+            putExtra(TmdbDetailsActivity.EXTRA_TMDB_SEASON, request.season)
+            putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_EPISODE, request.episode)
+            putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_SOURCE, request.source.name)
             putExtra(TmdbDetailsActivity.EXTRA_RETURN_TO_WATCHLIST, true)
             putExtra(TmdbDetailsActivity.EXTRA_PLAYBACK_ONLY, true)
-            if (source == ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.TORRENT) {
-                intent.getStringExtra(EXTRA_TOLOKA_TOPIC_ID)?.let {
-                    putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_TORRENT_TOPIC, it)
+            when (val sourceData = request.sourceData) {
+                is NextEpisodeSource.Torrent -> {
+                    putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_TORRENT_TOPIC,
+                        sourceData.topicId)
                 }
-            } else {
-                putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_ANITUBE_SEASON,
-                    animeSeason ?: season)
-                putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_ANITUBE_RELEASE,
-                    intent.getIntExtra(EXTRA_TMDB_ANITUBE_RELEASE, -1))
-                intent.getStringExtra(EXTRA_TMDB_ANITUBE_PAGE_URL)?.let {
-                    putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_ANITUBE_PAGE_URL, it)
-                }
-                putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_ANITUBE_VOICE, voiceIndex)
-                intent.getStringExtra(EXTRA_TMDB_ANITUBE_VOICE_NAME)?.let {
-                    putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_ANITUBE_VOICE_NAME, it)
+                is NextEpisodeSource.AniTube -> {
+                    putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_ANITUBE_SEASON,
+                        sourceData.animeSeason)
+                    sourceData.releaseId?.let {
+                        putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_ANITUBE_RELEASE, it)
+                    }
+                    sourceData.pageUrl?.let {
+                        putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_ANITUBE_PAGE_URL, it)
+                    }
+                    putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_ANITUBE_VOICE,
+                        sourceData.voiceIndex)
+                    sourceData.voiceName?.let {
+                        putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_ANITUBE_VOICE_NAME, it)
+                    }
                 }
             }
         }

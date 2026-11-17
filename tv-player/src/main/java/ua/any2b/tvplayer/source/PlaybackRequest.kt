@@ -1,24 +1,26 @@
 package ua.any2b.tvplayer.source
 
-/** Provider-specific data after a source has prepared a playable stream. */
-sealed interface PlaybackHandoff {
+/** A source-specific request for the shared player. */
+sealed interface PlaybackRequest {
     val streamUrl: String
 
-    data class Toloka(
+    /** A file prepared by TorrServer from a selected torrent. */
+    data class TorrentFile(
         override val streamUrl: String,
         val topicId: String,
         val fileId: Int,
         val fileName: String?,
-    ) : PlaybackHandoff
+    ) : PlaybackRequest
 
-    data class AniTube(
+    /** A resolved online stream with the AniTube track and fallback context. */
+    data class OnlineStream(
         override val streamUrl: String,
         val voiceIndex: Int,
         val episodeIndex: Int,
         val episodeNumber: Int,
         val resumeProgress: Float,
         val backupStreams: List<BackupStream> = emptyList(),
-    ) : PlaybackHandoff
+    ) : PlaybackRequest
 
     data class BackupStream(
         val embedUrl: String,

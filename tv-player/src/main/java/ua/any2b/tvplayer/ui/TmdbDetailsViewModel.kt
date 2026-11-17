@@ -19,8 +19,10 @@ import ua.any2b.tvplayer.data.TmdbFavoritesStore
 import ua.any2b.tvplayer.data.TmdbWatchHistoryStore
 import ua.any2b.tvplayer.data.TmdbWatchlistStore
 import ua.any2b.tvplayer.data.AnitubeController
+import ua.any2b.tvplayer.data.PlaybackDependencies
 import ua.any2b.tvplayer.data.AniListAvailability
 import ua.any2b.tvplayer.data.TmdbEpisodeProgress
+import ua.any2b.tvplayer.source.PlaybackRequest
 import ua.any2b.core.anitube.AnitubeSearchResult
 import ua.any2b.tvplayer.data.workerTmdbConnection
 import ua.any2b.tvplayer.data.ExplicitRelatedCatalog
@@ -47,6 +49,7 @@ sealed interface TmdbRelatedState {
 class TmdbDetailsViewModel(
     application: Application,
     private val savedState: SavedStateHandle,
+    private val playbackDependencies: PlaybackDependencies,
 ) : AndroidViewModel(application) {
     private val history = TmdbSearchHistoryStore(application)
     private val watchHistory = TmdbWatchHistoryStore(application)
@@ -56,7 +59,7 @@ class TmdbDetailsViewModel(
     private val explicitRelated = ExplicitRelatedCatalog(application)
     private val _state = MutableStateFlow<TmdbDetailsState>(TmdbDetailsState.Loading)
     val state: StateFlow<TmdbDetailsState> = _state
-    private val anitubeController = AnitubeController(application, viewModelScope)
+    private val anitubeController = playbackDependencies.createAnitubeController(viewModelScope)
     val anitubeState = anitubeController.state
     val aniListAvailability = anitubeController.aniListAvailability
     private var loadedKey: Pair<TmdbMediaType, Int>? = null
@@ -273,8 +276,7 @@ class TmdbDetailsViewModel(
 
     fun playAnitube(
         onError: (String) -> Unit,
-        onSuccess: (String, Int, Int, Int, Float,
-            List<ua.any2b.tvplayer.data.AnitubeStreamFallback>) -> Unit,
+        onSuccess: (PlaybackRequest.OnlineStream) -> Unit,
     ) = anitubeController.resolveSelectedStream(onError, onSuccess)
 
     override fun onCleared() {

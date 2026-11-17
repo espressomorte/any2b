@@ -1,6 +1,5 @@
 package ua.any2b.tvplayer.data
 
-import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -17,6 +16,7 @@ import ua.any2b.core.anitube.playableVoices
 import ua.any2b.core.anitube.sameStudioEpisodeSources
 import ua.any2b.core.extractor.StreamResolver
 import ua.any2b.core.tmdb.TmdbMediaType
+import ua.any2b.tvplayer.source.PlaybackRequest
 
 sealed interface AnitubeState {
     data object Idle : AnitubeState
@@ -42,11 +42,10 @@ data class AnitubeStreamFallback(val embedUrl: String, val voiceIndex: Int, val 
 
 /** Owns AniTube lookup and playback state for a single TMDB title. */
 class AnitubeController(
-    context: Context,
     private val scope: CoroutineScope,
-    private val resolver: AnitubeResolver = AnitubeResolver(context.applicationContext),
-    private val anitube: AnitubeClient = AnitubeClient(),
-    private val streamResolver: StreamResolver = StreamResolver(),
+    private val resolver: AnitubeResolver,
+    private val anitube: AnitubeClient,
+    private val streamResolver: StreamResolver,
 ) {
     private val _state = MutableStateFlow<AnitubeState>(AnitubeState.Idle)
     val state: StateFlow<AnitubeState> = _state
@@ -186,7 +185,7 @@ class AnitubeController(
 
     fun resolveSelectedStream(
         onError: (String) -> Unit,
-        onSuccess: (String, Int, Int, Int, Float, List<AnitubeStreamFallback>) -> Unit,
+        onSuccess: (PlaybackRequest.OnlineStream) -> Unit,
     ) {
         val found = _state.value as? AnitubeState.Found ?: return
         val sources = sameStudioEpisodeSources(found.voices,
@@ -210,8 +209,16 @@ class AnitubeController(
                             selectedVoiceIndex = source.voiceIndex,
                             selectedEpisodeIndex = source.episodeIndex)
                     val episodeNumber = found.voices[source.voiceIndex].episodes[source.episodeIndex].episodeNumber
-                    onSuccess(stream.streamUrl, source.voiceIndex, source.episodeIndex,
-                        episodeNumber, found.resumeProgress, sources.drop(sourceIndex + 1))
+                    onSuccess(PlaybackRequest.OnlineStream(
+                        streamUrl = stream.streamUrl,
+                        voiceIndex = source.voiceIndex,
+                        episodeIndex = source.episodeIndex,
+                        episodeNumber = episodeNumber,
+                        resumeProgress = found.resumeProgress,
+                        backupStreams = sources.drop(sourceIndex + 1).map {
+                            PlaybackRequest.BackupStream(it.embedUrl, it.voiceIndex, it.episodeIndex)
+                        },
+                    ))
                     return@launch
                 } catch (error: CancellationException) {
                     throw error

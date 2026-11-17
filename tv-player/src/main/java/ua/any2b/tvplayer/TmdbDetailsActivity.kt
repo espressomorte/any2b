@@ -20,6 +20,10 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.core.tween
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.createSavedStateHandle
+import androidx.lifecycle.viewmodel.CreationExtras
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import ua.any2b.core.tmdb.TmdbEpisode
@@ -30,11 +34,12 @@ import ua.any2b.tvplayer.data.ExternalVideoPlayers
 import ua.any2b.tvplayer.data.SettingsManager
 import ua.any2b.tvplayer.data.TorrServerAuthStore
 import ua.any2b.tvplayer.data.TolokaPlaybackStore
+import ua.any2b.tvplayer.data.PlaybackDependencies
 import ua.any2b.tvplayer.data.TmdbWatchHistoryStore
 import ua.any2b.tvplayer.data.TmdbWatchlistStore
 import ua.any2b.tvplayer.data.TmdbPlaybackSelection
 import ua.any2b.tvplayer.data.AnitubeState
-import ua.any2b.tvplayer.source.PlaybackHandoff
+import ua.any2b.tvplayer.source.PlaybackRequest
 import ua.any2b.tvplayer.ui.AppTheme
 import ua.any2b.tvplayer.ui.TmdbDetailsScreen
 import ua.any2b.tvplayer.ui.TmdbDetailsPreparingScreen
@@ -77,37 +82,33 @@ class TmdbDetailsActivity : ComponentActivity() {
         const val EXTRA_PLAYBACK_ONLY = "PLAYBACK_ONLY"
     }
 
-    private val detailsViewModel: TmdbDetailsViewModel by viewModels()
+    private val detailsViewModel: TmdbDetailsViewModel by viewModels {
+        object : ViewModelProvider.Factory {
+            override fun <T : ViewModel> create(
+                modelClass: Class<T>,
+                extras: CreationExtras,
+            ): T {
+                require(modelClass.isAssignableFrom(TmdbDetailsViewModel::class.java))
+                @Suppress("UNCHECKED_CAST")
+                return TmdbDetailsViewModel(application, extras.createSavedStateHandle(),
+                    PlaybackDependencies(application)) as T
+            }
+        }
+    }
     private val tolokaViewModel: TolokaSearchViewModel by viewModels()
     private val torrServeLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { tolokaViewModel.retryTorrServer() }
     private val artworkViewModel: FanartArtworkViewModel by viewModels()
-    private var launchingPlayer = false
     private val torrServerProbe = TorrServerProbe()
-    private var returningFromAnitubePlayer = false
     private var openedTopics by mutableStateOf(emptySet<String>())
     private var openedFiles by mutableStateOf(emptySet<Int>())
     private var selectedTopicId: String? = null
     private var tmdbId = -1
     private var tmdbType = ""
-    private var autoPlaybackStarted = false
-    private var autoPlaybackFailed = false
-    private var autoReleaseRequested = false
-    private var autoSavedReleaseLookupStarted = false
-    private var autoTargetAniTubeReleaseId: Int? = null
-    private var pendingVimuPlayback: PendingVimuPlayback? = null
-
-    private data class PendingVimuPlayback(
-        val title: ua.any2b.core.tmdb.TmdbTitle,
-        val source: TmdbPlaybackSelection.Source,
-        val topicId: String? = null,
-        val fileId: Int? = null,
-        val episodeNumber: Int? = null,
-        val seasonNumber: Int? = null,
-        val voiceIndex: Int = 0,
-        val episodeIndex: Int = 0,
-    )
+    private val playbackCoordinator = PlaybackCoordinator()
+    private var playbackScenarioId: PlaybackScenarioId? = null
+    private var pendingVimuPlayback: ExternalPlaybackContext? = null
 
     private val vimuPlayerLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult(), ::onVimuPlayerResult)
@@ -154,7 +155,7 @@ class TmdbDetailsActivity : ComponentActivity() {
                 val id = state.getInt("vimu_title_id", -1)
                 val name = state.getString("vimu_title_name").orEmpty()
                 if (type == null || source == null || id <= 0 || name.isBlank()) null
-                else PendingVimuPlayback(
+                else ExternalPlaybackContext(
                     ua.any2b.core.tmdb.TmdbTitle(id, type, name,
                         state.getString("vimu_original_title"),
                         state.getInt("vimu_year", 0).takeIf { it > 0 },
@@ -175,6 +176,7 @@ class TmdbDetailsActivity : ComponentActivity() {
         }
         tmdbId = id
         tmdbType = type.path
+        playbackScenarioId = playbackCoordinator.begin()
         val query = intent.getStringExtra(EXTRA_SEARCH_QUERY).orEmpty()
         val preferredTitle = intent.getStringExtra(EXTRA_PREFERRED_TITLE)
         val originalLanguage = intent.getStringExtra(EXTRA_ORIGINAL_LANGUAGE)
@@ -229,13 +231,24 @@ class TmdbDetailsActivity : ComponentActivity() {
                 LaunchedEffect(detailsState, intent.getBooleanExtra(EXTRA_PLAYBACK_ONLY, false)) {
                     if (intent.getBooleanExtra(EXTRA_PLAYBACK_ONLY, false) &&
                         detailsState is TmdbDetailsState.Error) {
+                        playbackScenarioId?.let {
+                            playbackCoordinator.dispatch(PlaybackScenarioEvent.Failed(it))
+                        }
                         failWatchlistPlayback((detailsState as TmdbDetailsState.Error).message)
+                    }
+                }
+                LaunchedEffect(readyDetails?.title?.id) {
+                    if (readyDetails != null) playbackScenarioId?.let {
+                        playbackCoordinator.dispatch(PlaybackScenarioEvent.DetailsReady(it))
                     }
                 }
                 LaunchedEffect(tolokaState.transfer, readyDetails?.title?.id) {
                     val details = readyDetails ?: return@LaunchedEffect
                     val files = (tolokaState.transfer as? TolokaTransferState.Files)
                         ?.torrent?.videoFiles ?: return@LaunchedEffect
+                    playbackScenarioId?.let {
+                        playbackCoordinator.dispatch(PlaybackScenarioEvent.TorrentFilesReady(it))
+                    }
                     val topicId = files.firstOrNull()?.id
                         ?.let(tolokaViewModel::playbackTopicId) ?: return@LaunchedEffect
                     val progress = TmdbWatchHistoryStore(this@TmdbDetailsActivity)
@@ -304,39 +317,55 @@ class TmdbDetailsActivity : ComponentActivity() {
                     readyDetails?.title?.id) {
                     val savedFileId = intent.getIntExtra(EXTRA_AUTO_PLAY_TORRENT_FILE, -1)
                         .takeIf { it > 0 }
-                    if (autoPlaySource == TmdbPlaybackSelection.Source.TORRENT.name &&
+                    val source = TmdbPlaybackSelection.Source.entries.firstOrNull {
+                        it.name == autoPlaySource
+                    }
+                    if (source == TmdbPlaybackSelection.Source.ANITUBE) playbackScenarioId?.let {
+                        playbackCoordinator.dispatch(PlaybackScenarioEvent.AniTubeStateChanged(it))
+                    }
+                    if (source == TmdbPlaybackSelection.Source.TORRENT &&
+                        tolokaState.transfer !is TolokaTransferState.Files) playbackScenarioId?.let {
+                        playbackCoordinator.dispatch(PlaybackScenarioEvent.WaitingForTorrent(it))
+                    }
+                    if (source == TmdbPlaybackSelection.Source.TORRENT &&
                         intent.getBooleanExtra(EXTRA_PLAYBACK_ONLY, false) &&
                         tolokaState.transfer is TolokaTransferState.Error &&
                         !(tolokaState.transfer as TolokaTransferState.Error).torrServerUnavailable) {
                         failWatchlistPlayback((tolokaState.transfer as TolokaTransferState.Error).message)
                         return@LaunchedEffect
                     }
-                    if (autoPlaybackStarted || (autoPlayEpisode <= 0 && savedFileId == null) ||
-                        readyDetails == null)
-                        return@LaunchedEffect
-                    when (autoPlaySource) {
-                        TmdbPlaybackSelection.Source.TORRENT.name -> {
-                            if (tolokaState.transfer is TolokaTransferState.Files) {
-                                val fileId = savedFileId?.takeIf {
-                                    tolokaViewModel.playbackUrl(it) != null
-                                } ?: autoPlayEpisode.takeIf { it > 0 }?.let {
-                                    tolokaViewModel.playbackFileId(autoPlaySeason, it)
-                                }
-                                if (fileId != null) {
-                                    autoPlaybackStarted = true
-                                    openFile(fileId)
-                                } else if (!autoPlaybackFailed) {
-                                    Log.w("WatchlistPlayback", "Episode file unresolved " +
-                                        "tmdb=$tmdbType:$tmdbId season=$autoPlaySeason " +
-                                        "episode=$autoPlayEpisode files=" +
-                                        (tolokaState.transfer as TolokaTransferState.Files)
-                                            .torrent.videoFiles.take(20).joinToString { it.path })
-                                    failWatchlistPlayback("У вибраному torrent не знайдено потрібний відеофайл")
-                                }
-                            }
-                        }
-                        TmdbPlaybackSelection.Source.ANITUBE.name ->
+                    val torrentFilesReady = tolokaState.transfer is TolokaTransferState.Files
+                    val episodeFileId = autoPlayEpisode.takeIf { it > 0 }?.let {
+                        tolokaViewModel.playbackFileId(autoPlaySeason, it)
+                    }
+                    when (val decision = playbackCoordinator.decideAutoPlayback(
+                        request = AutoPlaybackRequest(source, autoPlayEpisode, savedFileId),
+                        detailsReady = readyDetails != null,
+                        torrentFilesReady = torrentFilesReady,
+                        savedFileAvailable = savedFileId?.let {
+                            tolokaViewModel.playbackUrl(it) != null
+                        } == true,
+                        episodeFileId = episodeFileId,
+                        alreadyStarted = playbackCoordinator.launchPending || playbackCoordinator.phase in setOf(
+                            PlaybackScenarioPhase.PLAYER_ACTIVE,
+                            PlaybackScenarioPhase.RETURNING_FROM_PLAYER,
+                            PlaybackScenarioPhase.COMPLETE),
+                        failed = playbackCoordinator.phase == PlaybackScenarioPhase.FAILED,
+                    )) {
+                        AutoPlaybackDecision.StartAniTube ->
                             continueWatchlistAnitubeEpisode(anitubeState)
+                        is AutoPlaybackDecision.StartTorrent -> {
+                            openFile(decision.fileId)
+                        }
+                        AutoPlaybackDecision.MissingTorrentFile -> {
+                            Log.w("WatchlistPlayback", "Episode file unresolved " +
+                                "tmdb=$tmdbType:$tmdbId season=$autoPlaySeason " +
+                                "episode=$autoPlayEpisode files=" +
+                                (tolokaState.transfer as? TolokaTransferState.Files)
+                                    ?.torrent?.videoFiles?.take(20)?.joinToString { it.path })
+                            failWatchlistPlayback("У вибраному torrent не знайдено потрібний відеофайл")
+                        }
+                        AutoPlaybackDecision.None, AutoPlaybackDecision.Wait -> Unit
                     }
                 }
                 LaunchedEffect(readyDetails?.title?.type, readyDetails?.title?.id,
@@ -438,10 +467,13 @@ class TmdbDetailsActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        launchingPlayer = false
         refreshPlaybackMarks()
-        if (returningFromAnitubePlayer) {
-            returningFromAnitubePlayer = false
+        val returnedFromPlayer = if (playbackCoordinator.phase == PlaybackScenarioPhase.PLAYER_ACTIVE) {
+            playbackScenarioId?.let {
+                playbackCoordinator.playerReturned(it)
+            } == true
+        } else false
+        if (returnedFromPlayer && playbackCoordinator.activeSource == TmdbPlaybackSelection.Source.ANITUBE) {
             val title = (detailsViewModel.state.value as? TmdbDetailsState.Ready)?.details?.title
             if (title != null) {
                 val progress = TmdbWatchHistoryStore(this).episodeProgress(title.type, title.id)
@@ -453,21 +485,21 @@ class TmdbDetailsActivity : ComponentActivity() {
     @Suppress("DEPRECATION")
     override fun onBackPressed() {
         Log.i("WatchlistPlayback", "Playback flow cancelled by system back tmdb=$tmdbType:$tmdbId " +
-            "autoplayStarted=$autoPlaybackStarted")
+            "phase=${playbackCoordinator.phase}")
         cancelWatchlistAutoplay()
         super.onBackPressed()
     }
 
     private fun handleDetailsBack() {
         Log.i("WatchlistPlayback", "Playback flow cancelled by back tmdb=$tmdbType:$tmdbId " +
-            "autoplayStarted=$autoPlaybackStarted")
+            "phase=${playbackCoordinator.phase}")
         cancelWatchlistAutoplay()
         finish()
     }
 
     private fun cancelWatchlistAutoplay() {
         if (intent.getBooleanExtra(EXTRA_RETURN_TO_WATCHLIST, false))
-            autoPlaybackFailed = true
+            playbackScenarioId?.let { playbackCoordinator.dispatch(PlaybackScenarioEvent.Failed(it)) }
     }
 
     private fun refreshPlaybackMarks() {
@@ -483,133 +515,55 @@ class TmdbDetailsActivity : ComponentActivity() {
     }
 
     private fun continueWatchlistAnitubeEpisode(state: AnitubeState) {
-        if (autoPlaybackStarted || autoPlaybackFailed || autoPlayEpisode <= 0) return
+        if (playbackCoordinator.phase == PlaybackScenarioPhase.FAILED || autoPlayEpisode <= 0) return
         Log.i("WatchlistPlayback", "AniTube autoplay state=${state.javaClass.simpleName} " +
             "tmdb=$tmdbType:$tmdbId season=$autoPlaySeason episode=$autoPlayEpisode")
-        val savedSeason = intent.getIntExtra(EXTRA_AUTO_PLAY_ANITUBE_SEASON, -1)
+        val animeSeason = intent.getIntExtra(EXTRA_AUTO_PLAY_ANITUBE_SEASON, -1)
             .takeIf { it > 0 }
-        val requestedRelease = intent.getIntExtra(EXTRA_AUTO_PLAY_ANITUBE_RELEASE, -1)
+        val savedRelease = intent.getIntExtra(EXTRA_AUTO_PLAY_ANITUBE_RELEASE, -1)
             .takeIf { it > 0 }
-        val animeSeason = savedSeason
-        fun preferredAnimeSeason(resolution: ua.any2b.tvplayer.data.AnitubeResolution) =
-            animeSeason ?: resolution.preferredSeason ?: autoPlaySeason
-        if (autoTargetAniTubeReleaseId == null) autoTargetAniTubeReleaseId = requestedRelease
-        when (state) {
-            is AnitubeState.Catalog -> {
-                val seasonCandidate = if (tmdbType == TmdbMediaType.MOVIE.path) {
-                    state.resolution.confidentBest
-                } else state.resolution.candidates.firstOrNull {
-                    it.seasonNumber == preferredAnimeSeason(state.resolution)
-                } ?: state.resolution.seasons.firstOrNull {
-                    it.number == preferredAnimeSeason(state.resolution)
-                }?.releases?.firstOrNull()
-                val targetReleaseId = autoTargetAniTubeReleaseId
-                val candidate = targetReleaseId?.let { releaseId ->
-                    state.resolution.candidates.firstOrNull { it.release.newsId == releaseId }
-                } ?: seasonCandidate.takeIf { targetReleaseId == null }
-                if (candidate != null) {
-                    autoTargetAniTubeReleaseId = candidate.release.newsId
-                    autoReleaseRequested = true
-                    detailsViewModel.selectAnitubeRelease(candidate.release)
-                } else if (targetReleaseId != null &&
-                    loadSavedAniTubeRelease(targetReleaseId, savedSeason ?: autoPlaySeason,
-                        intent.getStringExtra(EXTRA_AUTO_PLAY_ANITUBE_PAGE_URL))) {
-                    Log.i("WatchlistPlayback", "AniTube release absent from season candidates; " +
-                        "loading saved release directly newsId=$targetReleaseId")
-                } else failWatchlistPlayback("Не знайдено реліз AniTube для цього сезону")
+        val title = (detailsViewModel.state.value as? TmdbDetailsState.Ready)?.details?.title
+            ?: return
+        val mediaType = TmdbMediaType.entries.firstOrNull { it.path == tmdbType }
+            ?: return
+        val action = playbackCoordinator.onAniTubeState(
+            ua.any2b.tvplayer.data.AniTubeWatchlistRequest(
+                mediaType = mediaType,
+                tmdbSeason = autoPlaySeason,
+                animeSeason = animeSeason,
+                episodeNumber = autoPlayEpisode,
+                savedReleaseId = savedRelease,
+                savedReleasePageUrl = intent.getStringExtra(EXTRA_AUTO_PLAY_ANITUBE_PAGE_URL),
+                savedVoiceIndex = intent.getIntExtra(EXTRA_AUTO_PLAY_ANITUBE_VOICE, 0),
+                savedVoiceName = intent.getStringExtra(EXTRA_AUTO_PLAY_ANITUBE_VOICE_NAME),
+                savedProgress = TmdbWatchHistoryStore(this).episodeProgress(title.type, title.id),
+            ), state,
+        )
+        when (action) {
+            ua.any2b.tvplayer.data.AniTubeWatchlistAction.None -> Unit
+            is ua.any2b.tvplayer.data.AniTubeWatchlistAction.SelectRelease ->
+                detailsViewModel.selectAnitubeRelease(action.candidate.release)
+            is ua.any2b.tvplayer.data.AniTubeWatchlistAction.LoadSavedRelease -> {
+                Log.i("WatchlistPlayback", "Loading saved AniTube release newsId=${action.releaseId}")
+                detailsViewModel.loadSavedAnitubeRelease(action.releaseId, action.pageUrl,
+                    action.season, if (mediaType == TmdbMediaType.MOVIE) "MOVIE" else "TV")
             }
-            is AnitubeState.Found -> {
-                if (autoTargetAniTubeReleaseId == null) {
-                    autoTargetAniTubeReleaseId = if (tmdbType == TmdbMediaType.MOVIE.path) {
-                        state.catalog?.confidentBest?.release?.newsId
-                    } else state.catalog?.let { catalog -> catalog.candidates.firstOrNull {
-                        it.seasonNumber == preferredAnimeSeason(catalog)
-                    }?.release?.newsId }
-                }
-                val targetReleaseId = autoTargetAniTubeReleaseId
-                val currentSeason = state.catalog?.candidates?.firstOrNull {
-                    it.release.newsId == state.release.newsId
-                }?.seasonNumber
-                if (tmdbType != TmdbMediaType.MOVIE.path && targetReleaseId == null && currentSeason != null &&
-                    currentSeason != state.catalog?.let(::preferredAnimeSeason)) {
-                    failWatchlistPlayback("Не знайдено реліз AniTube для цього сезону")
-                    return
-                }
-                if (targetReleaseId != null && state.release.newsId != targetReleaseId) {
-                    val candidate = state.catalog?.candidates?.firstOrNull {
-                        it.release.newsId == targetReleaseId
-                    }
-                    if (candidate != null && !autoReleaseRequested) {
-                        autoReleaseRequested = true
-                        detailsViewModel.selectAnitubeRelease(candidate.release)
-                    } else if (candidate == null) {
-                        failWatchlistPlayback("Збережений реліз AniTube більше не знайдено")
-                    }
-                    return
-                }
-                val savedVoiceName = intent.getStringExtra(EXTRA_AUTO_PLAY_ANITUBE_VOICE_NAME)
-                val voiceIndex = if (savedVoiceName != null) {
-                    state.voices.indexOfFirst { it.name.equals(savedVoiceName, ignoreCase = true) }
-                } else intent.getIntExtra(EXTRA_AUTO_PLAY_ANITUBE_VOICE, 0)
-                if (voiceIndex !in state.voices.indices) {
-                    failWatchlistPlayback("Збережену озвучку AniTube більше не знайдено")
-                    return
-                }
-                detailsViewModel.selectAnitubeVoice(voiceIndex)
-                val selected = detailsViewModel.anitubeState.value as? AnitubeState.Found
-                    ?: return
-                val episodeIndex = selected.voices[voiceIndex].episodes.indexOfFirst {
-                    it.episodeNumber == autoPlayEpisode
-                }.takeIf { it >= 0 } ?: if (tmdbType == TmdbMediaType.MOVIE.path)
-                    selected.voices[voiceIndex].episodes.indices.firstOrNull() ?: -1 else -1
-                if (episodeIndex < 0) {
-                    failWatchlistPlayback("У вибраній озвучці не знайдено цю серію")
-                    return
-                }
-                detailsViewModel.selectAnitubeEpisode(episodeIndex)
-                val tmdbTitle = (detailsViewModel.state.value as? TmdbDetailsState.Ready)
-                    ?.details?.title ?: return
-                val savedProgress = TmdbWatchHistoryStore(this).episodeProgress(
-                    tmdbTitle.type, tmdbTitle.id)
-                if (savedProgress?.voiceIndex == voiceIndex &&
-                    savedProgress.episodeNumber == autoPlayEpisode &&
-                    savedProgress.seasonNumber == autoPlaySeason) {
-                    detailsViewModel.restoreAnitubeProgress(savedProgress)
-                }
-                autoPlaybackStarted = true
+            is ua.any2b.tvplayer.data.AniTubeWatchlistAction.SelectPlayback -> {
+                detailsViewModel.selectAnitubeVoice(action.voiceIndex)
+                detailsViewModel.selectAnitubeEpisode(action.episodeIndex)
+                action.progress?.let(detailsViewModel::restoreAnitubeProgress)
                 playAnitube()
             }
-            is AnitubeState.NotFound -> failWatchlistPlayback("Не знайдено відео на AniTube")
-            is AnitubeState.Error -> {
-                val savedReleaseId = autoTargetAniTubeReleaseId
-                    ?: intent.getIntExtra(EXTRA_AUTO_PLAY_ANITUBE_RELEASE, -1)
-                        .takeIf { it > 0 }
-                if (savedReleaseId != null &&
-                    loadSavedAniTubeRelease(savedReleaseId, savedSeason ?: autoPlaySeason,
-                        intent.getStringExtra(EXTRA_AUTO_PLAY_ANITUBE_PAGE_URL))) {
-                    Log.w("WatchlistPlayback", "AniTube lookup failed; loading saved release directly " +
-                        "release=$savedReleaseId")
-                } else {
-                    Log.e("WatchlistPlayback", "AniTube autoplay failed: ${state.message}")
-                    failWatchlistPlayback(state.message)
-                }
+            is ua.any2b.tvplayer.data.AniTubeWatchlistAction.Failed -> {
+                Log.w("WatchlistPlayback", "AniTube autoplay failed: ${action.message}")
+                failWatchlistPlayback(action.message)
             }
-            AnitubeState.Idle, AnitubeState.Searching -> Unit
         }
     }
 
-    private fun loadSavedAniTubeRelease(releaseId: Int, season: Int?, pageUrl: String?): Boolean {
-        if (autoSavedReleaseLookupStarted || releaseId <= 0) return false
-        if (detailsViewModel.state.value !is TmdbDetailsState.Ready) return false
-        autoSavedReleaseLookupStarted = true
-        detailsViewModel.loadSavedAnitubeRelease(releaseId, pageUrl, season,
-            if (tmdbType == TmdbMediaType.MOVIE.path) "MOVIE" else "TV")
-        return true
-    }
-
     private fun failWatchlistPlayback(message: String) {
-        if (autoPlaybackFailed) return
-        autoPlaybackFailed = true
+        if (playbackCoordinator.phase == PlaybackScenarioPhase.FAILED) return
+        playbackScenarioId?.let { playbackCoordinator.dispatch(PlaybackScenarioEvent.Failed(it)) }
         Log.w("WatchlistPlayback", "Playback resolver failed tmdb=$tmdbType:$tmdbId: $message")
         Toast.makeText(this, message, Toast.LENGTH_LONG).show()
         if (intent.getBooleanExtra(EXTRA_PLAYBACK_ONLY, false)) finish()
@@ -632,15 +586,15 @@ class TmdbDetailsActivity : ComponentActivity() {
     }
 
     private fun openFile(fileId: Int) {
-        if (launchingPlayer) return
-        val topicId = tolokaViewModel.playbackTopicId(fileId)
-        val url = tolokaViewModel.playbackUrl(fileId)
-        if (topicId == null || url == null) {
+        val requestId = playbackCoordinator.beginLaunch() ?: return
+        val request = tolokaViewModel.playbackRequest(fileId)
+        if (request == null) {
+            playbackCoordinator.launchFailed(requestId)
+            playbackScenarioId?.let { playbackCoordinator.dispatch(PlaybackScenarioEvent.Failed(it)) }
             tolokaViewModel.reportPlaybackStatus("Не вдалося сформувати URL потоку для вибраного файлу")
             Toast.makeText(this, "Відеофайл недоступний. Повторіть вибір роздачі", Toast.LENGTH_LONG).show()
             return
         }
-        launchingPlayer = true
         tolokaViewModel.reportPlaybackStatus("Перевіряємо доступність TorrServer…")
         lifecycleScope.launch {
             try {
@@ -649,24 +603,18 @@ class TmdbDetailsActivity : ComponentActivity() {
                     SettingsManager(this@TmdbDetailsActivity).torrServerUrl(),
                     credentials?.let { TorrServerBasicAuth(it.username, it.password) },
                 )
-                if (!isFinishing && !isDestroyed) launchFilePlayback(
-                    PlaybackHandoff.Toloka(url, topicId, fileId,
-                        tolokaViewModel.playbackFileName(fileId)))
+                if (!isFinishing && !isDestroyed && playbackCoordinator.isCurrentRequest(requestId))
+                    launchFilePlayback(request, requestId)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                launchingPlayer = false
+                if (!playbackCoordinator.isCurrentRequest(requestId)) return@launch
+                playbackCoordinator.launchFailed(requestId)
                 if (isFinishing || isDestroyed) return@launch
-                val message = when {
-                    error is IllegalArgumentException -> "Перевірте адресу TorrServer у налаштуваннях."
-                    error is IllegalStateException && error.message?.contains("авторизац", ignoreCase = true) == true ->
-                        "TorrServer відхилив авторизацію (HTTP 401). Перевірте логін і пароль."
-                    error is IllegalStateException -> error.message ?: "TorrServer повернув помилку."
-                    error is java.io.InterruptedIOException -> "TorrServer не відповів за 8 секунд. Перевірте, чи сервер запущений."
-                    error is java.net.ConnectException -> "Не вдалося встановити з’єднання з TorrServer. Перевірте адресу та чи запущений сервер."
-                    else -> "Не вдалося з’єднатися з TorrServer. Перевірте, чи сервер запущений і доступний за цією адресою."
-                }
+                val message = ua.any2b.tvplayer.data.TolokaWatchlistPlayback()
+                    .classifyServerError(error)
                 tolokaViewModel.reportPlaybackStatus("Перевірка TorrServer не пройшла: $message")
+                playbackScenarioId?.let { playbackCoordinator.dispatch(PlaybackScenarioEvent.Failed(it)) }
                 showTorrServerUnavailable(fileId, message)
             }
         }
@@ -677,7 +625,12 @@ class TmdbDetailsActivity : ComponentActivity() {
         AlertDialog.Builder(this)
             .setTitle("TorrServer недоступний")
             .setMessage(message)
-            .setPositiveButton("Повторити") { _, _ -> openFile(fileId) }
+            .setPositiveButton("Повторити") { _, _ ->
+                playbackScenarioId?.let {
+                    playbackCoordinator.dispatch(PlaybackScenarioEvent.RetryRequested(it))
+                }
+                openFile(fileId)
+            }
             .setNeutralButton("Налаштування") { _, _ ->
                 startActivity(Intent(this, SettingsActivity::class.java))
             }
@@ -685,11 +638,11 @@ class TmdbDetailsActivity : ComponentActivity() {
             .show()
     }
 
-    private fun launchFilePlayback(handoff: PlaybackHandoff.Toloka) {
-        val fileId = handoff.fileId
-        val url = handoff.streamUrl
-        val topicId = handoff.topicId
-        val fileName = handoff.fileName
+    private fun launchFilePlayback(request: PlaybackRequest.TorrentFile, requestId: PlaybackRequestId) {
+        val fileId = request.fileId
+        val url = request.streamUrl
+        val topicId = request.topicId
+        val fileName = request.fileName
         tolokaViewModel.reportPlaybackStatus("URL потоку сформовано для індексу $fileId. Відкриваємо плеєр…")
         val title = (detailsViewModel.state.value as? TmdbDetailsState.Ready)?.details?.title
         val fileMetadata = fileName?.let(TolokaReleaseMetadataParser::parse)
@@ -697,17 +650,22 @@ class TmdbDetailsActivity : ComponentActivity() {
             ?.torrent?.videoFiles?.firstOrNull { it.id == fileId }
             ?.path?.substringBeforeLast('/', "")?.takeIf(String::isNotBlank)
             ?.let(TolokaReleaseMetadataParser::parse)?.season
-        val requestedEpisode = autoPlayEpisode.takeIf { autoPlaybackStarted && it > 0 &&
+        val requestedEpisode = autoPlayEpisode.takeIf {
+            autoPlaySource == TmdbPlaybackSelection.Source.TORRENT.name && it > 0 &&
             tolokaViewModel.playbackFileId(autoPlaySeason, it) == fileId }
-        val currentSeason = fileMetadata?.season ?: folderSeason
-            ?: autoPlaySeason.takeIf { requestedEpisode != null }
-            ?: title?.matchedSeasonNumber
-            ?: 1.takeIf { title?.type == TmdbMediaType.TV }
-        val currentEpisode = fileMetadata?.episodeStart?.takeIf {
-            fileMetadata.episodeEnd == null || fileMetadata.episodeEnd == it
-        } ?: requestedEpisode ?: currentSeason?.let { season ->
-            tolokaViewModel.playbackEpisodeNumber(fileId, season)
-        }
+        val playbackPosition = playbackCoordinator.tolokaEpisodeContext(
+            fileSeason = fileMetadata?.season,
+            fileEpisodeStart = fileMetadata?.episodeStart,
+            fileEpisodeEnd = fileMetadata?.episodeEnd,
+            folderSeason = folderSeason,
+            requestedSeason = autoPlaySeason,
+            requestedEpisode = requestedEpisode,
+            matchedSeason = title?.matchedSeasonNumber,
+            mediaType = title?.type,
+            mappedEpisodeForSeason = { season -> tolokaViewModel.playbackEpisodeNumber(fileId, season) },
+        )
+        val currentSeason = playbackPosition.season
+        val currentEpisode = playbackPosition.episode
         Log.d("NextEp", "Toloka playlist current=$currentSeason:$currentEpisode " +
             "file=$fileId next=${currentSeason?.let { season ->
                 currentEpisode?.let { tolokaViewModel.playbackFileId(season, it + 1) }
@@ -736,13 +694,13 @@ class TmdbDetailsActivity : ComponentActivity() {
                         }
                     }
                     val torrentContext = title?.let {
-                        PendingVimuPlayback(it, TmdbPlaybackSelection.Source.TORRENT,
+                        ExternalPlaybackContext(it, TmdbPlaybackSelection.Source.TORRENT,
                             topicId, fileId, currentEpisode, currentSeason)
                     }
                     launchExternalPlayer(externalIntent, selectedPackage,
                             title?.let {
                                 history.torrentProgress(it.type, it.id, topicId, fileId)?.positionMs
-                            } ?: 0L, torrentContext)
+                            } ?: 0L, torrentContext, requestId)
                     refreshPlaybackMarks()
                     tolokaViewModel.reportPlaybackStatus("URL передано зовнішньому плеєру. Результат відтворення перевіряйте в ньому")
                     if (!ExternalVideoPlayers(this).isVimu(selectedPackage))
@@ -800,49 +758,60 @@ class TmdbDetailsActivity : ComponentActivity() {
                     }
                 }
             })
+            playbackScenarioId?.let {
+                playbackCoordinator.playbackLaunched(it, requestId,
+                    TmdbPlaybackSelection.Source.TORRENT)
+            }
             finishDetailsForWatchlistPlayback()
             tolokaViewModel.reportPlaybackStatus("URL передано вбудованому плеєру")
         } catch (_: Exception) {
-            launchingPlayer = false
+            playbackCoordinator.launchFailed(requestId)
+            playbackScenarioId?.let { playbackCoordinator.dispatch(PlaybackScenarioEvent.Failed(it)) }
             tolokaViewModel.reportPlaybackStatus("Не вдалося запустити плеєр після формування URL потоку")
             Toast.makeText(this, "Не вдалося відкрити плеєр", Toast.LENGTH_LONG).show()
         }
     }
 
     private fun playAnitube() {
-        if (launchingPlayer) return
+        val requestId = playbackCoordinator.beginLaunch() ?: return
         val title = (detailsViewModel.state.value as? TmdbDetailsState.Ready)?.details?.title
-            ?: return
+            ?: run {
+                playbackCoordinator.launchFailed(requestId)
+                return
+            }
         detailsViewModel.playAnitube(
-            onError = { message -> Toast.makeText(this, message, Toast.LENGTH_LONG).show() },
-            onSuccess = { url, voiceIndex, episodeIndex, episodeNumber, resumeProgress, backups ->
-                val handoff = PlaybackHandoff.AniTube(url, voiceIndex, episodeIndex,
-                    episodeNumber, resumeProgress, backups.map {
-                        PlaybackHandoff.BackupStream(it.embedUrl, it.voiceIndex, it.episodeIndex)
-                    })
-                if (launchingPlayer || autoPlaybackFailed || isFinishing || isDestroyed)
+            onError = { message ->
+                if (!playbackCoordinator.isCurrentRequest(requestId)) return@playAnitube
+                if (intent.getBooleanExtra(EXTRA_PLAYBACK_ONLY, false)) failWatchlistPlayback(message)
+                else Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+                playbackCoordinator.launchFailed(requestId)
+            },
+            onSuccess = { request ->
+                val voiceIndex = request.voiceIndex
+                val episodeIndex = request.episodeIndex
+                val episodeNumber = request.episodeNumber
+                val resumeProgress = request.resumeProgress
+                val url = request.streamUrl
+                if (!playbackCoordinator.isCurrentRequest(requestId) ||
+                    playbackCoordinator.phase == PlaybackScenarioPhase.FAILED || isFinishing || isDestroyed) {
+                    playbackCoordinator.launchFailed(requestId)
                     return@playAnitube
+                }
                 Log.i("WatchlistPlayback", "AniTube playback launch tmdb=$tmdbType:$tmdbId " +
                     "season=$autoPlaySeason episode=$episodeNumber voice=$voiceIndex " +
                     "resumeProgress=$resumeProgress")
-                launchingPlayer = true
                 val selectedRelease = (detailsViewModel.anitubeState.value as?
                     ua.any2b.tvplayer.data.AnitubeState.Found)?.release?.newsId
                 val found = detailsViewModel.anitubeState.value as?
                     ua.any2b.tvplayer.data.AnitubeState.Found
-                val selectedTmdbSeason = title.matchedSeasonNumber
-                    ?: autoPlaySeason.takeIf { title.type == TmdbMediaType.TV }
                 // AniTube season numbering is independent from TMDB's season numbering.
                 // On continuation, keep the explicit AniTube season carried by the player;
                 // catalog candidates can describe the TMDB-wide mapping as season 1.
-                val selectedAnimeSeason = intent
-                    .getIntExtra(EXTRA_AUTO_PLAY_ANITUBE_SEASON, -1)
-                    .takeIf { it > 0 }
-                    ?: title.matchedAnimeSeasonNumber
-                    ?: found?.catalog?.candidates?.firstOrNull {
-                        it.release.newsId == selectedRelease
-                    }?.seasonNumber
-                    ?: found?.catalog?.preferredSeason
+                val seasons = playbackCoordinator.aniTubePlaybackSeasons(title, autoPlaySeason,
+                    intent.getIntExtra(EXTRA_AUTO_PLAY_ANITUBE_SEASON, -1).takeIf { it > 0 },
+                    selectedRelease, found)
+                val selectedTmdbSeason = seasons.tmdbSeason
+                val selectedAnimeSeason = seasons.animeSeason
                 TmdbWatchHistoryStore(this).savePlaybackSelection(title.type, title.id,
                     TmdbPlaybackSelection(TmdbPlaybackSelection.Source.ANITUBE,
                         anitubeReleaseId = selectedRelease,
@@ -865,12 +834,12 @@ class TmdbDetailsActivity : ComponentActivity() {
                             val positionMs = storedProgress?.positionMs?.takeIf { it > 0L }
                                 ?: if (storedProgress != null && storedProgress.durationMs > 0L)
                                     (storedProgress.durationMs * resumeProgress).toLong() else 0L
-                            val vimuContext = PendingVimuPlayback(title,
+                            val vimuContext = ExternalPlaybackContext(title,
                                 TmdbPlaybackSelection.Source.ANITUBE,
                                 episodeNumber = episodeNumber, seasonNumber = selectedTmdbSeason,
                                 voiceIndex = voiceIndex, episodeIndex = episodeIndex)
                             launchExternalPlayer(externalIntent, selectedPackage,
-                                positionMs, vimuContext)
+                                positionMs, vimuContext, requestId)
                             val aniListId = title.matchedAniListId
                                 ?: intent.getIntExtra(EXTRA_ANI_LIST_ID, -1).takeIf { it > 0 }
                             history.saveEpisodeProgress(title.copy(
@@ -883,7 +852,6 @@ class TmdbDetailsActivity : ComponentActivity() {
                                 animeSeasonNumber = selectedAnimeSeason)
                             if (!ExternalVideoPlayers(this).isVimu(selectedPackage))
                                 finishDetailsForWatchlistPlayback()
-                            returningFromAnitubePlayer = true
                             return@playAnitube
                         } catch (_: ActivityNotFoundException) {
                             // The selected player may have been removed after discovery.
@@ -894,13 +862,12 @@ class TmdbDetailsActivity : ComponentActivity() {
                     Toast.makeText(this, "Обраний плеєр недоступний. Відкриваємо вбудований",
                         Toast.LENGTH_LONG).show()
                 }
-                returningFromAnitubePlayer = true
                 try { startActivity(Intent(this, PlayerActivity::class.java).apply {
-                    putExtra(PlayerActivity.EXTRA_STREAM_URL, handoff.streamUrl)
+                    putExtra(PlayerActivity.EXTRA_STREAM_URL, request.streamUrl)
                     putExtra(PlayerActivity.EXTRA_SOURCE_TYPE, PlayerActivity.SOURCE_ANITUBE_TMDB)
-                    putExtra(PlayerActivity.EXTRA_VOICE_INDEX, handoff.voiceIndex)
-                    putExtra(PlayerActivity.EXTRA_EPISODE_INDEX, handoff.episodeIndex)
-                    putExtra(PlayerActivity.EXTRA_EPISODE_NUMBER, handoff.episodeNumber)
+                    putExtra(PlayerActivity.EXTRA_VOICE_INDEX, request.voiceIndex)
+                    putExtra(PlayerActivity.EXTRA_EPISODE_INDEX, request.episodeIndex)
+                    putExtra(PlayerActivity.EXTRA_EPISODE_NUMBER, request.episodeNumber)
                     putExtra(PlayerActivity.EXTRA_TMDB_ID, title.id)
                     putExtra(PlayerActivity.EXTRA_TMDB_TYPE, title.type.path)
                     (title.matchedAniListId
@@ -914,7 +881,7 @@ class TmdbDetailsActivity : ComponentActivity() {
                     putExtra(PlayerActivity.EXTRA_TMDB_POSTER_URL, title.posterUrl)
                     putExtra(PlayerActivity.EXTRA_TMDB_RATING, title.rating ?: Double.NaN)
                     putExtra(PlayerActivity.EXTRA_TMDB_GENRE_IDS, title.genreIds.toIntArray())
-                    putExtra(PlayerActivity.EXTRA_TMDB_RESUME_PROGRESS, handoff.resumeProgress)
+                    putExtra(PlayerActivity.EXTRA_TMDB_RESUME_PROGRESS, request.resumeProgress)
                     selectedTmdbSeason?.let {
                         putExtra(PlayerActivity.EXTRA_TMDB_SEASON, it)
                     }
@@ -936,30 +903,39 @@ class TmdbDetailsActivity : ComponentActivity() {
                         putExtra(PlayerActivity.EXTRA_TMDB_ANITUBE_VOICE_NAME, it)
                     }
                     putStringArrayListExtra(PlayerActivity.EXTRA_BACKUP_EMBED_URLS,
-                        ArrayList(handoff.backupStreams.map { it.embedUrl }))
+                        ArrayList(request.backupStreams.map { it.embedUrl }))
                     putExtra(PlayerActivity.EXTRA_BACKUP_VOICE_INDICES,
-                        handoff.backupStreams.map { it.voiceIndex }.toIntArray())
+                        request.backupStreams.map { it.voiceIndex }.toIntArray())
                     putExtra(PlayerActivity.EXTRA_BACKUP_EPISODE_INDICES,
-                        handoff.backupStreams.map { it.episodeIndex }.toIntArray())
-                }) } catch (_: Exception) {
-                    launchingPlayer = false
-                    returningFromAnitubePlayer = false
+                        request.backupStreams.map { it.episodeIndex }.toIntArray())
+                }); playbackScenarioId?.let {
+                    playbackCoordinator.playbackLaunched(it, requestId,
+                        TmdbPlaybackSelection.Source.ANITUBE)
+                } } catch (_: Exception) {
+                    playbackCoordinator.launchFailed(requestId)
                     Toast.makeText(this, "Не вдалося відкрити плеєр", Toast.LENGTH_LONG).show()
                 }
-                if (launchingPlayer) finishDetailsForWatchlistPlayback()
+                if (playbackCoordinator.phase == PlaybackScenarioPhase.PLAYER_ACTIVE)
+                    finishDetailsForWatchlistPlayback()
             },
         )
     }
 
     private fun finishDetailsForWatchlistPlayback() {
-        if (intent.getBooleanExtra(EXTRA_RETURN_TO_WATCHLIST, false)) finish()
+        if (intent.getBooleanExtra(EXTRA_RETURN_TO_WATCHLIST, false)) {
+            playbackScenarioId?.let {
+                playbackCoordinator.dispatch(PlaybackScenarioEvent.Finished(it))
+            }
+            finish()
+        }
     }
 
     private fun launchExternalPlayer(
         playerIntent: Intent,
         packageName: String,
         resumePositionMs: Long,
-        context: PendingVimuPlayback?,
+        context: ExternalPlaybackContext?,
+        requestId: PlaybackRequestId,
     ) {
         val players = ExternalVideoPlayers(this)
         if (players.isVimu(packageName)) {
@@ -971,60 +947,39 @@ class TmdbDetailsActivity : ComponentActivity() {
         } else {
             startActivity(playerIntent)
         }
+        playbackScenarioId?.let {
+            playbackCoordinator.playbackLaunched(it, requestId, context?.source)
+        }
     }
 
     private fun onVimuPlayerResult(result: ActivityResult) {
-        launchingPlayer = false
-        returningFromAnitubePlayer = false
+        playbackScenarioId?.let {
+            playbackCoordinator.playerReturned(it)
+        }
         val pending = pendingVimuPlayback ?: run {
             finishDetailsForWatchlistPlayback()
             return
         }
         pendingVimuPlayback = null
         val history = TmdbWatchHistoryStore(this)
-        when (result.resultCode) {
-            0 -> {
-                val data = result.data ?: run {
-                    finishDetailsForWatchlistPlayback()
-                    return
-                }
-                val position = data.getIntExtra("position", -1).toLong()
-                val duration = data.getIntExtra("duration", -1).toLong()
-                if (position < 0L || duration <= 0L) {
-                    finishDetailsForWatchlistPlayback()
-                    return
-                }
-                if (pending.source == TmdbPlaybackSelection.Source.TORRENT) {
-                    val topicId = pending.topicId ?: run {
-                        finishDetailsForWatchlistPlayback()
-                        return
-                    }
-                    val fileId = pending.fileId ?: run {
-                        finishDetailsForWatchlistPlayback()
-                        return
-                    }
-                    history.saveTorrentProgress(pending.title, topicId, fileId,
-                        position, duration, pending.episodeNumber, pending.seasonNumber)
-                } else {
-                    history.saveEpisodeProgress(pending.title, pending.voiceIndex,
-                        pending.episodeIndex, pending.episodeNumber ?: 1,
-                        (position.toFloat() / duration).coerceIn(0f, 1f),
-                        pending.seasonNumber ?: 1, position, duration)
-                }
-            }
-            1 -> {
-                if (pending.source == TmdbPlaybackSelection.Source.TORRENT) {
-                    pending.topicId?.let { topic -> pending.fileId?.let { file ->
-                        history.completeTorrentPlayback(pending.title, topic, file,
-                            pending.episodeNumber, pending.seasonNumber)
-                    } }
-                } else {
-                    history.saveEpisodeProgress(pending.title, pending.voiceIndex,
-                        pending.episodeIndex, pending.episodeNumber ?: 1, 1f,
-                        pending.seasonNumber ?: 1)
-                }
-            }
-            else -> Unit // Vimu reports playback errors with result code 4.
+        val data = result.data
+        val effect = playbackCoordinator.resolveExternalPlayerReturn(pending,
+            ExternalPlayerReturnEvent(result.resultCode,
+                data?.getIntExtra("position", -1)?.toLong(),
+                data?.getIntExtra("duration", -1)?.toLong()))
+        when (effect) {
+            ExternalPlaybackEffect.Finish -> Unit
+            is ExternalPlaybackEffect.SaveTorrentProgress -> history.saveTorrentProgress(
+                effect.title, effect.topicId, effect.fileId, effect.positionMs, effect.durationMs,
+                effect.episodeNumber, effect.seasonNumber)
+            is ExternalPlaybackEffect.CompleteTorrent -> history.completeTorrentPlayback(
+                effect.title, effect.topicId, effect.fileId, effect.episodeNumber, effect.seasonNumber)
+            is ExternalPlaybackEffect.SaveEpisodeProgress -> history.saveEpisodeProgress(
+                effect.title, effect.voiceIndex, effect.episodeIndex, effect.episodeNumber,
+                effect.progress, effect.seasonNumber, effect.positionMs, effect.durationMs)
+            is ExternalPlaybackEffect.CompleteEpisode -> history.saveEpisodeProgress(
+                effect.title, effect.voiceIndex, effect.episodeIndex, effect.episodeNumber,
+                1f, effect.seasonNumber)
         }
         finishDetailsForWatchlistPlayback()
     }

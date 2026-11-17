@@ -27,6 +27,7 @@ import ua.any2b.tvplayer.data.TolokaConnections
 import ua.any2b.tvplayer.data.TolokaRelevanceStore
 import ua.any2b.tvplayer.data.TolokaTmdbMappingStore
 import ua.any2b.tvplayer.data.AniListRomajiResolver
+import ua.any2b.tvplayer.source.PlaybackRequest
 
 data class FreeTolokaState(
     val search: TolokaSearchState = TolokaSearchState.Idle,
@@ -477,6 +478,12 @@ class TolokaSearchViewModel(
     fun playbackFileName(fileId: Int): String? {
         val files = _state.value.transfer as? TolokaTransferState.Files ?: return null
         return files.torrent.videoFiles.firstOrNull { it.id == fileId }?.name
+    }
+
+    fun playbackRequest(fileId: Int): PlaybackRequest.TorrentFile? {
+        val topicId = playbackTopicId(fileId) ?: return null
+        val url = playbackUrl(fileId) ?: return null
+        return PlaybackRequest.TorrentFile(url, topicId, fileId, playbackFileName(fileId))
     }
 
     fun playbackFileId(seasonNumber: Int, episodeNumber: Int): Int? {
