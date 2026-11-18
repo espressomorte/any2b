@@ -1,10 +1,10 @@
-package ua.any2b.tvplayer.source
+package ua.any2b.domain.playback
 
-/** A source-specific request for the shared player. */
+/** Typed handoff from a source to the shared player. */
 sealed interface PlaybackRequest {
     val streamUrl: String
 
-    /** A file prepared by TorrServer from a selected torrent. */
+    /** A video file prepared by a torrent source. */
     data class TorrentFile(
         override val streamUrl: String,
         val topicId: String,
@@ -12,7 +12,7 @@ sealed interface PlaybackRequest {
         val fileName: String?,
     ) : PlaybackRequest
 
-    /** A resolved online stream with the AniTube track and fallback context. */
+    /** A resolved online stream with provider track and fallback context. */
     data class OnlineStream(
         override val streamUrl: String,
         val voiceIndex: Int,

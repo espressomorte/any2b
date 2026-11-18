@@ -1,12 +1,13 @@
 package ua.any2b.tvplayer
 
-import ua.any2b.core.tmdb.TmdbMediaType
-import ua.any2b.tvplayer.data.TmdbEpisodeProgress
 import ua.any2b.tvplayer.data.TmdbPlaybackSelection
 import ua.any2b.core.tmdb.TmdbTitle
+import ua.any2b.domain.playback.toloka.TolokaEpisodeContext
+import ua.any2b.domain.playback.toloka.TolokaWatchlistPlayback
+import ua.any2b.domain.playback.AutoPlaybackDecision
+import ua.any2b.domain.playback.AutoPlaybackRequest
+import ua.any2b.domain.playback.decideAutoPlayback as evaluateAutoPlayback
 import java.util.concurrent.atomic.AtomicLong
-
-internal enum class PlaybackProvider { TORRENT, ANITUBE }
 
 @JvmInline
 internal value class PlaybackScenarioId(val value: Long)
@@ -38,7 +39,7 @@ internal sealed interface PlaybackScenarioEvent {
 /** Stateful, Android-free owner of a single playback scenario's lifecycle. */
 internal class PlaybackCoordinator {
     private val anitubePlayback = ua.any2b.tvplayer.data.AniTubeWatchlistPlayback()
-    private val tolokaPlayback = ua.any2b.tvplayer.data.TolokaWatchlistPlayback()
+    private val tolokaPlayback = TolokaWatchlistPlayback()
     var scenarioId: PlaybackScenarioId? = null
         private set
     var phase: PlaybackScenarioPhase = PlaybackScenarioPhase.IDLE
@@ -97,8 +98,8 @@ internal class PlaybackCoordinator {
         episodeFileId: Int?,
         alreadyStarted: Boolean,
         failed: Boolean,
-    ): AutoPlaybackDecision = resolveAutoPlayback(request, detailsReady, torrentFilesReady,
-        savedFileAvailable, episodeFileId, alreadyStarted, failed, tolokaPlayback)
+    ): AutoPlaybackDecision = evaluateAutoPlayback(request, detailsReady, torrentFilesReady,
+        savedFileAvailable, episodeFileId, alreadyStarted, failed)
 
     fun onAniTubeState(
         request: ua.any2b.tvplayer.data.AniTubeWatchlistRequest,
@@ -108,10 +109,10 @@ internal class PlaybackCoordinator {
     fun tolokaEpisodeContext(
         fileSeason: Int?, fileEpisodeStart: Int?, fileEpisodeEnd: Int?, folderSeason: Int?,
         requestedSeason: Int, requestedEpisode: Int?, matchedSeason: Int?,
-        mediaType: TmdbMediaType?, mappedEpisodeForSeason: (Int) -> Int?,
-    ): ua.any2b.tvplayer.data.TolokaEpisodeContext = tolokaPlayback.episodeContext(
+        isTv: Boolean, mappedEpisodeForSeason: (Int) -> Int?,
+    ): TolokaEpisodeContext = tolokaPlayback.episodeContext(
         fileSeason, fileEpisodeStart, fileEpisodeEnd, folderSeason, requestedSeason,
-        requestedEpisode, matchedSeason, mediaType, mappedEpisodeForSeason)
+        requestedEpisode, matchedSeason, isTv, mappedEpisodeForSeason)
 
     fun aniTubePlaybackSeasons(
         title: TmdbTitle, requestedTmdbSeason: Int, requestedAnimeSeason: Int?,
@@ -225,79 +226,3 @@ internal sealed interface ExternalPlaybackEffect {
         val voiceIndex: Int, val episodeIndex: Int, val episodeNumber: Int,
         val seasonNumber: Int) : ExternalPlaybackEffect
 }
-
-internal fun playbackProvider(source: TmdbPlaybackSelection.Source?): PlaybackProvider? = when (source) {
-    TmdbPlaybackSelection.Source.TORRENT -> PlaybackProvider.TORRENT
-    TmdbPlaybackSelection.Source.ANITUBE -> PlaybackProvider.ANITUBE
-    null -> null
-}
-
-internal data class AutoPlaybackRequest(
-    val source: TmdbPlaybackSelection.Source?,
-    val episodeNumber: Int,
-    val savedFileId: Int? = null,
-)
-
-internal sealed interface AutoPlaybackDecision {
-    data object None : AutoPlaybackDecision
-    data object Wait : AutoPlaybackDecision
-    data object StartAniTube : AutoPlaybackDecision
-    data object MissingTorrentFile : AutoPlaybackDecision
-    data class StartTorrent(val fileId: Int) : AutoPlaybackDecision
-}
-
-internal fun decideAutoPlayback(
-    request: AutoPlaybackRequest,
-    detailsReady: Boolean,
-    torrentFilesReady: Boolean,
-    savedFileAvailable: Boolean,
-    episodeFileId: Int?,
-    alreadyStarted: Boolean,
-    failed: Boolean,
-): AutoPlaybackDecision = resolveAutoPlayback(request, detailsReady, torrentFilesReady,
-    savedFileAvailable, episodeFileId, alreadyStarted, failed,
-    ua.any2b.tvplayer.data.TolokaWatchlistPlayback())
-
-private fun resolveAutoPlayback(
-    request: AutoPlaybackRequest,
-    detailsReady: Boolean,
-    torrentFilesReady: Boolean,
-    savedFileAvailable: Boolean,
-    episodeFileId: Int?,
-    alreadyStarted: Boolean,
-    failed: Boolean,
-    tolokaWatchlistPlayback: ua.any2b.tvplayer.data.TolokaWatchlistPlayback,
-): AutoPlaybackDecision {
-    if (alreadyStarted || failed || request.source == null ||
-        (request.episodeNumber <= 0 && request.savedFileId == null)) return AutoPlaybackDecision.None
-    if (!detailsReady) return AutoPlaybackDecision.Wait
-    return when (playbackProvider(request.source)) {
-        PlaybackProvider.TORRENT -> {
-            when (val decision = tolokaWatchlistPlayback.resolveFile(
-                torrentFilesReady, request.savedFileId, savedFileAvailable, episodeFileId)) {
-                ua.any2b.tvplayer.data.TolokaFileDecision.Wait -> AutoPlaybackDecision.Wait
-                ua.any2b.tvplayer.data.TolokaFileDecision.Missing ->
-                    AutoPlaybackDecision.MissingTorrentFile
-                is ua.any2b.tvplayer.data.TolokaFileDecision.Start ->
-                    AutoPlaybackDecision.StartTorrent(decision.fileId)
-            }
-        }
-        PlaybackProvider.ANITUBE -> AutoPlaybackDecision.StartAniTube
-        null -> AutoPlaybackDecision.None
-    }
-}
-
-internal fun watchlistSeason(
-    explicitSeason: Int?,
-    matchedSeason: Int?,
-    progressSeason: Int?,
-): Int? = explicitSeason ?: matchedSeason ?: progressSeason
-
-internal fun watchlistEpisode(
-    explicitEpisode: Int?,
-    progress: TmdbEpisodeProgress?,
-    mediaType: TmdbMediaType,
-    hasSavedSelection: Boolean,
-): Int? = explicitEpisode ?: progress?.let {
-    if (it.progress >= 0.95f) it.episodeNumber + 1 else it.episodeNumber
-} ?: if (mediaType == TmdbMediaType.TV && hasSavedSelection) 1 else null

@@ -16,7 +16,7 @@ import ua.any2b.core.anitube.playableVoices
 import ua.any2b.core.anitube.sameStudioEpisodeSources
 import ua.any2b.core.extractor.StreamResolver
 import ua.any2b.core.tmdb.TmdbMediaType
-import ua.any2b.tvplayer.source.PlaybackRequest
+import ua.any2b.domain.playback.PlaybackRequest
 
 sealed interface AnitubeState {
     data object Idle : AnitubeState

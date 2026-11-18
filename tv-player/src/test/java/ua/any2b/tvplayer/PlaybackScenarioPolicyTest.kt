@@ -6,6 +6,12 @@ import ua.any2b.core.tmdb.TmdbMediaType
 import ua.any2b.core.tmdb.TmdbTitle
 import ua.any2b.tvplayer.data.TmdbPlaybackSelection
 import ua.any2b.tvplayer.data.TmdbEpisodeProgress
+import ua.any2b.domain.playback.AutoPlaybackDecision
+import ua.any2b.domain.playback.AutoPlaybackRequest
+import ua.any2b.domain.playback.PlaybackSource
+import ua.any2b.domain.playback.decideAutoPlayback
+import ua.any2b.domain.playback.watchlistEpisode
+import ua.any2b.domain.playback.watchlistSeason
 
 class PlaybackScenarioPolicyTest {
     @Test
@@ -77,11 +83,6 @@ class PlaybackScenarioPolicyTest {
 
     @Test
     fun explicitSourceRoutesToItsOwnProvider() {
-        assertEquals(PlaybackProvider.TORRENT,
-            playbackProvider(TmdbPlaybackSelection.Source.TORRENT))
-        assertEquals(PlaybackProvider.ANITUBE,
-            playbackProvider(TmdbPlaybackSelection.Source.ANITUBE))
-        assertEquals(null, playbackProvider(null))
         assertEquals(AutoPlaybackDecision.None, decideAutoPlayback(
             AutoPlaybackRequest(source = null, episodeNumber = 5), detailsReady = true,
             torrentFilesReady = true, savedFileAvailable = false, episodeFileId = 10,
@@ -90,7 +91,7 @@ class PlaybackScenarioPolicyTest {
 
     @Test
     fun torrentAutoplayWaitsForFilesThenUsesSavedFileBeforeEpisodeMatch() {
-        val request = AutoPlaybackRequest(TmdbPlaybackSelection.Source.TORRENT,
+        val request = AutoPlaybackRequest(PlaybackSource.TORRENT,
             episodeNumber = 5, savedFileId = 22)
         assertEquals(AutoPlaybackDecision.Wait,
             decideAutoPlayback(request, detailsReady = true, torrentFilesReady = false,
@@ -104,7 +105,7 @@ class PlaybackScenarioPolicyTest {
 
     @Test
     fun torrentAutoplayFallsBackToEpisodeMatchAndFailsOnlyAfterFileListArrives() {
-        val request = AutoPlaybackRequest(TmdbPlaybackSelection.Source.TORRENT,
+        val request = AutoPlaybackRequest(PlaybackSource.TORRENT,
             episodeNumber = 5)
         assertEquals(AutoPlaybackDecision.StartTorrent(35),
             decideAutoPlayback(request, detailsReady = true, torrentFilesReady = true,
@@ -118,7 +119,7 @@ class PlaybackScenarioPolicyTest {
 
     @Test
     fun anitubeAutoplayDoesNotWaitForTorrentPreparation() {
-        val request = AutoPlaybackRequest(TmdbPlaybackSelection.Source.ANITUBE,
+        val request = AutoPlaybackRequest(PlaybackSource.ANITUBE,
             episodeNumber = 5)
         assertEquals(AutoPlaybackDecision.StartAniTube,
             decideAutoPlayback(request, detailsReady = true, torrentFilesReady = false,
@@ -128,7 +129,7 @@ class PlaybackScenarioPolicyTest {
 
     @Test
     fun autoplayWaitsForDetailsAndNeverStartsTwice() {
-        val request = AutoPlaybackRequest(TmdbPlaybackSelection.Source.ANITUBE,
+        val request = AutoPlaybackRequest(PlaybackSource.ANITUBE,
             episodeNumber = 5)
         assertEquals(AutoPlaybackDecision.Wait,
             decideAutoPlayback(request, detailsReady = false, torrentFilesReady = false,
@@ -147,17 +148,18 @@ class PlaybackScenarioPolicyTest {
             animeSeasonNumber = 5)
         assertEquals(2, watchlistSeason(explicitSeason = null, matchedSeason = null,
             progressSeason = progress.seasonNumber))
-        assertEquals(8, watchlistEpisode(explicitEpisode = 8, progress = progress,
-            mediaType = TmdbMediaType.TV, hasSavedSelection = true))
+        assertEquals(8, watchlistEpisode(explicitEpisode = 8,
+            progressEpisode = progress.episodeNumber, progressFraction = progress.progress,
+            isTv = true, hasSavedSelection = true))
     }
 
     @Test
     fun watchlistContinueResumesCurrentEpisodeOrAdvancesWhenNearlyComplete() {
         val inProgress = TmdbEpisodeProgress(0, 0, 4, 0.4f, seasonNumber = 2)
         val nearlyComplete = inProgress.copy(progress = 0.95f)
-        assertEquals(4, watchlistEpisode(null, inProgress, TmdbMediaType.TV, true))
-        assertEquals(5, watchlistEpisode(null, nearlyComplete, TmdbMediaType.TV, true))
-        assertEquals(null, watchlistEpisode(null, null, TmdbMediaType.MOVIE, false))
-        assertEquals(1, watchlistEpisode(null, null, TmdbMediaType.TV, true))
+        assertEquals(4, watchlistEpisode(null, inProgress.episodeNumber, inProgress.progress, true, true))
+        assertEquals(5, watchlistEpisode(null, nearlyComplete.episodeNumber, nearlyComplete.progress, true, true))
+        assertEquals(null, watchlistEpisode(null, null, null, false, false))
+        assertEquals(1, watchlistEpisode(null, null, null, true, true))
     }
 }

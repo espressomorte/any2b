@@ -39,7 +39,11 @@ import ua.any2b.tvplayer.data.TmdbWatchHistoryStore
 import ua.any2b.tvplayer.data.TmdbWatchlistStore
 import ua.any2b.tvplayer.data.TmdbPlaybackSelection
 import ua.any2b.tvplayer.data.AnitubeState
-import ua.any2b.tvplayer.source.PlaybackRequest
+import ua.any2b.domain.playback.PlaybackRequest
+import ua.any2b.domain.playback.AutoPlaybackDecision
+import ua.any2b.domain.playback.AutoPlaybackRequest
+import ua.any2b.domain.playback.PlaybackSource
+import ua.any2b.domain.playback.toloka.TolokaWatchlistPlayback
 import ua.any2b.tvplayer.ui.AppTheme
 import ua.any2b.tvplayer.ui.TmdbDetailsScreen
 import ua.any2b.tvplayer.ui.TmdbDetailsPreparingScreen
@@ -320,6 +324,11 @@ class TmdbDetailsActivity : ComponentActivity() {
                     val source = TmdbPlaybackSelection.Source.entries.firstOrNull {
                         it.name == autoPlaySource
                     }
+                    val playbackSource = when (source) {
+                        TmdbPlaybackSelection.Source.TORRENT -> PlaybackSource.TORRENT
+                        TmdbPlaybackSelection.Source.ANITUBE -> PlaybackSource.ANITUBE
+                        null -> null
+                    }
                     if (source == TmdbPlaybackSelection.Source.ANITUBE) playbackScenarioId?.let {
                         playbackCoordinator.dispatch(PlaybackScenarioEvent.AniTubeStateChanged(it))
                     }
@@ -339,7 +348,7 @@ class TmdbDetailsActivity : ComponentActivity() {
                         tolokaViewModel.playbackFileId(autoPlaySeason, it)
                     }
                     when (val decision = playbackCoordinator.decideAutoPlayback(
-                        request = AutoPlaybackRequest(source, autoPlayEpisode, savedFileId),
+                        request = AutoPlaybackRequest(playbackSource, autoPlayEpisode, savedFileId),
                         detailsReady = readyDetails != null,
                         torrentFilesReady = torrentFilesReady,
                         savedFileAvailable = savedFileId?.let {
@@ -611,8 +620,7 @@ class TmdbDetailsActivity : ComponentActivity() {
                 if (!playbackCoordinator.isCurrentRequest(requestId)) return@launch
                 playbackCoordinator.launchFailed(requestId)
                 if (isFinishing || isDestroyed) return@launch
-                val message = ua.any2b.tvplayer.data.TolokaWatchlistPlayback()
-                    .classifyServerError(error)
+                val message = TolokaWatchlistPlayback().classifyServerError(error)
                 tolokaViewModel.reportPlaybackStatus("Перевірка TorrServer не пройшла: $message")
                 playbackScenarioId?.let { playbackCoordinator.dispatch(PlaybackScenarioEvent.Failed(it)) }
                 showTorrServerUnavailable(fileId, message)
@@ -661,7 +669,7 @@ class TmdbDetailsActivity : ComponentActivity() {
             requestedSeason = autoPlaySeason,
             requestedEpisode = requestedEpisode,
             matchedSeason = title?.matchedSeasonNumber,
-            mediaType = title?.type,
+            isTv = title?.type == TmdbMediaType.TV,
             mappedEpisodeForSeason = { season -> tolokaViewModel.playbackEpisodeNumber(fileId, season) },
         )
         val currentSeason = playbackPosition.season

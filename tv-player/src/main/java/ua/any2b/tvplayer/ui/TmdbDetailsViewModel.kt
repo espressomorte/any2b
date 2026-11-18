@@ -22,7 +22,7 @@ import ua.any2b.tvplayer.data.AnitubeController
 import ua.any2b.tvplayer.data.PlaybackDependencies
 import ua.any2b.tvplayer.data.AniListAvailability
 import ua.any2b.tvplayer.data.TmdbEpisodeProgress
-import ua.any2b.tvplayer.source.PlaybackRequest
+import ua.any2b.domain.playback.PlaybackRequest
 import ua.any2b.core.anitube.AnitubeSearchResult
 import ua.any2b.tvplayer.data.workerTmdbConnection
 import ua.any2b.tvplayer.data.ExplicitRelatedCatalog

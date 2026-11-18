@@ -17,5 +17,6 @@ dependencyResolutionManagement {
 }
 
 include(":core")
+include(":domain")
 include(":cli")
 include(":tv-player")

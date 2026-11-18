@@ -6,6 +6,8 @@ import ua.any2b.core.tmdb.TmdbTitle
 import ua.any2b.tvplayer.data.TmdbPlaybackSelection
 import ua.any2b.tvplayer.data.TmdbWatchHistoryStore
 import ua.any2b.tvplayer.data.TmdbWatchlistStore
+import ua.any2b.domain.playback.watchlistEpisode
+import ua.any2b.domain.playback.watchlistSeason
 import java.time.LocalDate
 
 /** Resolves the saved playback source and episode before handing navigation to the host. */
@@ -26,8 +28,9 @@ internal class ContinueWatchlistPlayback(
             }
         } else history.playbackSelection(title.type, title.id) ?: inferred
         val season = requestedSeason ?: selection?.tmdbSeasonNumber ?: selection?.anitubeSeasonNumber
-        val requestedEpisode = watchlistEpisode(episode?.episodeNumber, progress,
-            title.type, selection != null)
+        val requestedEpisode = watchlistEpisode(episode?.episodeNumber,
+            progress?.episodeNumber, progress?.progress, title.type == TmdbMediaType.TV,
+            selection != null)
         val cachedEpisode = if (episode == null && season != null && requestedEpisode != null) {
             watchlist.cachedEpisodes(title.id, season)?.firstOrNull { candidate ->
                 candidate.episodeNumber >= requestedEpisode && candidate.airDate?.let {

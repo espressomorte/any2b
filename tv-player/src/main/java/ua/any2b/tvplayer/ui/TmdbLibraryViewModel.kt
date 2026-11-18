@@ -520,6 +520,7 @@ class TmdbLibraryViewModel(application: Application,
             val connection = withContext(Dispatchers.IO) {
                 workerTmdbConnection(getApplication())
             } ?: run {
+                Log.w(TAG, "Cannot load watchlist episodes: TMDB connection unavailable")
                 _state.value = _state.value.copy(watchlist = _state.value.watchlist.map {
                     it.copy(episodesLoading = false)
                 })
@@ -529,10 +530,15 @@ class TmdbLibraryViewModel(application: Application,
                 try {
                     val title = entry.title
                     val logoLanguagePriority = settings.logoLanguagePriority()
+                    val cachedSeasons = if (title.type == TmdbMediaType.TV)
+                        watchlist.cachedSeasons(title.id) else null
                     val requiresDetails = !watchlist.hasCachedLogo(title.type, title.id,
                         logoLanguagePriority) ||
                         title.originCountries.isEmpty() || title.ukrainianTitle.isNullOrBlank() ||
-                        (title.type == TmdbMediaType.TV && watchlist.cachedSeasons(title.id) == null)
+                        // An empty season cache is not usable metadata. In particular, don't
+                        // mistake it for a successful cache hit and leave a watchlisted series
+                        // with no episodes to display.
+                        (title.type == TmdbMediaType.TV && cachedSeasons.isNullOrEmpty())
                     val details = if (requiresDetails) homeNetworkPermits.withPermit {
                         connection.client.details(title.type, title.id, connection.accessKey,
                             logoLanguagePriority = logoLanguagePriority)
@@ -574,16 +580,36 @@ class TmdbLibraryViewModel(application: Application,
                         selectedSeason != progress?.seasonNumber) 1 else progress?.let {
                         if (it.progress >= 0.95f) it.episodeNumber + 1 else it.episodeNumber
                     } ?: 1
-                    suspend fun seasonEpisodes(number: Int): List<TmdbEpisode> =
-                        watchlist.cachedEpisodes(title.id, number) ?: homeNetworkPermits.withPermit {
+                    suspend fun seasonEpisodes(number: Int): List<TmdbEpisode> {
+                        val cachedEpisodes = watchlist.cachedEpisodes(title.id, number)
+                            ?.takeIf(List<TmdbEpisode>::isNotEmpty)
+                        if (cachedEpisodes != null && cachedEpisodes.all { it.stillUrl != null })
+                            return cachedEpisodes
+
+                        val tmdbEpisodes = homeNetworkPermits.withPermit {
                             connection.client.seasonDetails(title.id, number,
                                 connection.accessKey).episodes
-                        }.also {
-                                watchlist.saveEpisodes(title.id, number, it)
+                        }
+                        // AniTube contributes episode names/numbers but no TMDB still paths.
+                        // Enrich those records from TMDB while keeping the provider's titles.
+                        val episodes = if (cachedEpisodes == null) tmdbEpisodes else {
+                            val tmdbByNumber = tmdbEpisodes.associateBy { it.episodeNumber }
+                            cachedEpisodes.map { cached ->
+                                val tmdb = tmdbByNumber[cached.episodeNumber]
+                                cached.copy(stillUrl = cached.stillUrl ?: tmdb?.stillUrl,
+                                    airDate = cached.airDate ?: tmdb?.airDate)
                             }
+                        }
+                        watchlist.saveEpisodes(title.id, number, episodes)
+                        Log.d(TAG, "Watchlist season loaded title=${title.type.path}:" +
+                            "${title.id} season=$number episodes=${episodes.size} " +
+                            "stills=${episodes.count { it.stillUrl != null }}")
+                        return episodes
+                    }
                     val isAniTubeSeason = selection?.source ==
                         ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.ANITUBE &&
-                        watchlist.cachedEpisodes(title.id, seasonNumber) != null &&
+                        watchlist.cachedEpisodes(title.id, seasonNumber)
+                            ?.isNotEmpty() == true &&
                         (selection.tmdbSeasonNumber ?: progress?.seasonNumber ?:
                             title.matchedSeasonNumber) == seasonNumber
                     if (isAniTubeSeason && seasons.none { it.number == seasonNumber }) {
@@ -594,8 +620,8 @@ class TmdbLibraryViewModel(application: Application,
                         updateWatchlistSeasons(title, seasons)
                     }
                     var season = seasons.firstOrNull { it.number == seasonNumber }
-                    var episodes = if (isAniTubeSeason) watchlist.cachedEpisodes(title.id,
-                        seasonNumber).orEmpty() else season?.let { seasonEpisodes(it.number) }.orEmpty()
+                    var episodes = if (isAniTubeSeason) seasonEpisodes(seasonNumber)
+                        else season?.let { seasonEpisodes(it.number) }.orEmpty()
                     val playlistKey = when (selection?.source) {
                         ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.TORRENT ->
                             selection.topicId?.let { "torrent_$it" }
@@ -615,9 +641,21 @@ class TmdbLibraryViewModel(application: Application,
                             watchlist.cachedPlayableEpisodes(title.type, title.id, it, seasonNumber)
                         }?.takeIf { it.isNotEmpty() }
                     }
-                    var upcoming = episodes.filter {
-                        it.episodeNumber >= episodeNumber && (it.hasAired() || isAniTubeSeason) &&
-                            playableEpisodes?.contains(it.episodeNumber) != false
+                    val airedEpisodes = episodes.filter {
+                        it.episodeNumber >= episodeNumber && (it.hasAired() || isAniTubeSeason)
+                    }
+                    var upcoming = playableEpisodes?.let { playable ->
+                        airedEpisodes.filter { it.episodeNumber in playable }
+                    } ?: airedEpisodes
+                    // A Toloka file index is only a playback hint. If parsing its names mapped
+                    // files to the wrong episode numbers, don't let that hide the whole series
+                    // from the watchlist carousel.
+                    if (upcoming.isEmpty() && airedEpisodes.isNotEmpty() &&
+                        !playableEpisodes.isNullOrEmpty()) {
+                        Log.w(TAG, "Playable episode index matched no upcoming TMDB episodes " +
+                            "title=${title.type.path}:${title.id} season=$seasonNumber " +
+                            "requestedEpisode=$episodeNumber indexed=${playableEpisodes.size}")
+                        upcoming = airedEpisodes
                     }
                     if (upcoming.isEmpty() && !isAniTubeSeason) {
                         for (candidate in seasons.filter { it.number > seasonNumber }
@@ -628,14 +666,19 @@ class TmdbLibraryViewModel(application: Application,
                                 seasonNumber = candidate.number
                                 episodes = released
                                 upcoming = released.take(1)
-                                playableEpisodes = playlistKey?.let {
+                                val nextSeasonPlayable = playlistKey?.let {
                                     watchlist.cachedPlayableEpisodes(title.type, title.id, it,
                                         seasonNumber)
                                 }?.takeIf { it.isNotEmpty() }
-                                if (playableEpisodes != null)
-                                    upcoming = upcoming.filter {
-                                        playableEpisodes?.contains(it.episodeNumber) == true
-                                    }
+                                if (nextSeasonPlayable != null) {
+                                    val indexedNextSeason = released.filter {
+                                        it.episodeNumber in nextSeasonPlayable
+                                    }.take(1)
+                                    if (indexedNextSeason.isNotEmpty()) upcoming = indexedNextSeason
+                                    else Log.w(TAG, "Playable episode index matched no episodes " +
+                                        "in next season title=${title.type.path}:${title.id} " +
+                                        "season=$seasonNumber; keeping TMDB episode")
+                                }
                                 break
                             }
                         }
@@ -656,7 +699,9 @@ class TmdbLibraryViewModel(application: Application,
                                     episode.episodeNumber == progress.episodeNumber &&
                                     (progress?.progress ?: 0f) >= 0.95f)))
                     }
-                    val visibleUpcoming = upcoming.take(12)
+                    // The carousel is a LazyRow, so keep the complete season list here;
+                    // limiting the model to 12 made longer seasons appear incomplete.
+                    val visibleUpcoming = upcoming
                     val visibleEpisodes = (watchedEpisodes + visibleUpcoming)
                         .distinctBy { it.episodeNumber }
                     val cards = visibleEpisodes.map { episode ->
@@ -668,12 +713,14 @@ class TmdbLibraryViewModel(application: Application,
                     // Fill the visible episode still cache after the row is already usable.
                     if (visibleUpcoming.isNotEmpty()) viewModelScope.launch(Dispatchers.IO) {
                         stillCachePermits.withPermit {
-                            watchlist.cacheStills(title.id, visibleUpcoming.take(5))
+                            watchlist.cacheStills(title.id, visibleUpcoming.take(13))
                         }
                     }
                 } catch (error: CancellationException) {
                     throw error
                 } catch (error: Exception) {
+                    Log.w(TAG, "Failed to load watchlist episodes " +
+                        "title=${entry.title.type.path}:${entry.title.id}", error)
                     updateWatchlistEpisodes(entry.title, emptyList(), false)
                 }
             }
@@ -788,7 +835,8 @@ class TmdbLibraryViewModel(application: Application,
 
     private fun TmdbEpisode.hasAired(): Boolean {
         val date = airDate?.let { runCatching { java.time.LocalDate.parse(it) }.getOrNull() }
-            ?: return false
+            // Missing/invalid air dates must not make otherwise valid TMDB episodes vanish.
+            ?: return true
         return !date.isAfter(java.time.LocalDate.now())
     }
 

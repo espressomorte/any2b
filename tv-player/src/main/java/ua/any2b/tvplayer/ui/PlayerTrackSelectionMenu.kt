@@ -45,8 +45,16 @@ internal class PlayerTrackSelectionMenu(private val activity: Activity) {
             .filter { group -> (0 until group.length).any(group::isTrackSupported) }
         val audioLanguageCount = languageCount(audioGroups)
         val subtitleLanguageCount = languageCount(subtitleGroups)
-        audioButton?.isEnabled = audioLanguageCount > 1
-        subtitleButton?.isEnabled = subtitleGroups.isNotEmpty()
+        val hasAudioChoices = audioLanguageCount > 1
+        val hasSubtitleChoices = subtitleGroups.isNotEmpty()
+        audioButton?.isEnabled = hasAudioChoices
+        audioButton?.visibility = if (hasAudioChoices) View.VISIBLE else View.GONE
+        subtitleButton?.isEnabled = hasSubtitleChoices
+        subtitleButton?.visibility = if (hasSubtitleChoices) View.VISIBLE else View.GONE
+        controls?.trackActions?.visibility = if (hasAudioChoices || hasSubtitleChoices)
+            View.VISIBLE else View.GONE
+        if (hasAudioChoices || hasSubtitleChoices)
+            controls?.nowPlayingRow?.visibility = View.VISIBLE
         controls?.audioTrackChoice?.text = choiceLabel(audioGroups, audioLanguageCount, C.TRACK_TYPE_AUDIO)
         controls?.subtitleTrackChoice?.text = choiceLabel(subtitleGroups, subtitleLanguageCount, C.TRACK_TYPE_TEXT)
         audioButton?.contentDescription = "Аудіодоріжка: ${controls?.audioTrackChoice?.text}"

@@ -1,9 +1,7 @@
-package ua.any2b.tvplayer.data
+package ua.any2b.domain.playback.toloka
 
-import ua.any2b.core.tmdb.TmdbMediaType
-
-/** Toloka-only file resolution rules for a watchlist playback request. */
-internal class TolokaWatchlistPlayback {
+/** Pure Toloka selection rules for a watchlist playback request. */
+class TolokaWatchlistPlayback {
     fun episodeContext(
         fileSeason: Int?,
         fileEpisodeStart: Int?,
@@ -12,7 +10,7 @@ internal class TolokaWatchlistPlayback {
         requestedSeason: Int,
         requestedEpisode: Int?,
         matchedSeason: Int?,
-        mediaType: TmdbMediaType?,
+        isTv: Boolean,
         mappedEpisodeForSeason: (Int) -> Int?,
     ): TolokaEpisodeContext {
         val singleFileEpisode = fileEpisodeStart?.takeIf {
@@ -21,7 +19,7 @@ internal class TolokaWatchlistPlayback {
         val season = fileSeason ?: folderSeason
             ?: requestedSeason.takeIf { requestedEpisode != null }
             ?: matchedSeason
-            ?: 1.takeIf { mediaType == TmdbMediaType.TV }
+            ?: 1.takeIf { isTv }
         val episode = singleFileEpisode ?: requestedEpisode
             ?: season?.let(mappedEpisodeForSeason)
         return TolokaEpisodeContext(season, episode)
@@ -54,9 +52,9 @@ internal class TolokaWatchlistPlayback {
     }
 }
 
-internal data class TolokaEpisodeContext(val season: Int?, val episode: Int?)
+data class TolokaEpisodeContext(val season: Int?, val episode: Int?)
 
-internal sealed interface TolokaFileDecision {
+sealed interface TolokaFileDecision {
     data object Wait : TolokaFileDecision
     data object Missing : TolokaFileDecision
     data class Start(val fileId: Int) : TolokaFileDecision

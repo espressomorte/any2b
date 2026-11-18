@@ -27,7 +27,7 @@ import ua.any2b.tvplayer.data.TolokaConnections
 import ua.any2b.tvplayer.data.TolokaRelevanceStore
 import ua.any2b.tvplayer.data.TolokaTmdbMappingStore
 import ua.any2b.tvplayer.data.AniListRomajiResolver
-import ua.any2b.tvplayer.source.PlaybackRequest
+import ua.any2b.domain.playback.PlaybackRequest
 
 data class FreeTolokaState(
     val search: TolokaSearchState = TolokaSearchState.Idle,

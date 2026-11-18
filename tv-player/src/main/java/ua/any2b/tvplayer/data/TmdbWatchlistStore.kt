@@ -33,7 +33,13 @@ class TmdbWatchlistStore(context: Context) {
     private val prefs = appContext.getSharedPreferences("tmdb_watchlist", Context.MODE_PRIVATE)
     private val stillsRoot = File(appContext.filesDir, "watchlist_episode_stills")
 
-    fun all(): List<TmdbWatchlistEntry> = synchronized(lock) { readEntries() }
+    fun all(): List<TmdbWatchlistEntry> = synchronized(lock) {
+        val entries = readEntries()
+        if (entries.size > MAX_WATCHLIST_ENTRIES) {
+            persistEntries(entries)
+            readEntries()
+        } else entries
+    }
 
     fun contains(type: TmdbMediaType, id: Int): Boolean = synchronized(lock) {
         readEntries().any { it.title.type == type && it.title.id == id }
@@ -331,11 +337,7 @@ class TmdbWatchlistStore(context: Context) {
     } catch (_: Exception) { emptyList() }
 
     private fun persistEntries(entries: List<TmdbWatchlistEntry>) {
-        val retained = TmdbWatchlistEntry.Source.entries.flatMap { source ->
-            val limit = if (source == TmdbWatchlistEntry.Source.IN_PROGRESS) MAX_HISTORY_ENTRIES
-                else MAX_MANUAL_ENTRIES
-            entries.filter { it.source == source }.sortedByDescending { it.addedAt }.take(limit)
-        }.sortedByDescending { it.addedAt }
+        val retained = entries.sortedByDescending { it.addedAt }.take(MAX_WATCHLIST_ENTRIES)
         val retainedKeys = retained.map { titleKey(it.title.type, it.title.id) }.toSet()
         val evicted = entries.filterNot { titleKey(it.title.type, it.title.id) in retainedKeys }
         prefs.edit().putString(ENTRIES_KEY, JSONArray().apply {
@@ -377,9 +379,8 @@ class TmdbWatchlistStore(context: Context) {
 
     private companion object {
         const val ENTRIES_KEY = "entries"
-        const val MAX_CACHED_STILLS = 12
-        const val MAX_HISTORY_ENTRIES = 4
-        const val MAX_MANUAL_ENTRIES = 5
+        const val MAX_WATCHLIST_ENTRIES = 13
+        const val MAX_CACHED_STILLS = 13
         val lock = Any()
     }
 }

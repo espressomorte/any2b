@@ -49,6 +49,9 @@ import ua.any2b.core.toloka.TolokaReleaseMetadataParser
 import ua.any2b.core.toloka.TorrServerBasicAuth
 import ua.any2b.core.toloka.TorrServerProbe
 import ua.any2b.core.extractor.StreamResolver
+import ua.any2b.domain.playback.NextEpisodeSource
+import ua.any2b.domain.playback.PlaybackSource
+import ua.any2b.domain.playback.nextEpisodePlaybackRequest
 import ua.any2b.tvplayer.data.AnitubeStreamFallback
 import ua.any2b.tvplayer.ui.Media3PlayerTransport
 import ua.any2b.tvplayer.ui.PlayerControlsController
@@ -725,13 +728,16 @@ class PlayerActivity : FragmentActivity() {
         }
         binding.playerControls.nowPlayingLabel.text = "$title  •  $episodeLabel"
         binding.playerControls.nowPlayingRow.visibility = View.VISIBLE
-        if (canGoNextEpisode()) {
-            val nextEpisode = nextEpisodeNumber(episode, canAdvance = true) ?: return
-            binding.playerControls.nextEpisodeButton.text = "$nextEpisode серія"
-            binding.playerControls.nextEpisodeButton.contentDescription =
-                "Перейти до $nextEpisode серії"
-            binding.playerControls.nextEpisodeButton.visibility = View.VISIBLE
-            binding.playerControls.nextEpisodeButton.setOnClickListener { launchNextEpisode() }
+        val nextEpisode = nextEpisodeNumber(episode, canAdvance = canGoNextEpisode())
+        binding.playerControls.nextEpisodeButton.apply {
+            if (nextEpisode != null) {
+                text = "$nextEpisode серія"
+                contentDescription = "Перейти до $nextEpisode серії"
+                setOnClickListener { launchNextEpisode() }
+                visibility = View.VISIBLE
+            } else {
+                visibility = View.GONE
+            }
         }
     }
 
@@ -854,8 +860,8 @@ class PlayerActivity : FragmentActivity() {
         if (nextEpisodeTransitioning) return true
         if (!canGoNextEpisode()) return false
         val source = when {
-            isToloka -> ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.TORRENT
-            isTmdbAnitube -> ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.ANITUBE
+            isToloka -> PlaybackSource.TORRENT
+            isTmdbAnitube -> PlaybackSource.ANITUBE
             else -> return false
         }
         val mediaType = TmdbMediaType.entries.firstOrNull {
@@ -863,13 +869,12 @@ class PlayerActivity : FragmentActivity() {
         } ?: return false
         val tmdbId = intent.getIntExtra(EXTRA_TMDB_ID, -1)
         val season = intent.getIntExtra(EXTRA_TMDB_SEASON, -1).takeIf { it > 0 }
-        val savedAnimeSeason = if (source ==
-            ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.ANITUBE && tmdbId > 0 && season != null) {
+        val savedAnimeSeason = if (source == PlaybackSource.ANITUBE && tmdbId > 0 && season != null) {
             TmdbWatchHistoryStore(this).playbackSelection(mediaType, tmdbId, season)?.anitubeSeasonNumber
         } else null
         val request = nextEpisodePlaybackRequest(
             tmdbId = tmdbId,
-            mediaType = mediaType,
+            isTv = mediaType == TmdbMediaType.TV,
             season = season,
             currentEpisode = intent.getIntExtra(EXTRA_TMDB_EPISODE, episodeNumber).takeIf { it > 0 },
             source = source,
@@ -1025,11 +1030,11 @@ class PlayerActivity : FragmentActivity() {
     }
 
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
-        if (binding.playerControls.nextEpisodeButton.hasFocus() &&
-            event.action == android.view.KeyEvent.ACTION_DOWN &&
+        val nextEpisodeButton = binding.playerControls.nextEpisodeButton
+        if (nextEpisodeButton.hasFocus() && event.action == android.view.KeyEvent.ACTION_DOWN &&
             event.keyCode in setOf(android.view.KeyEvent.KEYCODE_DPAD_CENTER,
                 android.view.KeyEvent.KEYCODE_ENTER, android.view.KeyEvent.KEYCODE_NUMPAD_ENTER)) {
-            binding.playerControls.nextEpisodeButton.performClick()
+            nextEpisodeButton.performClick()
             return true
         }
         val audioButton = binding.playerControls.findViewById<View>(R.id.btnAudioTracks)

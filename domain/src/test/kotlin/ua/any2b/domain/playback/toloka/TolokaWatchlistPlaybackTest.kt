@@ -1,8 +1,7 @@
-package ua.any2b.tvplayer.data
+package ua.any2b.domain.playback.toloka
 
-import org.junit.Assert.assertEquals
-import org.junit.Test
-import ua.any2b.core.tmdb.TmdbMediaType
+import kotlin.test.Test
+import kotlin.test.assertEquals
 import java.net.ConnectException
 
 class TolokaWatchlistPlaybackTest {
@@ -26,7 +25,7 @@ class TolokaWatchlistPlaybackTest {
     }
 
     @Test
-    fun torrServerConnectionErrorsAreClassifiedForUi() {
+    fun torrServerErrorsAreClassifiedForUi() {
         assertEquals("Не вдалося встановити з’єднання з TorrServer. Перевірте адресу та чи запущений сервер.",
             playback.classifyServerError(ConnectException("offline")))
         assertEquals("TorrServer відхилив авторизацію (HTTP 401). Перевірте логін і пароль.",
@@ -38,12 +37,12 @@ class TolokaWatchlistPlaybackTest {
         assertEquals(TolokaEpisodeContext(4, 12), playback.episodeContext(
             fileSeason = 4, fileEpisodeStart = 12, fileEpisodeEnd = null,
             folderSeason = 2, requestedSeason = 3, requestedEpisode = 8,
-            matchedSeason = 1, mediaType = TmdbMediaType.TV,
+            matchedSeason = 1, isTv = true,
             mappedEpisodeForSeason = { 14 }))
         assertEquals(TolokaEpisodeContext(1, 14), playback.episodeContext(
             fileSeason = null, fileEpisodeStart = null, fileEpisodeEnd = null,
             folderSeason = null, requestedSeason = 3, requestedEpisode = null,
-            matchedSeason = 1, mediaType = TmdbMediaType.TV,
+            matchedSeason = 1, isTv = true,
             mappedEpisodeForSeason = { 14 }))
     }
 }
