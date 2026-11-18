@@ -1,19 +1,60 @@
 package ua.any2b.tvplayer
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 import ua.any2b.core.tmdb.TmdbMediaType
 import ua.any2b.core.tmdb.TmdbTitle
-import ua.any2b.tvplayer.data.TmdbPlaybackSelection
 import ua.any2b.tvplayer.data.TmdbEpisodeProgress
 import ua.any2b.domain.playback.AutoPlaybackDecision
 import ua.any2b.domain.playback.AutoPlaybackRequest
+import ua.any2b.domain.playback.PlaybackHostEffect
+import ua.any2b.domain.playback.PlaybackPreparationRequest
+import ua.any2b.domain.playback.PlaybackRequest
 import ua.any2b.domain.playback.PlaybackSource
 import ua.any2b.domain.playback.decideAutoPlayback
 import ua.any2b.domain.playback.watchlistEpisode
 import ua.any2b.domain.playback.watchlistSeason
 
 class PlaybackScenarioPolicyTest {
+    @Test
+    fun coordinatorReturnsHostEffectsForSourcePreparationAndFailureTransitions() {
+        val coordinator = PlaybackCoordinator()
+        val id = coordinator.begin()
+
+        assertEquals(PlaybackHostEffect.PrepareSource(
+            PlaybackPreparationRequest.AniTubeEpisode),
+            coordinator.decideAutoPlayback(AutoPlaybackRequest(PlaybackSource.ANITUBE, 3),
+                detailsReady = true, torrentFilesReady = false, savedFileAvailable = false,
+                episodeFileId = null, alreadyStarted = false, failed = false))
+        assertEquals(PlaybackHostEffect.ShowError("Не знайдено серію"),
+            coordinator.transition(PlaybackScenarioEvent.Failed(id, "Не знайдено серію"))
+                .effects.single())
+        assertEquals(PlaybackHostEffect.RetrySource(PlaybackSource.TORRENT),
+            coordinator.transition(PlaybackScenarioEvent.RetryRequested(id,
+                PlaybackSource.TORRENT)).effects.single())
+        assertEquals(PlaybackHostEffect.Finish,
+            coordinator.transition(PlaybackScenarioEvent.Finished(id)).effects.single())
+    }
+
+    @Test
+    fun coordinatorLaunchEffectCarriesTypedRequestAndRejectsStaleRequestId() {
+        val coordinator = PlaybackCoordinator()
+        coordinator.begin()
+        val requestId = coordinator.beginLaunch()!!
+        val request = PlaybackRequest.TorrentFile(
+            streamUrl = "http://localhost:8090/stream",
+            topicId = "42",
+            fileId = 7,
+            fileName = "episode.mkv",
+        )
+
+        assertEquals(PlaybackHostEffect.LaunchPlayback(request),
+            coordinator.launchPlaybackRequest(requestId, request))
+        coordinator.launchFailed(requestId)
+        assertNull(coordinator.launchPlaybackRequest(requestId, request))
+    }
+
     @Test
     fun coordinatorRejectsEventsFromOlderScenarioAndDuplicateLaunches() {
         val coordinator = PlaybackCoordinator()
@@ -41,7 +82,7 @@ class PlaybackScenarioPolicyTest {
         val requestId = coordinator.beginLaunch()!!
         assertEquals(null, coordinator.beginLaunch())
         assertEquals(true, coordinator.playbackLaunched(id, requestId,
-            TmdbPlaybackSelection.Source.TORRENT))
+            PlaybackSource.TORRENT))
         assertEquals(null, coordinator.beginLaunch())
         assertEquals(true, coordinator.playerReturned(id))
         assertEquals(PlaybackScenarioPhase.RETURNING_FROM_PLAYER, coordinator.phase)
@@ -61,7 +102,7 @@ class PlaybackScenarioPolicyTest {
         assertEquals(false, coordinator.isCurrentRequest(oldRequest))
         assertEquals(true, coordinator.isCurrentRequest(retryRequest))
         assertEquals(false, coordinator.playbackLaunched(scenarioId, oldRequest,
-            TmdbPlaybackSelection.Source.TORRENT))
+            PlaybackSource.TORRENT))
         assertEquals(true, coordinator.isCurrentRequest(retryRequest))
     }
 
@@ -69,7 +110,7 @@ class PlaybackScenarioPolicyTest {
     fun externalPlayerReturnBecomesTypedProgressOrCompletionEffect() {
         val coordinator = PlaybackCoordinator()
         val title = TmdbTitle(7, TmdbMediaType.TV, "Series", null, 2020, null, null, null)
-        val context = ExternalPlaybackContext(title, TmdbPlaybackSelection.Source.ANITUBE,
+        val context = ExternalPlaybackContext(title, PlaybackSource.ANITUBE,
             episodeNumber = 4, seasonNumber = 2, voiceIndex = 1, episodeIndex = 3)
 
         assertEquals(ExternalPlaybackEffect.SaveEpisodeProgress(title, 1, 3, 4, 0.5f,

@@ -26,11 +26,13 @@ import ua.any2b.core.toloka.TorrServerBasicAuth
 import ua.any2b.core.toloka.TorrServerClient
 import ua.any2b.core.toloka.TorrServerFailure
 import ua.any2b.core.toloka.TolokaReleaseMetadataParser
-import ua.any2b.core.toloka.WorkerFailure
+import ua.any2b.core.toloka.TolokaFailure
 import ua.any2b.tvplayer.data.AniListTmdbCatalog
 import ua.any2b.tvplayer.data.AniListLocalDataMigrator
 import ua.any2b.tvplayer.data.TmdbFavoritesStore
 import ua.any2b.tvplayer.data.TmdbWatchHistoryStore
+import ua.any2b.tvplayer.data.TmdbEpisodeProgress
+import ua.any2b.tvplayer.data.TmdbPlaybackSelection
 import ua.any2b.tvplayer.data.TmdbWatchlistEntry
 import ua.any2b.tvplayer.data.TmdbWatchlistStore
 import ua.any2b.tvplayer.data.AniTubeVoiceOption
@@ -165,11 +167,15 @@ class TmdbLibraryViewModel(application: Application,
             val savedSelection = savedProgressSeason?.let {
                 history.playbackSelection(entry.title.type, entry.title.id, it)
             } ?: history.playbackSelection(entry.title.type, entry.title.id)
+            val cachedCards = cachedWatchlistCards(entry.title, savedProgressSeason,
+                savedProgress, savedSelection)
             TmdbWatchlistHomeItem(entry,
                 logoUrl = watchlist.cachedLogo(entry.title.type, entry.title.id),
                 seasons = if (entry.title.type == TmdbMediaType.TV)
                     watchlist.cachedSeasons(entry.title.id).orEmpty() else emptyList(),
                 selectedSeasonNumber = savedProgressSeason,
+                nextEpisodes = cachedCards,
+                episodesLoading = entry.title.type == TmdbMediaType.TV && cachedCards.isEmpty(),
                 displaySeasonNumber = savedProgress?.animeSeasonNumber
                     ?: entry.title.matchedAnimeSeasonNumber ?: savedSelection?.anitubeSeasonNumber,
                 playbackProgress = savedProgress?.takeIf { it.durationMs > 0L }?.progress,
@@ -352,20 +358,23 @@ class TmdbLibraryViewModel(application: Application,
                 }
                 val progress = history.episodeProgress(entry.title.type, entry.title.id)
                 val progressSeason = progress?.seasonNumber
+                val selectedSeason = when {
+                    previous == null -> progressSeason ?: entry.title.matchedSeasonNumber
+                    progressSeason != null && previous.selectedSeasonNumber != progressSeason ->
+                        progressSeason
+                    else -> previous.selectedSeasonNumber
+                }
                 val selection = history.playbackSelection(entry.title.type, entry.title.id,
-                    progressSeason ?: entry.title.matchedSeasonNumber)
+                    selectedSeason)
+                val cachedCards = previous?.nextEpisodes?.takeIf { it.isNotEmpty() }
+                    ?: cachedWatchlistCards(entry.title, selectedSeason, progress, selection)
                 TmdbWatchlistHomeItem(entry,
                     logoUrl = watchlist.cachedLogo(entry.title.type, entry.title.id),
                     seasons = if (entry.title.type == TmdbMediaType.TV)
                         watchlist.cachedSeasons(entry.title.id).orEmpty() else emptyList(),
-                    selectedSeasonNumber = when {
-                        previous == null -> progressSeason ?: entry.title.matchedSeasonNumber
-                        progressSeason != null && previous.selectedSeasonNumber != progressSeason ->
-                            progressSeason
-                        else -> previous.selectedSeasonNumber
-                    },
-                    nextEpisodes = previous?.nextEpisodes.orEmpty(),
-                    episodesLoading = entry.title.type == TmdbMediaType.TV,
+                    selectedSeasonNumber = selectedSeason,
+                    nextEpisodes = cachedCards,
+                    episodesLoading = entry.title.type == TmdbMediaType.TV && cachedCards.isEmpty(),
                     anitubeVoices = selection?.anitubeReleaseId?.let { releaseId ->
                         watchlist.cachedAniTubeVoices(entry.title.type, entry.title.id,
                             progressSeason ?: entry.title.matchedSeasonNumber ?: 1, releaseId)
@@ -454,11 +463,53 @@ class TmdbLibraryViewModel(application: Application,
         }
     }
 
+    private fun cachedWatchlistCards(
+        title: TmdbTitle,
+        selectedSeason: Int?,
+        progress: TmdbEpisodeProgress?,
+        selection: TmdbPlaybackSelection?,
+    ): List<TmdbEpisodeHomeCard> {
+        if (title.type != TmdbMediaType.TV) return emptyList()
+        val season = selectedSeason ?: progress?.seasonNumber ?: 1
+        val episodes = watchlist.cachedEpisodes(title.id, season).orEmpty()
+        if (episodes.isEmpty()) return emptyList()
+        val isAniTube = selection?.source == TmdbPlaybackSelection.Source.ANITUBE
+        val playlistKey = when (selection?.source) {
+            TmdbPlaybackSelection.Source.TORRENT -> selection.topicId?.let { "torrent_$it" }
+            TmdbPlaybackSelection.Source.ANITUBE -> selection.anitubeReleaseId?.let {
+                "anitube_${it}_${selection.voiceIndex}"
+            }
+            null -> null
+        }
+        val playable = playlistKey?.let {
+            watchlist.cachedPlayableEpisodes(title.type, title.id, it, season)
+        }?.takeIf { it.isNotEmpty() }
+        val nextNumber = if (progress?.seasonNumber == season) {
+            if (progress.progress >= 0.95f) progress.episodeNumber + 1 else progress.episodeNumber
+        } else 1
+        val aired = episodes.filter { it.hasAired() || isAniTube }
+        val watched = aired.filter { progress != null &&
+            (season < progress.seasonNumber || season == progress.seasonNumber &&
+                (it.episodeNumber < progress.episodeNumber ||
+                    it.episodeNumber == progress.episodeNumber && progress.progress >= 0.95f)) }
+        val upcoming = aired.filter { it.episodeNumber >= nextNumber }.let { candidates ->
+            candidates.filter { playable == null || it.episodeNumber in playable }
+                .ifEmpty { candidates }
+        }
+        return (watched + upcoming).distinctBy { it.episodeNumber }.map { episode ->
+            TmdbEpisodeHomeCard(episode, watchlist.cachedStill(title.id, episode)?.absolutePath,
+                watched = episode in watched)
+        }
+    }
+
     fun selectWatchlistSeason(title: TmdbTitle, seasonNumber: Int) {
         val selection = history.playbackSelection(title.type, title.id, seasonNumber)
+        val cachedCards = cachedWatchlistCards(title, seasonNumber,
+            history.episodeProgress(title.type, title.id), selection)
         _state.value = _state.value.copy(watchlist = _state.value.watchlist.map { item ->
             if (item.entry.title.type == title.type && item.entry.title.id == title.id)
-                item.copy(selectedSeasonNumber = seasonNumber, episodesLoading = true,
+                item.copy(selectedSeasonNumber = seasonNumber, nextEpisodes = cachedCards,
+                    episodesLoading = cachedCards.isEmpty(),
                     displaySeasonNumber = selection?.anitubeSeasonNumber ?: seasonNumber,
                     anitubeVoices = selection?.anitubeReleaseId?.let { releaseId ->
                         watchlist.cachedAniTubeVoices(title.type, title.id, seasonNumber, releaseId)
@@ -479,12 +530,15 @@ class TmdbLibraryViewModel(application: Application,
             selection.anitubeReleaseId ?: return)
         val option = names.getOrNull(voiceIndex) ?: return
         val selectedIndex = option.primaryIndex
+        val selectedSelection = selection.copy(voiceIndex = selectedIndex, voiceName = option.name)
         history.savePlaybackSelection(title.type, title.id,
-            selection.copy(voiceIndex = selectedIndex, voiceName = option.name), seasonNumber)
+            selectedSelection, seasonNumber)
+        val cachedCards = cachedWatchlistCards(title, seasonNumber,
+            history.episodeProgress(title.type, title.id), selectedSelection)
         _state.value = _state.value.copy(watchlist = _state.value.watchlist.map { item ->
             if (item.entry.title.type == title.type && item.entry.title.id == title.id)
                 item.copy(selectedVoiceIndex = selectedIndex, anitubeVoices = names,
-                    episodesLoading = true) else item
+                    nextEpisodes = cachedCards, episodesLoading = cachedCards.isEmpty()) else item
         })
         refreshWatchlistEpisodes(watchlist.all().filter {
             animationOnly || visibleInCurrentCatalog(it.title)
@@ -583,7 +637,8 @@ class TmdbLibraryViewModel(application: Application,
                     suspend fun seasonEpisodes(number: Int): List<TmdbEpisode> {
                         val cachedEpisodes = watchlist.cachedEpisodes(title.id, number)
                             ?.takeIf(List<TmdbEpisode>::isNotEmpty)
-                        if (cachedEpisodes != null && cachedEpisodes.all { it.stillUrl != null })
+                        if (cachedEpisodes != null &&
+                            watchlist.hasTmdbEpisodeMetadata(title.id, number))
                             return cachedEpisodes
 
                         val tmdbEpisodes = homeNetworkPermits.withPermit {
@@ -601,6 +656,7 @@ class TmdbLibraryViewModel(application: Application,
                             }
                         }
                         watchlist.saveEpisodes(title.id, number, episodes)
+                        watchlist.markTmdbEpisodeMetadata(title.id, number)
                         Log.d(TAG, "Watchlist season loaded title=${title.type.path}:" +
                             "${title.id} season=$number episodes=${episodes.size} " +
                             "stills=${episodes.count { it.stillUrl != null }}")
@@ -721,7 +777,11 @@ class TmdbLibraryViewModel(application: Application,
                 } catch (error: Exception) {
                     Log.w(TAG, "Failed to load watchlist episodes " +
                         "title=${entry.title.type.path}:${entry.title.id}", error)
-                    updateWatchlistEpisodes(entry.title, emptyList(), false)
+                    val cached = _state.value.watchlist.firstOrNull {
+                        it.entry.title.type == entry.title.type &&
+                            it.entry.title.id == entry.title.id
+                    }?.nextEpisodes.orEmpty()
+                    updateWatchlistEpisodes(entry.title, cached, false)
                 }
             }
         }
@@ -753,7 +813,7 @@ class TmdbLibraryViewModel(application: Application,
             } ?: run {
                 val bytes = try {
                     TolokaConnections.torrent(getApplication(), topicId)
-                } catch (_: WorkerFailure.LinkExpired) {
+                } catch (_: TolokaFailure.LinkExpired) {
                     val queries = listOfNotNull(title.ukrainianTitle, title.title,
                         title.originalTitle, title.englishTitle)
                         .map(String::trim).filter(String::isNotBlank)
@@ -766,7 +826,7 @@ class TmdbLibraryViewModel(application: Application,
                             break
                         }
                     }
-                    if (!refreshed) throw WorkerFailure.LinkExpired()
+                    if (!refreshed) throw TolokaFailure.LinkExpired()
                     TolokaConnections.torrent(getApplication(), topicId)
                 }
                 torrServer.upload(serverUrl, bytes, credentials).also { refreshed ->

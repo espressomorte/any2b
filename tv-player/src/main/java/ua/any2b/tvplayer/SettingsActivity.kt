@@ -25,7 +25,7 @@ import ua.any2b.core.update.AppRelease
 import ua.any2b.core.update.GitHubReleaseClient
 import ua.any2b.core.update.compareVersions
 import ua.any2b.core.fanart.FanartClient
-import ua.any2b.core.toloka.WorkerFailure
+import ua.any2b.core.toloka.TolokaFailure
 import ua.any2b.core.toloka.TorrServerProbe
 import ua.any2b.core.toloka.TorrServerBasicAuth
 import ua.any2b.tvplayer.data.SettingsManager
@@ -40,7 +40,6 @@ import ua.any2b.tvplayer.data.MalClientIdStore
 import ua.any2b.tvplayer.data.TolokaCredentialStore
 import ua.any2b.tvplayer.data.TolokaConnections
 import ua.any2b.tvplayer.data.EncryptedConfigSource
-import ua.any2b.tvplayer.data.WorkerConnections
 import ua.any2b.tvplayer.data.TorrServerAuthStore
 import ua.any2b.tvplayer.data.TolokaPlaybackStore
 import ua.any2b.tvplayer.data.TmdbWatchHistoryStore
@@ -73,7 +72,6 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private val tolokaCredentialStore = TolokaCredentialStore(application)
     private val encryptedConfigSource = EncryptedConfigSource(application)
     private val fanartClient = FanartClient()
-    private val workerClient = WorkerConnections.client
     private val torrServerProbe = TorrServerProbe()
     private val torrServerAuthStore = TorrServerAuthStore(application)
 
@@ -325,21 +323,15 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     fun checkWorker() {
         if (checkingWorker) return
         checkingWorker = true
-        _workerCheck.value = if (_encryptedConfigEnabled.value) "Перевіряємо Toloka…" else "Перевіряємо Worker…"
+        _workerCheck.value = "Перевіряємо Toloka…"
         viewModelScope.launch {
             try {
-                if (_encryptedConfigEnabled.value) {
-                    TolokaConnections.checkDirect(getApplication())
-                    _workerCheck.value = "Toloka доступна · вхід підтверджено"
-                } else {
-                    val key = workerKeyStore.read() ?: throw IllegalArgumentException("Вкажіть ключ Worker")
-                    val status = workerClient.status(_workerUrl.value, key)
-                    _workerCheck.value = "Worker доступний · KV: ${if (status.kvConfigured) "так" else "ні"} · сесія: ${if (status.sessionStored) "так" else "ні"}"
-                }
+                TolokaConnections.checkDirect(getApplication())
+                _workerCheck.value = "Toloka доступна · вхід підтверджено"
             } catch (error: CancellationException) {
                 throw error
-            } catch (error: WorkerFailure) {
-                _workerCheck.value = if (error is WorkerFailure.RateLimited)
+            } catch (error: TolokaFailure) {
+                _workerCheck.value = if (error is TolokaFailure.RateLimited)
                     "Toloka обмежила запити. Повторіть через ${error.waitSeconds} с"
                 else error.message.orEmpty()
             } catch (error: IllegalArgumentException) {

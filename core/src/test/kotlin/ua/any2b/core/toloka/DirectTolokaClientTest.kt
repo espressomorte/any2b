@@ -49,6 +49,8 @@ class DirectTolokaClientTest {
             assertEquals(listOf("123"), first.results.map { it.id })
             assertFalse(first.sessionReused ?: true)
             assertTrue(searchedQuery.contains("nm="))
+            val second = client.search("user", "password", "Тест 2021")
+            assertTrue(second.sessionReused == true)
             assertEquals('d'.code.toByte(), client.torrent("user", "password", "123")[0])
             assertEquals(1, logins.get())
         } finally { server.stop(0) }

@@ -32,14 +32,14 @@ internal sealed interface AniTubeWatchlistAction {
 internal data class AniTubePlaybackSeasons(val tmdbSeason: Int?, val animeSeason: Int?)
 
 /** AniTube-specific watchlist selection and fallback rules; contains no Android dependencies. */
-internal class AniTubeWatchlistPlayback {
+internal class AniTubeWatchlistPlayback : AniTubePlaybackPort {
     private var targetReleaseId: Int? = null
     private var releaseRequested = false
     private var savedReleaseLookupStarted = false
     private var playbackStarted = false
     private var failed = false
 
-    fun playbackSeasons(
+    override fun playbackSeasons(
         title: TmdbTitle,
         requestedTmdbSeason: Int,
         requestedAnimeSeason: Int?,
@@ -55,7 +55,10 @@ internal class AniTubeWatchlistPlayback {
         return AniTubePlaybackSeasons(tmdbSeason, animeSeason)
     }
 
-    fun onState(request: AniTubeWatchlistRequest, state: AnitubeState): AniTubeWatchlistAction {
+    override fun onWatchlistState(
+        request: AniTubeWatchlistRequest,
+        state: AnitubeState,
+    ): AniTubeWatchlistAction {
         if (playbackStarted || failed || request.episodeNumber <= 0) return AniTubeWatchlistAction.None
         if (targetReleaseId == null) targetReleaseId = request.savedReleaseId
         val preferredAnimeSeason = request.animeSeason

@@ -7,6 +7,13 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import ua.any2b.core.tmdb.TmdbMediaType
+import ua.any2b.domain.playback.PlaybackSource
+import ua.any2b.domain.playback.StreamFailure
+import ua.any2b.domain.playback.anitubeResumePositionMs
+import ua.any2b.domain.playback.canAdvanceToNextEpisode
+import ua.any2b.domain.playback.classifyHttpPlaybackStatus
+import ua.any2b.domain.playback.nextEpisodeNumber
+import ua.any2b.domain.playback.torrentResumePositionMs
 
 class PlayerPoliciesTest {
     @Test
@@ -80,6 +87,16 @@ class PlayerPoliciesTest {
         episode: Int = 7,
         nextEpisodeAvailable: Boolean = true,
         topicId: String? = null,
-    ) = canAdvanceToNextEpisode(mediaType, season, episode, source,
-        nextEpisodeAvailable, topicId)
+    ) = canAdvanceToNextEpisode(
+        isTv = mediaType == TmdbMediaType.TV.path,
+        seasonNumber = season,
+        episodeNumber = episode,
+        source = when (source) {
+            PlayerActivity.SOURCE_TOLOKA -> PlaybackSource.TORRENT
+            PlayerActivity.SOURCE_ANITUBE_TMDB -> PlaybackSource.ANITUBE
+            else -> null
+        },
+        nextEpisodeAvailable = nextEpisodeAvailable,
+        tolokaTopicId = topicId,
+    )
 }

@@ -16,9 +16,9 @@ class AniTubeWatchlistPlaybackTest {
 
         assertEquals(AniTubeWatchlistAction.LoadSavedRelease(42, 3,
             "https://example.test/42"),
-            coordinator.onState(request, AnitubeState.Error("search failed")))
+            coordinator.onWatchlistState(request, AnitubeState.Error("search failed")))
         assertEquals(AniTubeWatchlistAction.Failed("direct failed"),
-            coordinator.onState(request, AnitubeState.Error("direct failed")))
+            coordinator.onWatchlistState(request, AnitubeState.Error("direct failed")))
     }
 
     @Test
@@ -28,7 +28,7 @@ class AniTubeWatchlistPlaybackTest {
 
         assertEquals(AniTubeWatchlistAction.Failed(
             "Збережену озвучку AniTube більше не знайдено"),
-            coordinator.onState(request(savedVoiceName = "Далі Буде"), state))
+            coordinator.onWatchlistState(request(savedVoiceName = "Далі Буде"), state))
     }
 
     @Test
@@ -37,7 +37,7 @@ class AniTubeWatchlistPlaybackTest {
 
         assertEquals(AniTubeWatchlistAction.Failed(
             "У вибраній озвучці не знайдено цю серію"),
-            coordinator.onState(request(), found(episodeNumber = 1)))
+            coordinator.onWatchlistState(request(), found(episodeNumber = 1)))
     }
 
     @Test
@@ -47,8 +47,8 @@ class AniTubeWatchlistPlaybackTest {
         val state = found()
 
         assertEquals(AniTubeWatchlistAction.SelectPlayback(0, 1, null),
-            coordinator.onState(request, state))
-        assertEquals(AniTubeWatchlistAction.None, coordinator.onState(request, state))
+            coordinator.onWatchlistState(request, state))
+        assertEquals(AniTubeWatchlistAction.None, coordinator.onWatchlistState(request, state))
     }
 
     @Test

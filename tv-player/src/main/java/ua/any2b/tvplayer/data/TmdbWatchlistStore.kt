@@ -108,6 +108,13 @@ class TmdbWatchlistStore(context: Context) {
         } catch (_: Exception) { null }
     }
 
+    fun hasTmdbEpisodeMetadata(seriesId: Int, seasonNumber: Int): Boolean =
+        prefs.getBoolean("tmdb_episodes_loaded_${seriesId}_$seasonNumber", false)
+
+    fun markTmdbEpisodeMetadata(seriesId: Int, seasonNumber: Int) {
+        prefs.edit().putBoolean("tmdb_episodes_loaded_${seriesId}_$seasonNumber", true).apply()
+    }
+
     fun saveEpisodes(seriesId: Int, seasonNumber: Int, episodes: List<TmdbEpisode>) = synchronized(lock) {
         prefs.edit().putString(episodeKey(seriesId, seasonNumber), JSONArray().apply {
             episodes.forEach { episode -> put(JSONObject().apply {

@@ -72,11 +72,11 @@ class DirectTolokaClient(
         val authorization = if (!username.isNullOrBlank() && !password.isNullOrBlank())
             Credentials.basic(username, password) else null
         request(url, authorization = authorization).use { response ->
-            if (!response.isSuccessful) throw WorkerFailure.TolokaHttp(response.code)
+            if (!response.isSuccessful) throw TolokaFailure.Http(response.code)
             val xml = response.body?.string().orEmpty()
             if (!xml.contains("<rss", ignoreCase = true) &&
                 !xml.contains("<feed", ignoreCase = true))
-                throw WorkerFailure.TolokaInvalidResponse()
+                throw TolokaFailure.InvalidResponse()
             xml
         }
     }
@@ -95,7 +95,7 @@ class DirectTolokaClient(
         val html = page(request(url))
         if (!isAuthenticated(html)) {
             sessionUntil = 0
-            throw WorkerFailure.TolokaInvalidResponse()
+            throw TolokaFailure.InvalidResponse()
         }
         val parsed = TolokaHtmlSearchParser.parse(html, origin)
         val now = System.currentTimeMillis()
@@ -108,14 +108,14 @@ class DirectTolokaClient(
     suspend fun torrent(username: String, password: String, topicId: String): ByteArray = lock.withLock {
         require(topicId.matches(Regex("[0-9]{1,12}"))) { "Некоректний ID роздачі" }
         val link = downloads[topicId]?.takeIf { it.second > System.currentTimeMillis() }
-            ?.first ?: throw WorkerFailure.LinkExpired()
+            ?.first ?: throw TolokaFailure.LinkExpired()
         ensureSession(username, password)
         request(link).use { response ->
-            if (!response.isSuccessful) throw WorkerFailure.TolokaHttp(response.code)
+            if (!response.isSuccessful) throw TolokaFailure.Http(response.code)
             val contentType = response.header("Content-Type").orEmpty().lowercase()
             if (contentType.contains("text/html") || contentType.contains("json"))
-                throw WorkerFailure.TolokaInvalidResponse()
-            val input = response.body?.byteStream() ?: throw WorkerFailure.TolokaInvalidResponse()
+                throw TolokaFailure.InvalidResponse()
+            val input = response.body?.byteStream() ?: throw TolokaFailure.InvalidResponse()
             val output = java.io.ByteArrayOutputStream()
             val buffer = ByteArray(8192)
             input.use {
@@ -123,18 +123,18 @@ class DirectTolokaClient(
                     val count = it.read(buffer)
                     if (count < 0) break
                     output.write(buffer, 0, count)
-                    if (output.size() > 2 * 1024 * 1024) throw WorkerFailure.TolokaInvalidResponse()
+                    if (output.size() > 2 * 1024 * 1024) throw TolokaFailure.InvalidResponse()
                 }
             }
             output.toByteArray().also { bytes ->
                 if (!TorrentStructure.valid(bytes))
-                    throw WorkerFailure.TolokaInvalidResponse()
+                    throw TolokaFailure.InvalidResponse()
             }
         }
     }
 
     private suspend fun ensureSession(username: String, password: String): Boolean {
-        if (remainingCooldownSeconds() > 0) throw WorkerFailure.RateLimited(remainingCooldownSeconds())
+        if (remainingCooldownSeconds() > 0) throw TolokaFailure.RateLimited(remainingCooldownSeconds())
         require(username.isNotBlank() && password.isNotBlank()) { "Вкажіть дані Toloka" }
         if (sessionUntil > System.currentTimeMillis()) return true
         synchronized(cookies) { cookies.clear() }
@@ -145,7 +145,7 @@ class DirectTolokaClient(
         val login = page(request(origin.newBuilder().addPathSegment("login.php").build(), form))
         val confirmed = isAuthenticated(login) ||
             isAuthenticated(page(request(origin.newBuilder().addPathSegment("tracker.php").build())))
-        if (!confirmed) throw WorkerFailure.TolokaUnauthorized()
+        if (!confirmed) throw TolokaFailure.Unauthorized()
         sessionUntil = System.currentTimeMillis() + 1_800_000
         return false
     }
@@ -156,18 +156,18 @@ class DirectTolokaClient(
         val html = it.body?.string().orEmpty()
         if (!it.isSuccessful || html.contains("cf-chl-") ||
             html.contains("challenge-platform") || html.contains("just a moment", ignoreCase = true))
-            throw WorkerFailure.TolokaInvalidResponse()
+            throw TolokaFailure.InvalidResponse()
         html
     }
 
     private suspend fun request(initial: HttpUrl, form: FormBody? = null,
         authorization: String? = null): Response {
-        if (remainingCooldownSeconds() > 0) throw WorkerFailure.RateLimited(remainingCooldownSeconds())
+        if (remainingCooldownSeconds() > 0) throw TolokaFailure.RateLimited(remainingCooldownSeconds())
         var url = initial
         var body = form
         repeat(6) { redirect ->
             if (url.host != origin.host || url.scheme != origin.scheme)
-                throw WorkerFailure.TolokaInvalidResponse()
+                throw TolokaFailure.InvalidResponse()
             val builder = Request.Builder().url(url).header("User-Agent", "Animarium-Toloka/0.2")
                 .header("Referer", origin.newBuilder().addPathSegment("login.php").build().toString())
             if (authorization != null) builder.header("Authorization", authorization)
@@ -183,8 +183,8 @@ class DirectTolokaClient(
                         if (continuation.isActive) continuation.resume(response) else response.close()
                     }
                 })
-            } } catch (_: SocketTimeoutException) { throw WorkerFailure.TolokaTimeout() }
-            catch (_: IOException) { throw WorkerFailure.TolokaNetwork() }
+            } } catch (_: SocketTimeoutException) { throw TolokaFailure.Timeout() }
+            catch (_: IOException) { throw TolokaFailure.Network() }
             if (response.code == 429) {
                 val retryAfter = response.header("Retry-After")
                 val suggested = retryAfter?.toLongOrNull() ?: retryAfter?.let { value ->
@@ -196,17 +196,17 @@ class DirectTolokaClient(
                 val seconds = (suggested ?: 900L).coerceIn(60L, 86_400L)
                 cooldownUntil = System.currentTimeMillis() + seconds * 1000
                 response.close()
-                throw WorkerFailure.RateLimited(seconds)
+                throw TolokaFailure.RateLimited(seconds)
             }
             val location = response.header("Location")
             if (response.code !in listOf(301, 302, 303, 307, 308) || location == null)
                 return response
             response.close()
-            if (redirect == 5) throw WorkerFailure.TolokaInvalidResponse()
-            url = url.resolve(location) ?: throw WorkerFailure.TolokaInvalidResponse()
+            if (redirect == 5) throw TolokaFailure.InvalidResponse()
+            url = url.resolve(location) ?: throw TolokaFailure.InvalidResponse()
             if (body != null && response.code in listOf(301, 302, 303)) body = null
         }
-        throw WorkerFailure.TolokaInvalidResponse()
+        throw TolokaFailure.InvalidResponse()
     }
 }
 

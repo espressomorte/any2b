@@ -1,9 +1,9 @@
-package ua.any2b.tvplayer
+package ua.any2b.domain.playback
 
 import kotlin.random.Random
 
 /** Retry timing for transient stream failures: exponential backoff with 50% jitter. */
-internal object StreamRetryPolicy {
+object StreamRetryPolicy {
     const val MAX_RETRIES = 4
 
     fun delayBoundsMs(retryCount: Int): LongRange? {

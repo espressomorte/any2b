@@ -1,12 +1,12 @@
 package ua.any2b.tvplayer
 
-import ua.any2b.tvplayer.data.TmdbPlaybackSelection
 import ua.any2b.core.tmdb.TmdbTitle
-import ua.any2b.domain.playback.toloka.TolokaEpisodeContext
-import ua.any2b.domain.playback.toloka.TolokaWatchlistPlayback
-import ua.any2b.domain.playback.AutoPlaybackDecision
+import ua.any2b.domain.playback.PlaybackHostEffect
+import ua.any2b.domain.playback.PlaybackRequest
+import ua.any2b.domain.playback.PlaybackSource
+import ua.any2b.domain.playback.PlaybackTransitionResult
 import ua.any2b.domain.playback.AutoPlaybackRequest
-import ua.any2b.domain.playback.decideAutoPlayback as evaluateAutoPlayback
+import ua.any2b.domain.playback.decideAutoPlaybackEffect
 import java.util.concurrent.atomic.AtomicLong
 
 @JvmInline
@@ -28,23 +28,24 @@ internal sealed interface PlaybackScenarioEvent {
     data class TorrentFilesReady(override val id: PlaybackScenarioId) : PlaybackScenarioEvent
     data class PlaybackLaunched(
         override val id: PlaybackScenarioId,
-        val source: TmdbPlaybackSelection.Source? = null,
+        val source: PlaybackSource? = null,
     ) : PlaybackScenarioEvent
     data class PlayerReturned(override val id: PlaybackScenarioId) : PlaybackScenarioEvent
-    data class RetryRequested(override val id: PlaybackScenarioId) : PlaybackScenarioEvent
-    data class Failed(override val id: PlaybackScenarioId) : PlaybackScenarioEvent
+    data class RetryRequested(
+        override val id: PlaybackScenarioId,
+        val source: PlaybackSource? = null,
+    ) : PlaybackScenarioEvent
+    data class Failed(override val id: PlaybackScenarioId, val message: String? = null) : PlaybackScenarioEvent
     data class Finished(override val id: PlaybackScenarioId) : PlaybackScenarioEvent
 }
 
 /** Stateful, Android-free owner of a single playback scenario's lifecycle. */
 internal class PlaybackCoordinator {
-    private val anitubePlayback = ua.any2b.tvplayer.data.AniTubeWatchlistPlayback()
-    private val tolokaPlayback = TolokaWatchlistPlayback()
     var scenarioId: PlaybackScenarioId? = null
         private set
     var phase: PlaybackScenarioPhase = PlaybackScenarioPhase.IDLE
         private set
-    var activeSource: TmdbPlaybackSelection.Source? = null
+    var activeSource: PlaybackSource? = null
         private set
     var launchPending: Boolean = false
         private set
@@ -71,6 +72,19 @@ internal class PlaybackCoordinator {
 
     fun isCurrentRequest(id: PlaybackRequestId): Boolean = launchPending && currentRequestId == id
 
+    fun launchPlaybackRequest(
+        id: PlaybackRequestId,
+        request: PlaybackRequest,
+    ): PlaybackHostEffect.LaunchPlayback? =
+        if (isCurrentRequest(id)) PlaybackHostEffect.LaunchPlayback(request) else null
+
+    /** Activity-scoped work is cancelled on recreation; invalidate its outstanding launch token. */
+    fun onHostRecreated() {
+        if (!launchPending) return
+        launchPending = false
+        currentRequestId = null
+    }
+
     fun launchFailed(id: PlaybackRequestId) {
         if (currentRequestId == id) launchPending = false
     }
@@ -78,7 +92,7 @@ internal class PlaybackCoordinator {
     fun playbackLaunched(
         scenarioId: PlaybackScenarioId,
         requestId: PlaybackRequestId,
-        source: TmdbPlaybackSelection.Source?,
+        source: PlaybackSource?,
     ): Boolean {
         if (!isCurrentRequest(requestId)) return false
         launchPending = false
@@ -98,27 +112,8 @@ internal class PlaybackCoordinator {
         episodeFileId: Int?,
         alreadyStarted: Boolean,
         failed: Boolean,
-    ): AutoPlaybackDecision = evaluateAutoPlayback(request, detailsReady, torrentFilesReady,
+    ): PlaybackHostEffect? = decideAutoPlaybackEffect(request, detailsReady, torrentFilesReady,
         savedFileAvailable, episodeFileId, alreadyStarted, failed)
-
-    fun onAniTubeState(
-        request: ua.any2b.tvplayer.data.AniTubeWatchlistRequest,
-        state: ua.any2b.tvplayer.data.AnitubeState,
-    ): ua.any2b.tvplayer.data.AniTubeWatchlistAction = anitubePlayback.onState(request, state)
-
-    fun tolokaEpisodeContext(
-        fileSeason: Int?, fileEpisodeStart: Int?, fileEpisodeEnd: Int?, folderSeason: Int?,
-        requestedSeason: Int, requestedEpisode: Int?, matchedSeason: Int?,
-        isTv: Boolean, mappedEpisodeForSeason: (Int) -> Int?,
-    ): TolokaEpisodeContext = tolokaPlayback.episodeContext(
-        fileSeason, fileEpisodeStart, fileEpisodeEnd, folderSeason, requestedSeason,
-        requestedEpisode, matchedSeason, isTv, mappedEpisodeForSeason)
-
-    fun aniTubePlaybackSeasons(
-        title: TmdbTitle, requestedTmdbSeason: Int, requestedAnimeSeason: Int?,
-        releaseId: Int?, found: ua.any2b.tvplayer.data.AnitubeState.Found?,
-    ): ua.any2b.tvplayer.data.AniTubePlaybackSeasons = anitubePlayback.playbackSeasons(
-        title, requestedTmdbSeason, requestedAnimeSeason, releaseId, found)
 
     /** Returns false for stale callbacks and duplicate events that must not restart playback. */
     fun dispatch(event: PlaybackScenarioEvent): Boolean {
@@ -156,6 +151,21 @@ internal class PlaybackCoordinator {
         return true
     }
 
+    fun transition(event: PlaybackScenarioEvent): PlaybackTransitionResult {
+        if (!dispatch(event)) return PlaybackTransitionResult(accepted = false)
+        val effects = when (event) {
+            is PlaybackScenarioEvent.RetryRequested -> event.source?.let {
+                listOf(PlaybackHostEffect.RetrySource(it))
+            }.orEmpty()
+            is PlaybackScenarioEvent.Failed -> event.message?.takeIf(String::isNotBlank)?.let {
+                listOf(PlaybackHostEffect.ShowError(it))
+            }.orEmpty()
+            is PlaybackScenarioEvent.Finished -> listOf(PlaybackHostEffect.Finish)
+            else -> emptyList()
+        }
+        return PlaybackTransitionResult(accepted = true, effects = effects)
+    }
+
     fun resolveExternalPlayerReturn(
         context: ExternalPlaybackContext,
         event: ExternalPlayerReturnEvent,
@@ -165,23 +175,23 @@ internal class PlaybackCoordinator {
         return when {
             event.resultCode == 0 && position != null && position >= 0L &&
                 duration != null && duration > 0L -> when (context.source) {
-                TmdbPlaybackSelection.Source.TORRENT -> {
+                PlaybackSource.TORRENT -> {
                     val topicId = context.topicId ?: return ExternalPlaybackEffect.Finish
                     val fileId = context.fileId ?: return ExternalPlaybackEffect.Finish
                     ExternalPlaybackEffect.SaveTorrentProgress(context.title, topicId, fileId,
                         position, duration, context.episodeNumber, context.seasonNumber)
                 }
-                TmdbPlaybackSelection.Source.ANITUBE -> ExternalPlaybackEffect.SaveEpisodeProgress(
+                PlaybackSource.ANITUBE -> ExternalPlaybackEffect.SaveEpisodeProgress(
                     context.title, context.voiceIndex, context.episodeIndex,
                     context.episodeNumber ?: 1, (position.toFloat() / duration).coerceIn(0f, 1f),
                     context.seasonNumber ?: 1, position, duration)
             }
             event.resultCode == 1 -> when (context.source) {
-                TmdbPlaybackSelection.Source.TORRENT -> if (context.topicId != null && context.fileId != null)
+                PlaybackSource.TORRENT -> if (context.topicId != null && context.fileId != null)
                     ExternalPlaybackEffect.CompleteTorrent(context.title, context.topicId,
                         context.fileId, context.episodeNumber, context.seasonNumber)
                 else ExternalPlaybackEffect.Finish
-                TmdbPlaybackSelection.Source.ANITUBE -> ExternalPlaybackEffect.CompleteEpisode(
+                PlaybackSource.ANITUBE -> ExternalPlaybackEffect.CompleteEpisode(
                     context.title, context.voiceIndex, context.episodeIndex,
                     context.episodeNumber ?: 1, context.seasonNumber ?: 1)
             }
@@ -197,7 +207,7 @@ internal class PlaybackCoordinator {
 
 internal data class ExternalPlaybackContext(
     val title: ua.any2b.core.tmdb.TmdbTitle,
-    val source: TmdbPlaybackSelection.Source,
+    val source: PlaybackSource,
     val topicId: String? = null,
     val fileId: Int? = null,
     val episodeNumber: Int? = null,

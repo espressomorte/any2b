@@ -235,7 +235,7 @@ internal fun TorrentConnectionsMenu(
                         onFocus = { focusedIndex = 0 }, onClick = { draft = workerUrl; editing = "worker" })
                     BiosSettingRow("Ключ Worker", if (workerKeyConfigured) "●●●●●●" else "Не задано",
                         onFocus = { focusedIndex = 1 }, onClick = { draft = ""; editing = "key" })
-                    BiosSettingRow(if (encryptedConfigEnabled) "Перевірити Toloka" else "Перевірити Worker", "Пуск",
+                    BiosSettingRow("Перевірити Toloka", "Пуск",
                         onFocus = { focusedIndex = 2 }, onClick = onCheckWorker)
                     Spacer(Modifier.height(8.dp))
                     BiosSettingRow("Адреса TorrServer", if (torrServerUrl.isBlank()) "Не задано" else "Задано",
@@ -282,8 +282,7 @@ internal fun TorrentConnectionsMenu(
                         when (focusedIndex) {
                             0 -> "HTTPS-адреса вашого Cloudflare Worker. AniTube залишається у вкладці «Онлайн»."
                             1 -> "Особистий ключ доступу до Worker. Логін і пароль Toloka тут не потрібні."
-                            2 -> if (encryptedConfigEnabled) "Пряма перевірка входу до Toloka з даними конфіга."
-                                else "Перевірка /status. Показує стан KV та сесії Worker."
+                            2 -> "Перевіряє прямий вхід до Toloka й повторно використовує сесію застосунку."
                             3 -> "Локальна HTTP або HTTPS адреса встановленого вами TorrServer Matrix."
                             4 -> "За потреби введіть користувач:пароль для HTTP Basic TorrServer. Не використовуйте ключ Worker."
                             5 -> "Перевірка /echo та версії TorrServer."

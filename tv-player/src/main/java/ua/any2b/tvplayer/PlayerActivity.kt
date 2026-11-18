@@ -51,7 +51,14 @@ import ua.any2b.core.toloka.TorrServerProbe
 import ua.any2b.core.extractor.StreamResolver
 import ua.any2b.domain.playback.NextEpisodeSource
 import ua.any2b.domain.playback.PlaybackSource
+import ua.any2b.domain.playback.StreamFailure
+import ua.any2b.domain.playback.StreamRetryPolicy
+import ua.any2b.domain.playback.anitubeResumePositionMs
+import ua.any2b.domain.playback.canAdvanceToNextEpisode
+import ua.any2b.domain.playback.classifyHttpPlaybackStatus
+import ua.any2b.domain.playback.nextEpisodeNumber
 import ua.any2b.domain.playback.nextEpisodePlaybackRequest
+import ua.any2b.domain.playback.torrentResumePositionMs
 import ua.any2b.tvplayer.data.AnitubeStreamFallback
 import ua.any2b.tvplayer.ui.Media3PlayerTransport
 import ua.any2b.tvplayer.ui.PlayerControlsController
@@ -70,6 +77,7 @@ class PlayerActivity : FragmentActivity() {
         private const val BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 5_000
         private const val NEXT_EPISODE_PRELOAD_LEAD_MS = 20_000L
         private const val NEXT_EPISODE_FALLBACK_LEAD_MS = 45_000L
+        private const val MAX_CREDITS_LEAD_MS = 5 * 60_000L
         private const val NEXT_EPISODE_PREFETCH_BYTES = 2L * 1024L * 1024L
         private const val PLAYER_PROMPT_TIMEOUT_MS = 13_000L
         private const val TORRENT_BUFFER_TIMEOUT_MS = 30_000L
@@ -710,6 +718,9 @@ class PlayerActivity : FragmentActivity() {
         introLookupStarted = true
         lifecycleScope.launch {
             introSegments = introDbClient.findSegments(tmdbId, type, durationMs, season, episode)
+            Log.d("IntroDb", "segments tmdbId=$tmdbId type=${type.path} season=$season " +
+                "episode=$episode durationMs=$durationMs intros=${introSegments.intros} " +
+                "credits=${introSegments.credits}")
             updateSkipIntroButton()
         }
     }
@@ -745,9 +756,14 @@ class PlayerActivity : FragmentActivity() {
         val exo = player ?: return
         val position = exo.currentPosition
         val isTv = intent.getStringExtra(EXTRA_TMDB_TYPE) == TmdbMediaType.TV.path
-        val creditsStartMs = if (isTv) introSegments.credits.minOfOrNull { it.startMs }
-            ?.takeIf { it > 0L && (exo.duration <= 0L || it < exo.duration) } else null
-        val nextStartMs = creditsStartMs ?: exo.duration.takeIf { it > 0L }
+        val duration = exo.duration.takeIf { it > 0L }
+        val creditsStartMs = if (isTv && duration != null) {
+            val earliestCredits = maxOf(duration / 2, duration - MAX_CREDITS_LEAD_MS)
+            introSegments.credits.map { it.startMs }
+                .filter { it in earliestCredits until duration }
+                .minOrNull()
+        } else null
+        val nextStartMs = creditsStartMs ?: duration
             ?.let { (it - NEXT_EPISODE_FALLBACK_LEAD_MS).coerceAtLeast(0L) }
         val canGoNext = canGoNextEpisode()
         if (!nextEpisodePreloadStarted && canGoNext && nextStartMs != null &&
@@ -766,16 +782,26 @@ class PlayerActivity : FragmentActivity() {
                     restartPromptUntilElapsedMs - android.os.SystemClock.elapsedRealtime())
             intro != null && !introPromptDismissed -> showPlayerPrompt(PlayerPrompt.SKIP_INTRO)
             nextStartMs != null && position >= nextStartMs && canGoNext &&
-                !nextEpisodePromptDismissed -> showPlayerPrompt(PlayerPrompt.NEXT_EPISODE)
+                !nextEpisodePromptDismissed -> {
+                if (activePlayerPrompt != PlayerPrompt.NEXT_EPISODE) {
+                    Log.d("IntroDb", "nextEpisodePrompt positionMs=$position " +
+                        "thresholdMs=$nextStartMs creditsStartMs=$creditsStartMs durationMs=$duration")
+                }
+                showPlayerPrompt(PlayerPrompt.NEXT_EPISODE)
+            }
             else -> hidePlayerPrompt()
         }
     }
 
     private fun canGoNextEpisode(): Boolean = canAdvanceToNextEpisode(
-        mediaType = intent.getStringExtra(EXTRA_TMDB_TYPE),
+        isTv = intent.getStringExtra(EXTRA_TMDB_TYPE) == TmdbMediaType.TV.path,
         seasonNumber = intent.getIntExtra(EXTRA_TMDB_SEASON, -1),
         episodeNumber = intent.getIntExtra(EXTRA_TMDB_EPISODE, -1),
-        source = intent.getStringExtra(EXTRA_SOURCE_TYPE),
+        source = when (intent.getStringExtra(EXTRA_SOURCE_TYPE)) {
+            SOURCE_TOLOKA -> PlaybackSource.TORRENT
+            SOURCE_ANITUBE_TMDB -> PlaybackSource.ANITUBE
+            else -> null
+        },
         nextEpisodeAvailable = intent.getBooleanExtra(EXTRA_NEXT_EPISODE_AVAILABLE, false),
         tolokaTopicId = intent.getStringExtra(EXTRA_TOLOKA_TOPIC_ID),
     )

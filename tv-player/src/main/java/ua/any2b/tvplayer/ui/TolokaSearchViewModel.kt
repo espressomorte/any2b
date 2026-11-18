@@ -16,7 +16,7 @@ import ua.any2b.core.toloka.TorrServerClient
 import ua.any2b.core.toloka.TorrServerFailure
 import ua.any2b.core.toloka.TorrServerProbe
 import ua.any2b.core.toloka.TorrServerTorrent
-import ua.any2b.core.toloka.WorkerFailure
+import ua.any2b.core.toloka.TolokaFailure
 import ua.any2b.core.toloka.TolokaTmdbRanker
 import ua.any2b.core.toloka.TolokaHit
 import ua.any2b.core.toloka.TolokaSearchPlan
@@ -270,10 +270,10 @@ class TolokaSearchViewModel(
                 restoredTopic?.let(::selectHit)
             } catch (error: CancellationException) {
                 throw error
-            } catch (error: WorkerFailure.RateLimited) {
+            } catch (error: TolokaFailure.RateLimited) {
                 _state.value = _state.value.copy(search = TolokaSearchState.Error(
                     "Зачекайте ${error.waitSeconds} с перед повторним пошуком"))
-            } catch (error: WorkerFailure) {
+            } catch (error: TolokaFailure) {
                 _state.value = _state.value.copy(search = TolokaSearchState.Error(error.message.orEmpty()))
             } catch (_: Exception) {
                 _state.value = _state.value.copy(search = TolokaSearchState.Error(
@@ -350,7 +350,7 @@ class TolokaSearchViewModel(
                     Log.i("TorrentPlayback", "Requesting torrent metadata topic=$topicId")
                     val bytes = try {
                         TolokaConnections.torrent(getApplication(), topicId)
-                    } catch (_: WorkerFailure.LinkExpired) {
+                    } catch (_: TolokaFailure.LinkExpired) {
                         Log.i("TorrentPlayback", "Refreshing expired download link topic=$topicId")
                         refreshExpiredTorrentLink(topicId)
                         TolokaConnections.torrent(getApplication(), topicId)
@@ -392,16 +392,16 @@ class TolokaSearchViewModel(
                 _state.value = _state.value.copy(transfer = TolokaTransferState.Files(withFiles))
             } catch (error: CancellationException) {
                 throw error
-            } catch (_: WorkerFailure.LinkExpired) {
+            } catch (_: TolokaFailure.LinkExpired) {
                 Log.w("TorrentPlayback", "Preparation failed topic=$topicId stage=$lastSuccess reason=link_refresh_failed")
                 _state.value = _state.value.copy(transfer = TolokaTransferState.Error(
                     "Не вдалося автоматично оновити посилання на роздачу. Відкрийте список роздач і виберіть її ще раз.",
                     lastSuccess = lastSuccess, repeatSearch = true))
-            } catch (error: WorkerFailure.RateLimited) {
+            } catch (error: TolokaFailure.RateLimited) {
                 Log.w("TorrentPlayback", "Preparation failed topic=$topicId stage=$lastSuccess reason=rate_limited wait=${error.waitSeconds}s")
                 _state.value = _state.value.copy(transfer = TolokaTransferState.Error(
                     "Toloka обмежила запити. Повторіть через ${error.waitSeconds} с", lastSuccess))
-            } catch (error: WorkerFailure) {
+            } catch (error: TolokaFailure) {
                 Log.w("TorrentPlayback", "Preparation failed topic=$topicId stage=$lastSuccess reason=worker_${error.javaClass.simpleName}")
                 _state.value = _state.value.copy(transfer = TolokaTransferState.Error(
                     error.message.orEmpty(), lastSuccess))
@@ -431,7 +431,7 @@ class TolokaSearchViewModel(
             delay(250)
         }
         val details = automaticDetails ?: currentDetails
-            ?: throw WorkerFailure.LinkExpired()
+            ?: throw TolokaFailure.LinkExpired()
         val queries = (listOfNotNull(automaticQuery) + tmdbTorrentQueryOptions(details).map { it.second })
             .map(String::trim)
             .filter(String::isNotBlank)
@@ -444,7 +444,7 @@ class TolokaSearchViewModel(
                 return
             }
         }
-        throw WorkerFailure.LinkExpired()
+        throw TolokaFailure.LinkExpired()
     }
 
     fun retryMetadata() {
