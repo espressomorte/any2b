@@ -13,6 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.tv.material3.Text
 import androidx.tv.material3.Button
 import androidx.tv.material3.ExperimentalTvMaterial3Api
@@ -45,5 +46,18 @@ fun WatchlistPlaybackScreen(
                 Button(onClick = onRetryTorrServer) { Text("Повторити перевірку") }
             }
         }
+    }
+}
+
+@Preview(device = "id:tv_1080p")
+@Composable
+private fun WatchlistPlaybackScreenPreview() {
+    AppTheme {
+        WatchlistPlaybackScreen(
+            transfer = TolokaTransferState.Loading(
+                step = "Підключаємось до потоку…",
+                lastSuccess = "Файли роздачі отримано"
+            )
+        )
     }
 }

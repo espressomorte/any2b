@@ -269,8 +269,7 @@ class TmdbWatchHistoryStore(context: Context) {
         val watchlist = TmdbWatchlistStore(appContext)
         if (title.type == TmdbMediaType.MOVIE && positionMs >= durationMs - MOVIE_FINISH_GUARD_MS) {
             watchlist.remove(title)
-        } else if (title.type == TmdbMediaType.TV ||
-            positionMs >= MIN_MOVIE_PROGRESS_MS) {
+        } else {
             watchlist.onPlaybackStarted(title)
         }
         val key = torrentKey(title.type, title.id, topicId, fileId)
@@ -358,7 +357,6 @@ class TmdbWatchHistoryStore(context: Context) {
         "${TitleKey.Tmdb(type, id).storageKey}|$topicId|$fileId"
 
     private companion object {
-        const val MIN_MOVIE_PROGRESS_MS = 15_000L
         const val MOVIE_FINISH_GUARD_MS = 30_000L
         val lock = Any()
         var lastProgressLogAt = 0L

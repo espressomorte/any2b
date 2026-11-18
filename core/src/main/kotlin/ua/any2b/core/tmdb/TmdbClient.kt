@@ -19,6 +19,10 @@ import okhttp3.Response
 import org.json.JSONObject
 import org.json.JSONArray
 import java.net.URLEncoder
+import ua.any2b.core.network.ApiRequestGate
+import ua.any2b.core.network.ApiRequestKey
+import ua.any2b.core.network.ApiSingleFlight
+import ua.any2b.core.network.retryAfterSeconds
 
 enum class TmdbMediaType(val path: String) { MOVIE("movie"), TV("tv") }
 
@@ -85,6 +89,77 @@ data class TmdbDetails(
     val collectionId: Int? = null,
 )
 
+enum class TmdbPersonRole { DIRECTOR, WRITER, VOICE, ACTOR, OTHER }
+
+/** IDs in this model are TMDB person IDs; never use them as AniList IDs. */
+data class TmdbPersonCredit(
+    val id: Int,
+    val name: String,
+    val profileUrl: String?,
+    val roles: Set<TmdbPersonRole>,
+    val characters: Set<String> = emptySet(),
+    val actingCharacters: Set<String> = emptySet(),
+    val originalName: String? = null,
+) {
+    val roleLabel: String get() = buildList {
+        if (TmdbPersonRole.DIRECTOR in roles) add("Режисер")
+        if (TmdbPersonRole.WRITER in roles) add("Сценарист")
+        characters.forEach { add("$it · голос") }
+        actingCharacters.forEach(::add)
+    }.joinToString(" · ")
+}
+
+data class TmdbPersonWork(val title: TmdbTitle, val roles: Set<TmdbPersonRole>,
+    val characters: Set<String>, val actingCharacters: Set<String> = emptySet(),
+    val otherJobs: Set<String> = emptySet()) {
+    /** Genre and credit evidence both matter: many talk-show entries omit a talk genre. */
+    val isMoreCategory: Boolean get() {
+        if (title.genreIds.any {
+                it == TmdbGeneralCatalog.DOCUMENTARY || it == TmdbGeneralCatalog.TALK || it == 10764
+            }) return true
+        val guestAppearance = actingCharacters.isNotEmpty() && actingCharacters.all {
+            SELF_GUEST.matches(it.trim())
+        }
+        val thanksCredit = otherJobs.isNotEmpty() && otherJobs.all {
+            it.trim().endsWith("Thanks", ignoreCase = true)
+        }
+        val substantialCredit = roles.any {
+            it == TmdbPersonRole.DIRECTOR || it == TmdbPersonRole.WRITER ||
+                it == TmdbPersonRole.VOICE
+        } || (TmdbPersonRole.ACTOR in roles && !guestAppearance) ||
+            otherJobs.any { !it.trim().endsWith("Thanks", ignoreCase = true) }
+        return !substantialCredit && (guestAppearance || thanksCredit)
+    }
+    val roleLabel: String get() = buildList {
+        if (TmdbPersonRole.DIRECTOR in roles) add("Режисер")
+        if (TmdbPersonRole.WRITER in roles) add("Сценарист")
+        characters.forEach { add("Голос $it") }
+        actingCharacters.forEach(::add)
+        if (TmdbPersonRole.ACTOR in roles && actingCharacters.isEmpty()) add("Актор")
+        otherJobs.forEach { add(localizedTmdbJob(it)) }
+    }.joinToString(" · ")
+
+    private companion object {
+        val SELF_GUEST = Regex("(?i)^(?:self|himself|herself)\\b.*\\bguest\\b.*")
+    }
+}
+
+fun localizedTmdbJob(job: String): String = when (job) {
+    "Storyboard", "Storyboard Artist" -> "Розкадрування"
+    "Episode Director" -> "Режисер окремих епізодів"
+    "Series Director" -> "Режисер серіалу"
+    "Animation Director" -> "Режисер анімації"
+    "Producer" -> "Продюсер"
+    "Executive Producer" -> "Виконавчий продюсер"
+    "Co-Producer" -> "Співпродюсер"
+    "Creative Consultant" -> "Креативний консультант"
+    "Special Thanks", "Thanks" -> "Подяка"
+    else -> job
+}
+
+data class TmdbPersonFilmography(val person: TmdbPersonCredit,
+    val works: List<TmdbPersonWork>)
+
 fun TmdbDetails.trailerSearchUrl(): String {
     val query = listOfNotNull(title.originalTitle ?: title.title,
         title.year?.toString(), "trailer").joinToString(" ")
@@ -140,6 +215,8 @@ sealed class TmdbFailure(message: String) : IOException(message) {
     class MissingToken : TmdbFailure("Ключ доступу не налаштовано")
     class Unauthorized : TmdbFailure("TMDB відхилив токен доступу")
     class Http(val status: Int) : TmdbFailure("TMDB відповів HTTP $status")
+    class RateLimited(val waitSeconds: Long) : TmdbFailure(
+        "TMDB тимчасово обмежив запити. Повторіть через $waitSeconds с")
     class Timeout(cause: IOException? = null) : TmdbFailure("Час очікування TMDB вичерпано") {
         init { if (cause != null) initCause(cause) }
     }
@@ -411,6 +488,129 @@ class TmdbClient(
         )
     }
 
+    suspend fun people(type: TmdbMediaType, titleId: Int, token: String,
+        includeLiveCast: Boolean = false): List<TmdbPersonCredit> {
+        require(titleId > 0)
+        val credits = request(listOf(type.path, titleId.toString(),
+            if (type == TmdbMediaType.TV) "aggregate_credits" else "credits"), token, "en-US")
+        val people = linkedMapOf<Int, TmdbPersonCredit>()
+        fun add(json: JSONObject, role: TmdbPersonRole, character: String? = null) {
+            val id = json.optInt("id").takeIf { it > 0 } ?: return
+            val name = json.optionalString("name") ?: return
+            val existing = people[id]
+            val voiceCharacters = if (role == TmdbPersonRole.VOICE)
+                listOfNotNull(character).toSet() else emptySet()
+            val actingCharacters = if (role == TmdbPersonRole.ACTOR)
+                listOfNotNull(character).toSet() else emptySet()
+            people[id] = if (existing == null) TmdbPersonCredit(id, name,
+                json.optionalString("profile_path")?.takeIf { it.startsWith("/") }
+                    ?.let { "https://image.tmdb.org/t/p/w185$it" },
+                setOf(role), voiceCharacters, actingCharacters)
+            else existing.copy(roles = existing.roles + role,
+                characters = existing.characters + voiceCharacters,
+                actingCharacters = existing.actingCharacters + actingCharacters)
+        }
+        credits.optJSONArray("crew")?.let { crew ->
+            for (i in 0 until crew.length()) {
+                val item = crew.optJSONObject(i) ?: continue
+                val jobs = if (type == TmdbMediaType.TV) item.optJSONArray("jobs")?.let { array ->
+                    (0 until array.length()).mapNotNull { array.optJSONObject(it)?.optionalString("job") }
+                }.orEmpty() else listOfNotNull(item.optionalString("job"))
+                if (jobs.any { it.equals("Director", true) }) add(item, TmdbPersonRole.DIRECTOR)
+                if (jobs.any { it in setOf("Writer", "Screenplay", "Screenplay Writer", "Story") })
+                    add(item, TmdbPersonRole.WRITER)
+            }
+        }
+        credits.optJSONArray("cast")?.let { cast ->
+            for (i in 0 until cast.length()) {
+                val item = cast.optJSONObject(i) ?: continue
+                val names = if (type == TmdbMediaType.TV) item.optJSONArray("roles")?.let { roles ->
+                    (0 until roles.length()).mapNotNull {
+                        roles.optJSONObject(it)?.optionalString("character")
+                    }
+                }.orEmpty() else listOfNotNull(item.optionalString("character"))
+                names.forEach { character ->
+                    val voice = voiceCharacter(character)
+                    if (voice != null) add(item, TmdbPersonRole.VOICE, voice)
+                    else if (includeLiveCast) add(item, TmdbPersonRole.ACTOR, character)
+                }
+            }
+        }
+        return people.values.sortedWith(compareBy<TmdbPersonCredit> {
+            when { TmdbPersonRole.DIRECTOR in it.roles -> 0
+                TmdbPersonRole.WRITER in it.roles -> 1
+                else -> 2 }
+        })
+    }
+
+    suspend fun personFilmography(personId: Int, token: String): TmdbPersonFilmography {
+        require(personId > 0)
+        val personJson = request(listOf("person", personId.toString()), token, "uk-UA")
+        val name = personJson.optionalString("name") ?: throw TmdbFailure.InvalidResponse()
+        val alternativeNames = personJson.optJSONArray("also_known_as")?.let { aliases ->
+            (0 until aliases.length()).mapNotNull { aliases.optString(it).takeIf(String::isNotBlank) }
+        }.orEmpty()
+        val latinName = alternativeNames.firstOrNull { alias ->
+            alias.any(Char::isLetter) && alias.filter(Char::isLetter).all {
+                Character.UnicodeScript.of(it.code) == Character.UnicodeScript.LATIN
+            }
+        }
+        val displayName = if (name.any { it.code in 0x3040..0x9FFF }) latinName ?: name else name
+        val person = TmdbPersonCredit(personId, displayName,
+            personJson.optionalString("profile_path")?.takeIf { it.startsWith("/") }
+                ?.let { "https://image.tmdb.org/t/p/w185$it" }, emptySet(),
+            originalName = name.takeIf { it != displayName })
+        val credits = request(listOf("person", personId.toString(), "combined_credits"),
+            token, "uk-UA")
+        val works = linkedMapOf<Pair<TmdbMediaType, Int>, TmdbPersonWork>()
+        fun add(json: JSONObject, role: TmdbPersonRole, character: String? = null,
+            job: String? = null) {
+            val type = when (json.optionalString("media_type")) {
+                "tv" -> TmdbMediaType.TV
+                "movie" -> TmdbMediaType.MOVIE
+                else -> return
+            }
+            val title = json.toTitle(type, "uk-UA") ?: return
+            if (json.optBoolean("adult")) return
+            val key = type to title.id
+            val existing = works[key]
+            works[key] = if (existing == null) TmdbPersonWork(title, setOf(role),
+                if (role == TmdbPersonRole.VOICE) listOfNotNull(character).toSet() else emptySet(),
+                if (role == TmdbPersonRole.ACTOR) listOfNotNull(character).toSet() else emptySet(),
+                listOfNotNull(job).toSet())
+            else existing.copy(roles = existing.roles + role,
+                characters = existing.characters +
+                    (if (role == TmdbPersonRole.VOICE) listOfNotNull(character) else emptyList()),
+                actingCharacters = existing.actingCharacters +
+                    (if (role == TmdbPersonRole.ACTOR) listOfNotNull(character) else emptyList()),
+                otherJobs = existing.otherJobs + listOfNotNull(job))
+        }
+        credits.optJSONArray("crew")?.let { crew ->
+            for (i in 0 until crew.length()) {
+                val item = crew.optJSONObject(i) ?: continue
+                when (val job = item.optionalString("job")) {
+                    "Director" -> add(item, TmdbPersonRole.DIRECTOR)
+                    "Writer", "Screenplay", "Screenplay Writer", "Story" ->
+                        add(item, TmdbPersonRole.WRITER)
+                    null -> Unit
+                    else -> add(item, TmdbPersonRole.OTHER, job = job)
+                }
+            }
+        }
+        credits.optJSONArray("cast")?.let { cast ->
+            for (i in 0 until cast.length()) {
+                val item = cast.optJSONObject(i) ?: continue
+                val character = item.optionalString("character")
+                if (character?.trim()?.matches(Regex("(?i)^(?:self|himself|herself)(?:\\b.*)?$")) == true)
+                    continue
+                val voice = voiceCharacter(character)
+                if (voice != null) add(item, TmdbPersonRole.VOICE, voice)
+                else add(item, TmdbPersonRole.ACTOR, character)
+            }
+        }
+        return TmdbPersonFilmography(person, works.values.toList())
+    }
+
     suspend fun seasonDetails(
         seriesId: Int,
         seasonNumber: Int,
@@ -453,9 +653,15 @@ class TmdbClient(
             if (language.isNotBlank()) addQueryParameter("language", language)
             parameters.forEach { addQueryParameter(it.first, it.second) }
         }.build()
-        val call = http.newCall(Request.Builder().url(url)
+        val request = Request.Builder().url(url)
             .header("Authorization", "Bearer $token")
-            .header("Accept", "application/json").build())
+            .header("Accept", "application/json").build()
+        val key = ApiRequestKey(request.method, request.url.toString(),
+            request.headers.names().sorted().flatMap { name ->
+                request.headers.values(name).map { name to it }
+            })
+        val text = requests.await(key) { requestGate.run(::rateLimitFailure) {
+        val call = http.newCall(request)
         val response = try {
             suspendCancellableCoroutine<Response> { continuation ->
                 continuation.invokeOnCancellation { call.cancel() }
@@ -473,14 +679,27 @@ class TmdbClient(
         } catch (error: IOException) {
             throw TmdbFailure.Network(error)
         }
-        return response.use {
+        response.use {
             when (it.code) {
                 401 -> throw TmdbFailure.Unauthorized()
-                in 200..299 -> try { JSONObject(it.body?.string() ?: throw TmdbFailure.InvalidResponse()) }
-                    catch (_: org.json.JSONException) { throw TmdbFailure.InvalidResponse() }
+                429 -> {
+                    val wait = retryAfterSeconds(it.header("Retry-After"))
+                    requestGate.coolDown(wait)
+                    throw TmdbFailure.RateLimited(wait)
+                }
+                in 200..299 -> it.body?.string() ?: throw TmdbFailure.InvalidResponse()
                 else -> throw TmdbFailure.Http(it.code)
             }
         }
+        } }
+        return try { JSONObject(text) }
+        catch (_: org.json.JSONException) { throw TmdbFailure.InvalidResponse() }
+    }
+
+    private companion object {
+        val requestGate = ApiRequestGate(maxConcurrent = 3, intervalMs = 250L)
+        val requests = ApiSingleFlight()
+        fun rateLimitFailure(wait: Long): Throwable = TmdbFailure.RateLimited(wait)
     }
 }
 
@@ -539,3 +758,11 @@ private fun JSONObject.toTitle(type: TmdbMediaType, language: String): TmdbTitle
 
 private fun JSONObject.optionalString(key: String): String? =
     takeIf { it.has(key) && !it.isNull(key) }?.optString(key)?.trim()?.takeIf(String::isNotBlank)
+
+/** TMDB explicitly labels voice roles; unlabelled cast is never treated as original voice cast. */
+private fun voiceCharacter(raw: String?): String? {
+    val role = raw?.trim() ?: return null
+    if (!role.contains("(voice)", ignoreCase = true)) return null
+    return role.replace(Regex("\\s*\\(voice\\)", RegexOption.IGNORE_CASE), "")
+        .trim().takeIf(String::isNotBlank)
+}

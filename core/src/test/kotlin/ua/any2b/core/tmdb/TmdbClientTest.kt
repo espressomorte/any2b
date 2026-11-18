@@ -353,6 +353,64 @@ class TmdbClientTest {
         assertEquals(listOf("/3/tv/42/season/2/videos", "/3/tv/42/videos"), requested)
     }
 
+    @Test
+    fun peopleKeepVerifiedRolesAndMergeRepeatedCreditsByPersonId() = runBlocking {
+        val client = client { request -> fixture(request, 200, """{
+          "crew":[
+            {"id":1,"name":"Long Director Name","job":"Director","profile_path":"/one.jpg"},
+            {"id":1,"name":"Long Director Name","job":"Screenplay"},
+            {"id":2,"name":"Writer","job":"Writer"}],
+          "cast":[
+            {"id":3,"name":"Voice Actor","character":"Maomao (voice)"},
+            {"id":4,"name":"Unlabelled Actor","character":"Maomao"}]
+        }""") }
+        val people = client.people(TmdbMediaType.MOVIE, 42, "token")
+        assertEquals(listOf(1, 2, 3), people.map { it.id })
+        assertEquals(setOf(TmdbPersonRole.DIRECTOR, TmdbPersonRole.WRITER), people[0].roles)
+        assertEquals("Режисер · Сценарист", people[0].roleLabel)
+        assertEquals("Maomao · голос", people[2].roleLabel)
+        assertEquals("https://image.tmdb.org/t/p/w185/one.jpg", people[0].profileUrl)
+        val liveCast = client.people(TmdbMediaType.MOVIE, 42, "token", includeLiveCast = true)
+        assertEquals(listOf(1, 2, 3, 4), liveCast.map { it.id })
+        assertEquals("Maomao", liveCast[3].roleLabel)
+    }
+
+    @Test
+    fun filmographyUsesStableIdDeduplicatesRolesAndIncludesFilmAndTv() = runBlocking {
+        val paths = mutableListOf<String>()
+        val client = client { request ->
+            paths += request.url.encodedPath
+            fixture(request, 200, if (request.url.encodedPath.endsWith("/combined_credits")) """{
+              "crew":[
+                {"id":10,"media_type":"tv","name":"Anime","genre_ids":[16],"job":"Director","popularity":8},
+                {"id":10,"media_type":"tv","name":"Anime","genre_ids":[16],"job":"Writer"},
+                {"id":10,"media_type":"tv","name":"Anime","genre_ids":[16],"job":"Thanks"},
+                {"id":11,"media_type":"movie","title":"Drama","genre_ids":[18],"job":"Director"},
+                {"id":14,"media_type":"tv","name":"Documentary","genre_ids":[99],"job":"Producer"},
+                {"id":16,"media_type":"movie","title":"Acknowledged","genre_ids":[18],"job":"Special Thanks"}],
+              "cast":[
+                {"id":12,"media_type":"movie","title":"Voice Film","genre_ids":[16],"character":"Hero (voice)"},
+                {"id":13,"media_type":"tv","name":"Unlabelled","genre_ids":[16],"character":"Hero"},
+                {"id":15,"media_type":"tv","name":"Comedy Show","genre_ids":[35],"character":"Self - Guest"}]
+            }""" else """{"id":7,"name":"三宅和男","also_known_as":["Kazuo Miyake"]}""")
+        }
+        val result = client.personFilmography(7, "token")
+        assertEquals("Kazuo Miyake", result.person.name)
+        assertEquals("三宅和男", result.person.originalName)
+        assertEquals(listOf("/3/person/7", "/3/person/7/combined_credits"), paths)
+        assertEquals(listOf(10, 11, 14, 16, 12, 13), result.works.map { it.title.id })
+        assertEquals(setOf(TmdbPersonRole.DIRECTOR, TmdbPersonRole.WRITER, TmdbPersonRole.OTHER),
+            result.works[0].roles)
+        assertEquals("Голос Hero", result.works[4].roleLabel)
+        assertEquals("Hero", result.works[5].roleLabel)
+        assertTrue(result.works[2].isMoreCategory)
+        assertEquals("Продюсер", result.works[2].roleLabel)
+        assertTrue(result.works[3].isMoreCategory)
+        assertTrue(!result.works[0].isMoreCategory)
+        assertTrue(TmdbPersonWork(result.works[2].title.copy(genreIds = setOf(10764)),
+            setOf(TmdbPersonRole.OTHER), emptySet()).isMoreCategory)
+    }
+
     private fun client(reply: (Request) -> Response): TmdbClient = TmdbClient(
         OkHttpClient.Builder().addInterceptor { chain -> reply(chain.request()) }.build(),
         "https://tmdb.test/3/".toHttpUrl(),

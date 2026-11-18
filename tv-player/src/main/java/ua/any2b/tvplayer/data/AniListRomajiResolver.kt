@@ -15,7 +15,7 @@ class AniListRomajiResolver(private val context: Context,
     suspend fun resolve(details: TmdbDetails): String? {
         if (16 !in details.title.genreIds) return null
         return try {
-            withTimeoutOrNull(12000) {
+            withTimeoutOrNull(35000) {
                 val bridge = try {
                     withTimeoutOrNull(3000) { AniBridgeMappingRepository.get(context) }
                 } catch (error: CancellationException) {

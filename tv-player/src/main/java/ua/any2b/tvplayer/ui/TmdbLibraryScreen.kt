@@ -29,11 +29,14 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.ui.tooling.preview.Preview
+import ua.any2b.tvplayer.data.HomeSectionSetting
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.runtime.getValue
@@ -60,6 +63,7 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
@@ -96,6 +100,8 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
+internal val LocalHomeRowPosterWidth = compositionLocalOf { 160.dp }
+
 @OptIn(ExperimentalTvMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
@@ -118,6 +124,12 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
     onContinueWatchlist: (TmdbTitle, TmdbEpisode?) -> Unit = { title, episode ->
         if (episode == null) onOpen(title) else onOpenEpisode(title, episode)
     },
+    peopleState: TmdbPeopleState = TmdbPeopleState.Loading,
+    onLoadPeople: (TmdbTitle) -> Unit = {},
+    onRetryPeople: (TmdbTitle) -> Unit = {},
+    onOpenPerson: (ua.any2b.core.tmdb.TmdbPersonCredit) -> Unit = {},
+    personReturnToken: Int = 0,
+    homeReturnToken: Int = 0,
 ) {
     val listState = remember(homeResetToken) { LazyListState() }
     val drawerHomeFocusRequester = remember { FocusRequester() }
@@ -127,9 +139,22 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
     var drawerReturnFocusRequester by remember { mutableStateOf<FocusRequester?>(null) }
     var drawerOpen by rememberSaveable { mutableStateOf(false) }
     var selectedWatchlistKey by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedPersonId by rememberSaveable { mutableStateOf<Int?>(null) }
+    var lastEpisodeFocusKey by rememberSaveable { mutableStateOf<String?>(null) }
+    var lastEpisodeFocusNumber by rememberSaveable { mutableStateOf<Int?>(null) }
+    val selectedWatchlistTitle = state.watchlist.firstOrNull { item ->
+        "${item.entry.title.type}:${item.entry.title.id}" == selectedWatchlistKey
+    }?.entry?.title ?: state.watchlist.firstOrNull()?.entry?.title
+    LaunchedEffect(selectedWatchlistTitle?.type, selectedWatchlistTitle?.id,
+        selectedWatchlistTitle?.genreIds) {
+        selectedWatchlistTitle?.let(onLoadPeople)
+    }
     val homeEntryFocusRequester = remember { FocusRequester() }
     var focusedHomeResetToken by remember { mutableStateOf<Long?>(null) }
-    val lazyItemKeys = homeLazyItemKeys(state, animationOnly)
+    var focusedHomeTargetKey by remember { mutableStateOf<String?>(null) }
+    val peopleVisible = state.watchlist.isNotEmpty() &&
+        (peopleState !is TmdbPeopleState.Ready || peopleState.people.isNotEmpty())
+    val lazyItemKeys = homeLazyItemKeys(state, animationOnly, peopleVisible)
     val homeFocusTargetKey = if (animationOnly && state.watchlist.isNotEmpty()) "watchlist"
         else if (animationOnly) state.mainSections.firstOrNull { section ->
             section.enabled && state.hasHomeRowContent(section.id)
@@ -138,9 +163,10 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
             .firstOrNull { state.hasHomeRowContent(it) }
     LaunchedEffect(homeResetToken, homeFocusTargetKey, lazyItemKeys,
         state.initialHomeLoading) {
-        if (focusedHomeResetToken == homeResetToken) return@LaunchedEffect
         if (animationOnly && state.initialHomeLoading) return@LaunchedEffect
         val targetKey = homeFocusTargetKey ?: return@LaunchedEffect
+        if (focusedHomeResetToken == homeResetToken && focusedHomeTargetKey == targetKey)
+            return@LaunchedEffect
         val targetIndex = lazyItemKeys.indexOf(targetKey)
         if (targetIndex < 0) return@LaunchedEffect
         listState.scrollToItem(targetIndex)
@@ -149,6 +175,7 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
             try {
                 homeEntryFocusRequester.requestFocus()
                 focusedHomeResetToken = homeResetToken
+                focusedHomeTargetKey = targetKey
                 return@LaunchedEffect
             } catch (_: IllegalStateException) {
                 // Wait for the lazy row and its first card to attach to the focus tree.
@@ -160,33 +187,48 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
     var historyMenuTitle by remember { mutableStateOf<TmdbTitle?>(null) }
     var alignedSection by remember { mutableStateOf<String?>(null) }
     val alignSection: (String) -> Unit = { key ->
-        if (alignedSection != key) {
-            alignedSection = key
-            scope.launch {
-                listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }
-                    ?.let { listState.animateScrollToItem(it.index) }
-            }
+        if (alignedSection != key) alignedSection = key
+    }
+    val safeTopPx = with(LocalDensity.current) { 16.dp.roundToPx() }
+    LaunchedEffect(alignedSection, homeResetToken) {
+        val key = alignedSection ?: return@LaunchedEffect
+        val index = lazyItemKeys.indexOf(key)
+        if (index < 0) return@LaunchedEffect
+        // Let focus search finish before positioning the entire LazyColumn item.
+        withFrameNanos { }
+        listState.animateScrollToItem(index, if (index == 0) 0 else -safeTopPx)
+    }
+    LaunchedEffect(homeReturnToken) {
+        if (homeReturnToken <= 0) return@LaunchedEffect
+        val index = lazyItemKeys.indexOf(alignedSection).takeIf { it >= 0 } ?: return@LaunchedEffect
+        listState.scrollToItem(index, if (index == 0) 0 else -safeTopPx)
+        repeat(3) {
+            withFrameNanos { }
+            try {
+                drawerReturnFocusRequester?.requestFocus()
+                return@LaunchedEffect
+            } catch (_: IllegalStateException) { /* Wait for the card to attach. */ }
         }
     }
-    val restoreWatchlist: () -> Unit = {
-        alignedSection = "watchlist"
-        scope.launch { listState.scrollToItem(0) }
-    }
+    val restoreWatchlist: () -> Unit = { alignSection("watchlist") }
     if (animationOnly && state.initialHomeLoading) {
         AnimariumLoadingScreen()
     } else BoxWithConstraints(Modifier.fillMaxSize().background(AppColors.BackgroundDark)) {
         val watchlistViewportHeight = maxHeight
+        val posterWidth = ((watchlistViewportHeight - 164.dp) / 1.5f)
+            .coerceIn(104.dp, 160.dp)
         Column(Modifier.fillMaxSize().then(if (animationOnly) Modifier
             else Modifier.padding(horizontal = 32.dp, vertical = 24.dp)),
             verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            CompositionLocalProvider(LocalBringIntoViewSpec provides
-                if (animationOnly) MinimumBringIntoViewSpec else LocalBringIntoViewSpec.current) {
+            CompositionLocalProvider(
+                LocalHomeRowPosterWidth provides posterWidth,
+                LocalBringIntoViewSpec provides MinimumBringIntoViewSpec) {
             LazyColumn(Modifier.fillMaxWidth().weight(1f).onFocusChanged {
                 if (it.hasFocus) drawerOpen = false
             }, state = listState,
                 verticalArrangement = Arrangement.spacedBy(24.dp),
                 contentPadding = PaddingValues(bottom = if (animationOnly)
-                    watchlistViewportHeight * 0.55f else 32.dp)) {
+                    watchlistViewportHeight else 32.dp)) {
             if (animationOnly) {
                 if (state.watchlist.isNotEmpty()) item(key = "watchlist") {
                     WatchlistHomeSection(state.watchlist, onSelectWatchlistSeason,
@@ -195,14 +237,30 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
                         selectedKey = selectedWatchlistKey,
                         onSelectedKeyChange = { selectedWatchlistKey = it },
                         onSectionFocus = restoreWatchlist,
-                        modifier = Modifier.height(watchlistViewportHeight),
-                        homeEntryFocusRequester = homeEntryFocusRequester.takeIf {
-                            homeFocusTargetKey == "watchlist"
-                        },
+                        modifier = Modifier.height(if (selectedWatchlistTitle?.type == TmdbMediaType.MOVIE)
+                            watchlistViewportHeight * 0.82f else watchlistViewportHeight),
                         drawerFocusRequester = drawerHomeFocusRequester,
                         onContentFocusRequester = { drawerReturnFocusRequester = it },
-                        continueFocusRequester = continueFocusRequester)
+                        lastEpisodeFocusKey = lastEpisodeFocusKey,
+                        lastEpisodeFocusNumber = lastEpisodeFocusNumber,
+                        onEpisodeFocused = { key, number ->
+                            lastEpisodeFocusKey = key
+                            lastEpisodeFocusNumber = number
+                        },
+                        continueFocusRequester = homeEntryFocusRequester.takeIf {
+                            homeFocusTargetKey == "watchlist"
+                        } ?: continueFocusRequester)
                 }
+                if (peopleVisible)
+                    item(key = "watchlist-people") {
+                        TmdbPeopleRow(peopleState, selectedPersonId,
+                            onSectionFocus = { alignSection("watchlist-people") },
+                            onSelectedPerson = { selectedPersonId = it },
+                            onOpen = onOpenPerson,
+                            onRetry = { selectedWatchlistTitle?.let(onRetryPeople) },
+                            onContentFocusRequester = { drawerReturnFocusRequester = it },
+                            returnToken = personReturnToken)
+                    }
                 state.mainSections.filter { it.enabled }.forEach { section ->
                     when (section.id) {
                         "history" -> if (state.history.isNotEmpty()) item(key = "history") {
@@ -391,6 +449,19 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
             searchFocusRequester = drawerSearchFocusRequester,
             settingsFocusRequester = drawerSettingsFocusRequester,
             returnFocusRequester = drawerReturnFocusRequester,
+            onReturnToContent = {
+                scope.launch {
+                    val target = lazyItemKeys.indexOf(homeFocusTargetKey).coerceAtLeast(0)
+                    listState.scrollToItem(target)
+                    repeat(4) {
+                        withFrameNanos { }
+                        try {
+                            homeEntryFocusRequester.requestFocus()
+                            return@launch
+                        } catch (_: IllegalStateException) { /* Wait for row composition. */ }
+                    }
+                }
+            },
             expanded = drawerOpen,
             onExpandedChange = { drawerOpen = it },
             onHome = {
@@ -415,6 +486,7 @@ private fun NavigationDrawer(
     searchFocusRequester: FocusRequester,
     settingsFocusRequester: FocusRequester,
     returnFocusRequester: FocusRequester?,
+    onReturnToContent: () -> Unit,
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
     onHome: () -> Unit,
@@ -444,21 +516,25 @@ private fun NavigationDrawer(
         verticalArrangement = Arrangement.Center,
     ) {
         DrawerIcon(FaIcons.HOME, "Додому", homeFocusRequester, returnFocusRequester,
+            onReturnToContent = onReturnToContent,
             onFocus = { onExpandedChange(true) }, onClick = {
                 onExpandedChange(false)
                 onHome()
             })
         DrawerIcon(FaIcons.FILM, "Фільми TMDB", moviesFocusRequester, returnFocusRequester,
+            onReturnToContent = onReturnToContent,
             onFocus = { onExpandedChange(true) }, onClick = {
                 onExpandedChange(false)
                 onMovies()
             })
         DrawerIcon(FaIcons.SEARCH, "Пошук", searchFocusRequester, returnFocusRequester,
+            onReturnToContent = onReturnToContent,
             onFocus = { onExpandedChange(true) }, onClick = {
                 onExpandedChange(false)
                 onSearch()
             })
         DrawerIcon(FaIcons.COG, "Налаштування", settingsFocusRequester, returnFocusRequester,
+            onReturnToContent = onReturnToContent,
             onFocus = { onExpandedChange(true) }, onClick = {
                 onExpandedChange(false)
                 onSettings()
@@ -473,6 +549,7 @@ private fun DrawerIcon(
     description: String,
     focusRequester: FocusRequester,
     returnFocusRequester: FocusRequester?,
+    onReturnToContent: () -> Unit,
     onFocus: () -> Unit,
     onClick: () -> Unit,
 ) {
@@ -496,9 +573,13 @@ private fun DrawerIcon(
                         } catch (_: IllegalStateException) {
                             // The remembered list item was disposed.
                         }
-                        if (!restored) focusManager.moveFocus(FocusDirection.Right)
+                        if (!restored && !focusManager.moveFocus(FocusDirection.Right))
+                            onReturnToContent()
                         true
-                    } else focusManager.moveFocus(FocusDirection.Right)
+                    } else {
+                        if (!focusManager.moveFocus(FocusDirection.Right)) onReturnToContent()
+                        true
+                    }
                 } else false
             }
             .semantics { contentDescription = description }
@@ -546,7 +627,6 @@ private fun FloatingIconButton(
     description: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    glyphSize: androidx.compose.ui.unit.TextUnit = 23.sp,
     focusRequester: FocusRequester? = null,
     navigateUpTo: FocusRequester? = null,
     navigateDownTo: FocusRequester? = null,
@@ -565,7 +645,8 @@ private fun FloatingIconButton(
                 navigateLeftTo?.let { left = it }
                 navigateRightTo?.let { right = it }
             }
-            .size(50.dp).semantics { contentDescription = description }
+            .size(40.dp)
+            .semantics { contentDescription = description }
             .onFocusChanged {
                 focused = it.isFocused
                 if (it.isFocused) focusRequester?.let { requester -> onFocused?.invoke(requester) }
@@ -573,7 +654,7 @@ private fun FloatingIconButton(
         scale = ClickableSurfaceDefaults.scale(scale = 1f, focusedScale = 1f),
         border = ClickableSurfaceDefaults.border(
             border = Border.None,
-            focusedBorder = Border(BorderStroke(2.dp, AppColors.NeonCyan), shape = CircleShape)
+            focusedBorder = Border.None
         ),
         shape = ClickableSurfaceDefaults.shape(CircleShape),
         colors = ClickableSurfaceDefaults.colors(
@@ -582,14 +663,11 @@ private fun FloatingIconButton(
         )
     ) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            val foreground = if (focused) AppColors.NeonCyan else AppColors.TextLight
-            if (glyph.firstOrNull()?.code in 0xE000..0xF8FF) {
-                FontAwesomeIcon(glyph, color = Color.Black, size = (glyphSize.value + 4f).sp)
-                FontAwesomeIcon(glyph, color = foreground, size = glyphSize)
-            } else {
-                Text(glyph, color = Color.Black, fontSize = (glyphSize.value + 4f).sp)
-                Text(glyph, color = foreground, fontSize = glyphSize)
-            }
+            val foreground = if (focused) AppColors.IceWhite else AppColors.TextLight
+            Text(glyph, color = foreground,
+                style = MaterialTheme.typography.titleLarge.copy(
+                    shadow = if (focused) Shadow(AppColors.NeonCyan.copy(alpha = 0.7f),
+                        androidx.compose.ui.geometry.Offset.Zero, 20f) else null))
         }
     }
 }
@@ -609,18 +687,20 @@ private fun WatchlistSeasonArrow(
             .then(Modifier.clickable(enabled = enabled, onClick = onClick)
                 .focusable(enabled = enabled)
                 .focusProperties { downTo?.let { down = it } })
-            .semantics { contentDescription = description }
-            .neonGlow(focused = focused, borderRadius = 8.dp, alpha = 0.7f),
+            .semantics { contentDescription = description },
         contentAlignment = Alignment.Center,
     ) {
         Text(glyph, color = when {
             !enabled -> AppColors.TextSecondary.copy(alpha = 0.4f)
-            focused -> AppColors.NeonCyan
-            else -> Color.White
-        }, style = MaterialTheme.typography.titleLarge)
+            focused -> AppColors.IceWhite
+            else -> AppColors.TextLight
+        }, style = MaterialTheme.typography.titleLarge.copy(
+            shadow = if (focused) Shadow(AppColors.NeonCyan.copy(alpha = 0.7f),
+                androidx.compose.ui.geometry.Offset.Zero, 20f) else null))
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun WatchlistHomeSection(
     items: List<TmdbWatchlistHomeItem>,
@@ -633,9 +713,11 @@ private fun WatchlistHomeSection(
     onSelectedKeyChange: (String) -> Unit,
     onSectionFocus: () -> Unit,
     modifier: Modifier = Modifier,
-    homeEntryFocusRequester: FocusRequester? = null,
     drawerFocusRequester: FocusRequester? = null,
     onContentFocusRequester: (FocusRequester) -> Unit = {},
+    lastEpisodeFocusKey: String? = null,
+    lastEpisodeFocusNumber: Int? = null,
+    onEpisodeFocused: (String, Int) -> Unit = { _, _ -> },
     continueFocusRequester: FocusRequester? = null,
 ) {
     // Selection is owned by the screen, above the LazyColumn item, so navigating
@@ -648,6 +730,7 @@ private fun WatchlistHomeSection(
     }.takeIf { it >= 0 } ?: 0
     val selected = items[selectedIndex]
     val title = selected.entry.title
+    val episodeFocusKey = "${title.type.path}:${title.id}:${selected.selectedSeasonNumber}"
     val availableSeasons = selected.seasons.filter {
         it.number > 0 && (it.episodeCount ?: 0) > 0
     }.sortedBy { it.number }
@@ -663,7 +746,7 @@ private fun WatchlistHomeSection(
         selected.selectedVoiceIndex in it.variantIndices
     } ?: selected.anitubeVoices.firstOrNull()
     val defaultDetailsFocusRequester = remember(title.type, title.id) { FocusRequester() }
-    val detailsFocusRequester = homeEntryFocusRequester ?: defaultDetailsFocusRequester
+    val detailsFocusRequester = defaultDetailsFocusRequester
     val seasonEpisodeFocusRequester = remember(title.type, title.id,
         selected.selectedSeasonNumber) { FocusRequester() }
     var detailsFocused by remember(title.type, title.id) { mutableStateOf(false) }
@@ -729,24 +812,27 @@ private fun WatchlistHomeSection(
             1f to darkFill)))
 
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Box(Modifier.fillMaxWidth().height(watchlistViewportHeight * 0.58f)) {
+            // Keep the movie header at the same absolute height as the series
+            // header; only the area below it is shorter than the episode row.
+            Box(Modifier.fillMaxWidth().height(watchlistViewportHeight *
+                if (title.type == TmdbMediaType.MOVIE) (0.58f / 0.82f) else 0.58f)) {
                 if (items.size > 1) {
                     Row(Modifier.align(Alignment.TopStart).padding(top = 18.dp, start = 28.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         val previousArrowFocusRequester = remember { FocusRequester() }
-                        FloatingIconButton("‹", "Попередній тайтл", onClick = {
+                        FloatingIconButton("<", "Попередній тайтл", onClick = {
                             val previous = (selectedIndex - 1 + items.size) % items.size
                             onSelectedKeyChange("${items[previous].entry.title.type}:${items[previous].entry.title.id}")
                             onSectionFocus()
-                        }, glyphSize = 30.sp, focusRequester = previousArrowFocusRequester,
+                        }, focusRequester = previousArrowFocusRequester,
                             navigateDownTo = detailsFocusRequester,
                             navigateLeftTo = drawerFocusRequester,
                             onFocused = onContentFocusRequester)
-                        FloatingIconButton("›", "Наступний тайтл", onClick = {
+                        FloatingIconButton(">", "Наступний тайтл", onClick = {
                             val next = (selectedIndex + 1) % items.size
                             onSelectedKeyChange("${items[next].entry.title.type}:${items[next].entry.title.id}")
                             onSectionFocus()
-                        }, glyphSize = 30.sp, navigateDownTo = detailsFocusRequester)
+                        }, navigateDownTo = detailsFocusRequester)
                     }
                 }
                 Column(Modifier.align(Alignment.BottomStart).fillMaxWidth(0.36f)
@@ -899,12 +985,11 @@ private fun WatchlistHomeSection(
                 }
             }
             Spacer(Modifier.weight(1f))
-            Row(Modifier.fillMaxWidth().height(40.dp).padding(start = 40.dp, end = 4.dp),
-                verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.width(230.dp), contentAlignment = Alignment.CenterStart) {
-                    if (title.type == TmdbMediaType.TV) {
-                        Row(verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(Modifier.fillMaxWidth().height(50.dp)) {
+                if (title.type == TmdbMediaType.TV) {
+                    Row(Modifier.align(Alignment.CenterStart).padding(start = 28.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                             WatchlistSeasonArrow("<", "Попередній сезон",
                                 enabled = previousSeason != null,
                                 downTo = seasonEpisodeFocusRequester.takeIf {
@@ -913,7 +998,7 @@ private fun WatchlistHomeSection(
                                 onClick = { previousSeason?.let { onSelectSeason(title, it.number) } })
                             Text("Сезон ${selected.displaySeasonNumber
                                 ?: selected.selectedSeasonNumber ?: season?.number ?: 1}",
-                                modifier = Modifier.width(130.dp),
+                                modifier = Modifier.width(100.dp),
                                 color = Color.White, style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.SemiBold, maxLines = 1,
                                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
@@ -924,13 +1009,11 @@ private fun WatchlistHomeSection(
                                     selected.nextEpisodes.isNotEmpty()
                                 },
                                 onClick = { nextAvailableSeason?.let { onSelectSeason(title, it.number) } })
-                        }
                     }
                 }
-                Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                Box(Modifier.align(Alignment.Center)) {
                     WatchlistPositionIndicator(items.size, selectedIndex)
                 }
-                Spacer(Modifier.weight(1f))
             }
             if (voiceMenuExpanded) Dialog(onDismissRequest = { voiceMenuExpanded = false }) {
                 Column(Modifier.width(480.dp).background(AppColors.SurfaceCard,
@@ -963,17 +1046,25 @@ private fun WatchlistHomeSection(
                     } else if (selected.nextEpisodes.isNotEmpty() || nextSeason != null) {
                         val firstUnwatched = selected.nextEpisodes.indexOfFirst { !it.watched }
                             .coerceAtLeast(0)
+                        val lastFocusedIndex = if (lastEpisodeFocusKey == episodeFocusKey)
+                            selected.nextEpisodes.indexOfFirst {
+                                it.episode.episodeNumber == lastEpisodeFocusNumber
+                            } else -1
+                        val targetEpisodeIndex = lastFocusedIndex.takeIf { it >= 0 }
+                            ?: firstUnwatched
                         val episodeListState = rememberLazyListState()
                         LaunchedEffect(selected.entry.title.id, selected.selectedSeasonNumber,
                             selected.nextEpisodes) {
-                            if (firstUnwatched > 0) episodeListState.scrollToItem(firstUnwatched)
+                            if (targetEpisodeIndex > 0)
+                                episodeListState.scrollToItem(targetEpisodeIndex)
                         }
                         val nextSeason = selected.seasons
                             .filter { it.number > (selected.selectedSeasonNumber ?: 0) &&
                                 (it.episodeCount ?: 0) > 0 }
                             .minByOrNull { it.number }
                         LazyRow(state = episodeListState,
-                                modifier = Modifier.fillMaxWidth().weight(1f),
+                                modifier = Modifier.fillMaxWidth().weight(1f)
+                                    .focusGroup(),
                             horizontalArrangement = Arrangement.spacedBy(14.dp),
                             contentPadding = PaddingValues(start = 40.dp, end = 40.dp)) {
                             items(selected.nextEpisodes, key = {
@@ -981,7 +1072,7 @@ private fun WatchlistHomeSection(
                             }) { card ->
                                 val episodeFocusRequester = remember(card.episode.id) { FocusRequester() }
                                 val isSeasonFocusTarget = card ==
-                                    selected.nextEpisodes.getOrNull(firstUnwatched)
+                                    selected.nextEpisodes.getOrNull(targetEpisodeIndex)
                                 val cardFocusRequester = if (isSeasonFocusTarget)
                                     seasonEpisodeFocusRequester else episodeFocusRequester
                                 Card(onClick = { onOpenEpisode(title, card.episode) },
@@ -1000,7 +1091,11 @@ private fun WatchlistHomeSection(
                                             }
                                         }
                                         .onFocusChanged {
-                                            if (it.isFocused) onContentFocusRequester(cardFocusRequester)
+                                            if (it.isFocused) {
+                                                onContentFocusRequester(cardFocusRequester)
+                                                onEpisodeFocused(episodeFocusKey,
+                                                    card.episode.episodeNumber)
+                                            }
                                         }) {
                                     Column {
                                         AsyncImage(model = card.cachedImagePath?.let(::File)
@@ -1057,14 +1152,15 @@ private fun WatchlistHomeSection(
                     }
                 }
             } else {
-                Box(Modifier.fillMaxWidth().height(210.dp).padding(horizontal = 40.dp),
-                    contentAlignment = Alignment.CenterStart) {
+                Box(Modifier.fillMaxWidth().height(112.dp)
+                    .padding(start = 40.dp, end = 40.dp, top = 12.dp),
+                    contentAlignment = Alignment.TopStart) {
                     title.overview?.takeIf(String::isNotBlank)?.let { overview ->
                         Text(overview,
                             modifier = Modifier.fillMaxWidth(0.75f),
                             color = Color(0xFFD1D5DB),
                             style = MaterialTheme.typography.bodyMedium,
-                            maxLines = 5,
+                            maxLines = 3,
                             overflow = TextOverflow.Ellipsis)
                     }
                 }
@@ -1135,7 +1231,8 @@ private fun TmdbLibraryState.hasHomeRowContent(sectionId: String): Boolean = whe
     else -> false
 }
 
-private fun homeLazyItemKeys(state: TmdbLibraryState, animationOnly: Boolean): List<String> =
+private fun homeLazyItemKeys(state: TmdbLibraryState, animationOnly: Boolean,
+    peopleVisible: Boolean): List<String> =
     if (!animationOnly) buildList {
         add("toloka_video")
         if (state.history.isNotEmpty()) add("history")
@@ -1144,6 +1241,7 @@ private fun homeLazyItemKeys(state: TmdbLibraryState, animationOnly: Boolean): L
         if (state.favorites.isNotEmpty()) add("favorites")
     } else buildList {
         if (state.watchlist.isNotEmpty()) add("watchlist")
+        if (peopleVisible) add("watchlist-people")
         state.mainSections.filter { it.enabled }.forEach { section ->
             when (section.id) {
                 "history" -> if (state.history.isNotEmpty()) add(section.id)
@@ -1263,6 +1361,7 @@ private fun TolokaRssRow(title: String, state: TolokaRssState, animated: Boolean
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun TmdbLibraryRow(title: String, titles: List<TmdbTitle>,
     onOpen: (TmdbTitle) -> Unit, onMore: () -> Unit,
@@ -1274,10 +1373,12 @@ private fun TmdbLibraryRow(title: String, titles: List<TmdbTitle>,
     // Multiple AniList seasons can resolve to the same TMDB show. A LazyRow key
     // identifies a card, so keep only the first card per TMDB title here.
     val rowTitles = titles.distinctBy { it.type to it.id }
+    val rowState = rememberLazyListState()
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(title, style = MaterialTheme.typography.titleLarge, color = Color.White,
             modifier = Modifier.padding(horizontal = 4.dp))
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp),
+        LazyRow(state = rowState, modifier = Modifier.focusGroup(),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
             contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)) {
             items(rowTitles.take(13), key = { "${it.type}:${it.id}" }) { item ->
                 TmdbPosterCard(item, onClick = { onOpen(item) }, onFocused = onSectionFocus,
@@ -1286,9 +1387,35 @@ private fun TmdbLibraryRow(title: String, titles: List<TmdbTitle>,
                     },
                     onLongClick = onLongClick?.let { callback -> { callback(item) } },
                     navigateLeftTo = if (item == rowTitles.firstOrNull()) drawerFocusRequester else null,
-                    onFocusTarget = if (item == rowTitles.firstOrNull()) onContentFocusRequester else null)
+                    onFocusTarget = onContentFocusRequester)
             }
             if (showMore && rowTitles.size > 13) item(key = "more") { MoreCard(onClick = onMore) }
         }
+    }
+}
+
+@Preview(device = "id:tv_1080p")
+@Composable
+private fun TmdbLibraryScreenPreview() {
+    AppTheme {
+        TmdbLibraryScreen(
+            state = TmdbLibraryState(
+                mainSections = listOf(
+                    HomeSectionSetting("animation_tv", "Популярні анімаційні серіали", true),
+                    HomeSectionSetting("animation_movie", "Популярні повнометражні фільми", true)
+                ),
+                tv = TmdbPopularState.Results(
+                    listOf(
+                        TmdbTitle(1, TmdbMediaType.TV, "Attack on Titan", "Атака титанів", 2013, null, null, 9.0, "Атака титанів", "Attack on Titan", "ja")
+                    )
+                ),
+                initialHomeLoading = false
+            ),
+            animationOnly = true,
+            onOpen = {},
+            onRetry = {},
+            onMore = {},
+            onBack = {}
+        )
     }
 }

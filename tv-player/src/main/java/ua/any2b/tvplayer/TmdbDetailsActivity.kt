@@ -970,13 +970,13 @@ class TmdbDetailsActivity : ComponentActivity() {
         val players = ExternalVideoPlayers(this)
         if (players.isVimu(packageName)) {
             players.applyVimuResume(playerIntent, resumePositionMs)
-            context?.title?.let { ua.any2b.tvplayer.data.TmdbWatchlistStore(this)
-                .onPlaybackStarted(it) }
             pendingVimuPlayback = context
             vimuPlayerLauncher.launch(playerIntent)
         } else {
             startActivity(playerIntent)
         }
+        context?.title?.let { ua.any2b.tvplayer.data.TmdbWatchlistStore(this)
+            .onPlaybackStarted(it) }
         playbackScenarioId?.let {
             playbackCoordinator.playbackLaunched(it, requestId, context?.source)
         }

@@ -26,6 +26,7 @@ object FaIcons {
     const val MICROPHONE = "\uf130"
     const val COMMENTING_O = "\uf4ad"
     const val ANGLE_DOWN = "\uf107"
+    const val CHEVRON_CIRCLE_DOWN = "\uf13a"
     const val ARROW_UP = "\uf062"
     const val ARROW_DOWN = "\uf063"
     const val CHECK = "\uf00c"

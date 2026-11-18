@@ -9,6 +9,10 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import ua.any2b.core.network.ApiRequestGate
+import ua.any2b.core.network.ApiRequestKey
+import ua.any2b.core.network.ApiSingleFlight
+import ua.any2b.core.network.retryAfterSeconds
 import ua.any2b.core.tmdb.TmdbListSort
 import java.io.IOException
 import java.net.Inet4Address
@@ -21,7 +25,7 @@ internal class Ipv4FirstDns(private val delegate: Dns = Dns.SYSTEM) : Dns {
 }
 
 /**
- * Клієнт публічного GraphQL API AniList (без ключа, ліміт ~90 запитів на хвилину).
+ * Клієнт публічного GraphQL API AniList (без ключа).
  * Головна сторінка тягнеться ОДНИМ запитом: усі ряди йдуть аліасами.
  */
 class AniListClient(
@@ -310,11 +314,11 @@ query Category(${'$'}page: Int, ${'$'}perPage: Int$categoryVariables) {
 
     private suspend fun execute(query: String, variables: JSONObject): JSONObject =
         withContext(Dispatchers.IO) {
-            val payload = JSONObject()
+            val payloadJson = JSONObject()
                 .put("query", query)
                 .put("variables", variables)
                 .toString()
-                .toRequestBody("application/json".toMediaType())
+            val payload = payloadJson.toRequestBody("application/json".toMediaType())
 
             val request = Request.Builder()
                 .url(ENDPOINT)
@@ -323,28 +327,37 @@ query Category(${'$'}page: Int, ${'$'}perPage: Int$categoryVariables) {
                 .header("User-Agent", "Any2B/1.0 (Android TV)")
                 .build()
 
-            try {
+            val key = ApiRequestKey(request.method, request.url.toString(),
+                request.headers.names().sorted().flatMap { name ->
+                    request.headers.values(name).map { name to it }
+                },
+                payloadJson)
+            val text = requests.await(key) { requestGate.run({ wait ->
+                AniListException("Забагато запитів до AniList, спробуйте через $wait с")
+            }) { try {
                 http.newCall(request).execute().use { resp ->
                     val text = resp.body?.string().orEmpty()
                     if (resp.code == 429) {
-                        val wait = resp.header("Retry-After") ?: "60"
+                        val wait = retryAfterSeconds(resp.header("Retry-After"))
+                        requestGate.coolDown(wait)
                         throw AniListException("Забагато запитів до AniList, спробуйте через $wait с")
                     }
                     if (!resp.isSuccessful) {
                         throw AniListException("AniList відповів HTTP ${resp.code}")
                     }
-                    val json = JSONObject(text)
-                    if (json.has("errors") && json.isNull("data")) {
-                        val msg = json.getJSONArray("errors")
-                            .getJSONObject(0)
-                            .optString("message", "помилка запиту")
-                        throw AniListException("AniList: $msg")
-                    }
-                    json.getJSONObject("data")
+                    text
                 }
             } catch (error: IOException) {
                 throw AniListException("Не вдалося з’єднатися з AniList. Перевірте мережу та повторіть.", error)
+            } } }
+            val json = JSONObject(text)
+            if (json.has("errors") && json.isNull("data")) {
+                val msg = json.getJSONArray("errors")
+                    .getJSONObject(0)
+                    .optString("message", "помилка запиту")
+                throw AniListException("AniList: $msg")
             }
+            json.getJSONObject("data")
         }
 
     // ── Розбір ────────────────────────────────────────────────────────────
@@ -397,6 +410,8 @@ query Category(${'$'}page: Int, ${'$'}perPage: Int$categoryVariables) {
 
     companion object {
         private const val ENDPOINT = "https://graphql.anilist.co"
+        private val requestGate = ApiRequestGate(maxConcurrent = 1, intervalMs = 2_100L)
+        private val requests = ApiSingleFlight()
 
         const val HOME_QUERY = """
 query Home(${'$'}season: MediaSeason, ${'$'}year: Int, ${'$'}nextSeason: MediaSeason, ${'$'}nextYear: Int, ${'$'}perPage: Int) {

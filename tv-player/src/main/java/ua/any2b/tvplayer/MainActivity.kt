@@ -8,6 +8,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -15,6 +16,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ua.any2b.tvplayer.ui.AppTheme
 import ua.any2b.tvplayer.ui.TmdbLibraryScreen
 import ua.any2b.tvplayer.ui.TmdbLibraryViewModel
+import ua.any2b.tvplayer.ui.TmdbPeopleViewModel
 import ua.any2b.core.tmdb.TmdbMediaType
 import ua.any2b.core.tmdb.TmdbTitle
 import ua.any2b.core.tmdb.TmdbEpisode
@@ -29,7 +31,12 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_HOME_RESET = "home_reset"
     }
     private var homeResetToken by mutableLongStateOf(0L)
+    private var personReturnToken by mutableIntStateOf(0)
+    private var homeReturnToken by mutableIntStateOf(0)
+    private var returningFromPerson = false
+    private var skipReturnRestore = false
     private var hasResumedOnce = false
+    private val peopleViewModel: TmdbPeopleViewModel by viewModels()
     private val viewModel: TmdbLibraryViewModel by viewModels {
         object : ViewModelProvider.Factory {
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -99,6 +106,27 @@ class MainActivity : ComponentActivity() {
                     onSelectWatchlistVoice = viewModel::selectWatchlistVoice,
                     onOpenEpisode = ::openWatchlistPlayback,
                     onContinueWatchlist = ::openWatchlistPlayback,
+                    peopleState = peopleViewModel.people.collectAsStateWithLifecycle().value,
+                    onLoadPeople = { title ->
+                        peopleViewModel.loadPeople(title.type, title.id,
+                            includeLiveCast = 16 !in title.genreIds &&
+                                (title.type == TmdbMediaType.MOVIE || title.genreIds.isNotEmpty()))
+                    },
+                    onRetryPeople = { title ->
+                        peopleViewModel.loadPeople(title.type, title.id,
+                            includeLiveCast = 16 !in title.genreIds &&
+                                (title.type == TmdbMediaType.MOVIE || title.genreIds.isNotEmpty()),
+                            force = true)
+                    },
+                    onOpenPerson = { person ->
+                        returningFromPerson = true
+                        startActivity(Intent(this, TmdbPersonActivity::class.java).apply {
+                            putExtra(TmdbPersonActivity.EXTRA_SOURCE, TmdbPersonActivity.SOURCE_TMDB)
+                            putExtra(TmdbPersonActivity.EXTRA_PERSON_ID, person.id)
+                        })
+                    },
+                    personReturnToken = personReturnToken,
+                    homeReturnToken = homeReturnToken,
                 )
             }
         }
@@ -107,6 +135,7 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        skipReturnRestore = true
         homeResetToken = intent.getLongExtra(EXTRA_HOME_RESET,
             android.os.SystemClock.elapsedRealtimeNanos())
     }
@@ -114,7 +143,11 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         if (hasResumedOnce) {
-            homeResetToken = android.os.SystemClock.elapsedRealtimeNanos()
+            if (returningFromPerson) {
+                returningFromPerson = false
+                personReturnToken++
+            } else if (skipReturnRestore) skipReturnRestore = false
+            else homeReturnToken++
             viewModel.refreshPersonalLists()
         } else {
             // The ViewModel has already loaded personal lists during cold start.

@@ -230,7 +230,7 @@ internal fun TmdbPosterCard(title: TmdbTitle, query: String = "",
     }
     val keyScope = rememberCoroutineScope()
     val longPressTimeout = AndroidViewConfiguration.getLongPressTimeout().toLong()
-    Column(Modifier.width(160.dp).padding(4.dp)) {
+    Column(Modifier.width(LocalHomeRowPosterWidth.current).padding(4.dp)) {
         Card(
             onClick = {
                 if (onLongClick == null || SystemClock.uptimeMillis() >= suppressClickUntil)
