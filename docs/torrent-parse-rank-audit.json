@@ -1,0 +1,2704 @@
+{
+  "repository": "https://github.com/g0ldyy/torrent-parse-rank",
+  "revision": "e21b3e77987c4a51c8168d9d59de9a718a48c990",
+  "python": "3.12.16",
+  "fixtureSha256": "3884d24b1d1e3bd05d2f86d93cc05133e6b755b55a6935dd5b962bba7671c55f",
+  "dependencies": {
+    "torrent-parse-rank": "0.1.0",
+    "regex": "2026.11.19",
+    "pydantic": "2.14.4",
+    "orjson": "3.13.0"
+  },
+  "summary": {
+    "PTT": {
+      "oneExactAlias": 13,
+      "allAliases": 0,
+      "year": 20,
+      "source": 18,
+      "resolution": 20,
+      "codec": 20,
+      "seasonAndEpisodes": 19,
+      "languageUnion": 0
+    },
+    "RTN": {
+      "oneExactAlias": 13,
+      "allAliases": 0,
+      "year": 20,
+      "source": 18,
+      "resolution": 20,
+      "codec": 20,
+      "seasonAndEpisodes": 19,
+      "languageUnion": 0
+    }
+  },
+  "items": [
+    {
+      "expected": {
+        "id": "701937",
+        "rawTitle": "Крижаний удар / Frozen Impact (2003) DVDRemux 576i Ukr/Eng | Sub Dut",
+        "titles": "Крижаний удар ~ Frozen Impact",
+        "year": "2003",
+        "source": "DVDRemux",
+        "resolution": "576i",
+        "codec": "",
+        "audio": "uk,en",
+        "subtitles": "nl",
+        "coverage": ""
+      },
+      "parsers": {
+        "PTT": {
+          "raw": {
+            "episodes": [],
+            "languages": [
+              "en",
+              "uk",
+              "nl",
+              "ru"
+            ],
+            "quality": "DVD",
+            "resolution": "576i",
+            "seasons": [],
+            "subbed": true,
+            "title": "Frozen Impact",
+            "year": 2003
+          },
+          "normalized": {
+            "title": "Frozen Impact",
+            "year": 2003,
+            "source": "DVD",
+            "resolution": "576i",
+            "codec": ""
+          },
+          "checks": {
+            "oneExactAlias": true,
+            "allAliases": false,
+            "year": true,
+            "source": false,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        },
+        "RTN": {
+          "raw": {
+            "raw_title": "Крижаний удар / Frozen Impact (2003) DVDRemux 576i Ukr/Eng | Sub Dut",
+            "parsed_title": "Frozen Impact",
+            "normalized_title": "frozen impact",
+            "trash": false,
+            "adult": false,
+            "year": 2003,
+            "resolution": "576i",
+            "seasons": [],
+            "episodes": [],
+            "complete": false,
+            "volumes": [],
+            "languages": [
+              "en",
+              "uk",
+              "nl",
+              "ru"
+            ],
+            "quality": "DVD",
+            "hdr": [],
+            "codec": null,
+            "audio": [],
+            "channels": [],
+            "dubbed": false,
+            "subbed": true,
+            "date": null,
+            "group": null,
+            "edition": null,
+            "bit_depth": null,
+            "bitrate": null,
+            "network": null,
+            "extended": false,
+            "converted": false,
+            "hardcoded": false,
+            "region": null,
+            "ppv": false,
+            "_3d": false,
+            "site": null,
+            "size": null,
+            "proper": false,
+            "repack": false,
+            "retail": false,
+            "upscaled": false,
+            "remastered": false,
+            "unrated": false,
+            "uncensored": false,
+            "documentary": false,
+            "commentary": false,
+            "episode_code": null,
+            "country": null,
+            "container": null,
+            "extension": null,
+            "extras": [],
+            "torrent": false,
+            "scene": false
+          },
+          "normalized": {
+            "title": "Frozen Impact",
+            "year": 2003,
+            "source": "DVD",
+            "resolution": "576i",
+            "codec": ""
+          },
+          "checks": {
+            "oneExactAlias": true,
+            "allAliases": false,
+            "year": true,
+            "source": false,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        }
+      }
+    },
+    {
+      "expected": {
+        "id": "701919",
+        "rawTitle": "Царство небесне / Kingdom of Heaven (2005) WEB-DL 4K 2160p HDR H.265 Ukr/Eng | Sub Ukr/Eng [Theatrical Cut]",
+        "titles": "Царство небесне ~ Kingdom of Heaven",
+        "year": "2005",
+        "source": "WEB-DL",
+        "resolution": "2160p",
+        "codec": "H.265",
+        "audio": "uk,en",
+        "subtitles": "uk,en",
+        "coverage": ""
+      },
+      "parsers": {
+        "PTT": {
+          "raw": {
+            "codec": "hevc",
+            "edition": "Theatrical",
+            "episodes": [],
+            "hdr": [
+              "HDR"
+            ],
+            "languages": [
+              "en",
+              "uk",
+              "ru"
+            ],
+            "quality": "WEB-DL",
+            "resolution": "2160p",
+            "seasons": [],
+            "subbed": true,
+            "title": "Kingdom of Heaven",
+            "year": 2005
+          },
+          "normalized": {
+            "title": "Kingdom of Heaven",
+            "year": 2005,
+            "source": "WEB-DL",
+            "resolution": "2160p",
+            "codec": "H.265"
+          },
+          "checks": {
+            "oneExactAlias": true,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        },
+        "RTN": {
+          "raw": {
+            "raw_title": "Царство небесне / Kingdom of Heaven (2005) WEB-DL 4K 2160p HDR H.265 Ukr/Eng | Sub Ukr/Eng [Theatrical Cut]",
+            "parsed_title": "Kingdom of Heaven",
+            "normalized_title": "kingdom of heaven",
+            "trash": false,
+            "adult": false,
+            "year": 2005,
+            "resolution": "2160p",
+            "seasons": [],
+            "episodes": [],
+            "complete": false,
+            "volumes": [],
+            "languages": [
+              "en",
+              "uk",
+              "ru"
+            ],
+            "quality": "WEB-DL",
+            "hdr": [
+              "HDR"
+            ],
+            "codec": "hevc",
+            "audio": [],
+            "channels": [],
+            "dubbed": false,
+            "subbed": true,
+            "date": null,
+            "group": null,
+            "edition": "Theatrical",
+            "bit_depth": null,
+            "bitrate": null,
+            "network": null,
+            "extended": false,
+            "converted": false,
+            "hardcoded": false,
+            "region": null,
+            "ppv": false,
+            "_3d": false,
+            "site": null,
+            "size": null,
+            "proper": false,
+            "repack": false,
+            "retail": false,
+            "upscaled": false,
+            "remastered": false,
+            "unrated": false,
+            "uncensored": false,
+            "documentary": false,
+            "commentary": false,
+            "episode_code": null,
+            "country": null,
+            "container": null,
+            "extension": null,
+            "extras": [],
+            "torrent": false,
+            "scene": false
+          },
+          "normalized": {
+            "title": "Kingdom of Heaven",
+            "year": 2005,
+            "source": "WEB-DL",
+            "resolution": "2160p",
+            "codec": "H.265"
+          },
+          "checks": {
+            "oneExactAlias": true,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        }
+      }
+    },
+    {
+      "expected": {
+        "id": "701928",
+        "rawTitle": "Американський психопат / American Psycho (2000) WEB-DL 4K 2160p HDR DV P8 H.265 Ukr/Eng | Sub Ukr/Eng",
+        "titles": "Американський психопат ~ American Psycho",
+        "year": "2000",
+        "source": "WEB-DL",
+        "resolution": "2160p",
+        "codec": "H.265",
+        "audio": "uk,en",
+        "subtitles": "uk,en",
+        "coverage": ""
+      },
+      "parsers": {
+        "PTT": {
+          "raw": {
+            "codec": "hevc",
+            "episodes": [],
+            "hdr": [
+              "DV",
+              "HDR"
+            ],
+            "languages": [
+              "en",
+              "uk",
+              "ru"
+            ],
+            "quality": "WEB-DL",
+            "resolution": "2160p",
+            "seasons": [],
+            "subbed": true,
+            "title": "American Psycho",
+            "year": 2000
+          },
+          "normalized": {
+            "title": "American Psycho",
+            "year": 2000,
+            "source": "WEB-DL",
+            "resolution": "2160p",
+            "codec": "H.265"
+          },
+          "checks": {
+            "oneExactAlias": true,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        },
+        "RTN": {
+          "raw": {
+            "raw_title": "Американський психопат / American Psycho (2000) WEB-DL 4K 2160p HDR DV P8 H.265 Ukr/Eng | Sub Ukr/Eng",
+            "parsed_title": "American Psycho",
+            "normalized_title": "american psycho",
+            "trash": false,
+            "adult": false,
+            "year": 2000,
+            "resolution": "2160p",
+            "seasons": [],
+            "episodes": [],
+            "complete": false,
+            "volumes": [],
+            "languages": [
+              "en",
+              "uk",
+              "ru"
+            ],
+            "quality": "WEB-DL",
+            "hdr": [
+              "DV",
+              "HDR"
+            ],
+            "codec": "hevc",
+            "audio": [],
+            "channels": [],
+            "dubbed": false,
+            "subbed": true,
+            "date": null,
+            "group": null,
+            "edition": null,
+            "bit_depth": null,
+            "bitrate": null,
+            "network": null,
+            "extended": false,
+            "converted": false,
+            "hardcoded": false,
+            "region": null,
+            "ppv": false,
+            "_3d": false,
+            "site": null,
+            "size": null,
+            "proper": false,
+            "repack": false,
+            "retail": false,
+            "upscaled": false,
+            "remastered": false,
+            "unrated": false,
+            "uncensored": false,
+            "documentary": false,
+            "commentary": false,
+            "episode_code": null,
+            "country": null,
+            "container": null,
+            "extension": null,
+            "extras": [],
+            "torrent": false,
+            "scene": false
+          },
+          "normalized": {
+            "title": "American Psycho",
+            "year": 2000,
+            "source": "WEB-DL",
+            "resolution": "2160p",
+            "codec": "H.265"
+          },
+          "checks": {
+            "oneExactAlias": true,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        }
+      }
+    },
+    {
+      "expected": {
+        "id": "701907",
+        "rawTitle": "За всяку ціну / By Any Means (2026) BDRemux 1080p Ukr/Eng | Sub Ukr/Eng",
+        "titles": "За всяку ціну ~ By Any Means",
+        "year": "2026",
+        "source": "BluRay",
+        "resolution": "1080p",
+        "codec": "",
+        "audio": "uk,en",
+        "subtitles": "uk,en",
+        "coverage": ""
+      },
+      "parsers": {
+        "PTT": {
+          "raw": {
+            "episodes": [],
+            "languages": [
+              "en",
+              "uk",
+              "ru"
+            ],
+            "quality": "BluRay REMUX",
+            "resolution": "1080p",
+            "seasons": [],
+            "subbed": true,
+            "title": "By Any Means",
+            "year": 2026
+          },
+          "normalized": {
+            "title": "By Any Means",
+            "year": 2026,
+            "source": "BluRay",
+            "resolution": "1080p",
+            "codec": ""
+          },
+          "checks": {
+            "oneExactAlias": true,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        },
+        "RTN": {
+          "raw": {
+            "raw_title": "За всяку ціну / By Any Means (2026) BDRemux 1080p Ukr/Eng | Sub Ukr/Eng",
+            "parsed_title": "By Any Means",
+            "normalized_title": "by any means",
+            "trash": false,
+            "adult": false,
+            "year": 2026,
+            "resolution": "1080p",
+            "seasons": [],
+            "episodes": [],
+            "complete": false,
+            "volumes": [],
+            "languages": [
+              "en",
+              "uk",
+              "ru"
+            ],
+            "quality": "BluRay REMUX",
+            "hdr": [],
+            "codec": null,
+            "audio": [],
+            "channels": [],
+            "dubbed": false,
+            "subbed": true,
+            "date": null,
+            "group": null,
+            "edition": null,
+            "bit_depth": null,
+            "bitrate": null,
+            "network": null,
+            "extended": false,
+            "converted": false,
+            "hardcoded": false,
+            "region": null,
+            "ppv": false,
+            "_3d": false,
+            "site": null,
+            "size": null,
+            "proper": false,
+            "repack": false,
+            "retail": false,
+            "upscaled": false,
+            "remastered": false,
+            "unrated": false,
+            "uncensored": false,
+            "documentary": false,
+            "commentary": false,
+            "episode_code": null,
+            "country": null,
+            "container": null,
+            "extension": null,
+            "extras": [],
+            "torrent": false,
+            "scene": false
+          },
+          "normalized": {
+            "title": "By Any Means",
+            "year": 2026,
+            "source": "BluRay",
+            "resolution": "1080p",
+            "codec": ""
+          },
+          "checks": {
+            "oneExactAlias": true,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        }
+      }
+    },
+    {
+      "expected": {
+        "id": "700978",
+        "rawTitle": "Чорна Конюшина (Сезон 2, серії 1-9 з ХХ) / Black Clover (Season 2) (2026) WEBRip Ai Rem 1080p H.265 Ukr/Jap | Sub Ukr",
+        "titles": "Чорна Конюшина ~ Black Clover",
+        "year": "2026",
+        "source": "WEBRip",
+        "resolution": "1080p",
+        "codec": "H.265",
+        "audio": "uk,ja",
+        "subtitles": "uk",
+        "coverage": "S2:1-9"
+      },
+      "parsers": {
+        "PTT": {
+          "raw": {
+            "codec": "hevc",
+            "episodes": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9
+            ],
+            "languages": [
+              "ja",
+              "uk",
+              "ru"
+            ],
+            "quality": "WEBRip",
+            "resolution": "1080p",
+            "seasons": [
+              2
+            ],
+            "subbed": true,
+            "title": "Чорна Конюшина Сезон 2, серії",
+            "year": 2026
+          },
+          "normalized": {
+            "title": "Чорна Конюшина Сезон 2, серії",
+            "year": 2026,
+            "source": "WEBRip",
+            "resolution": "1080p",
+            "codec": "H.265"
+          },
+          "checks": {
+            "oneExactAlias": false,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        },
+        "RTN": {
+          "raw": {
+            "raw_title": "Чорна Конюшина (Сезон 2, серії 1-9 з ХХ) / Black Clover (Season 2) (2026) WEBRip Ai Rem 1080p H.265 Ukr/Jap | Sub Ukr",
+            "parsed_title": "Чорна Конюшина Сезон 2, серії",
+            "normalized_title": "чорна конюшина сезон 2 серіі",
+            "trash": false,
+            "adult": false,
+            "year": 2026,
+            "resolution": "1080p",
+            "seasons": [
+              2
+            ],
+            "episodes": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9
+            ],
+            "complete": false,
+            "volumes": [],
+            "languages": [
+              "ja",
+              "uk",
+              "ru"
+            ],
+            "quality": "WEBRip",
+            "hdr": [],
+            "codec": "hevc",
+            "audio": [],
+            "channels": [],
+            "dubbed": false,
+            "subbed": true,
+            "date": null,
+            "group": null,
+            "edition": null,
+            "bit_depth": null,
+            "bitrate": null,
+            "network": null,
+            "extended": false,
+            "converted": false,
+            "hardcoded": false,
+            "region": null,
+            "ppv": false,
+            "_3d": false,
+            "site": null,
+            "size": null,
+            "proper": false,
+            "repack": false,
+            "retail": false,
+            "upscaled": false,
+            "remastered": false,
+            "unrated": false,
+            "uncensored": false,
+            "documentary": false,
+            "commentary": false,
+            "episode_code": null,
+            "country": null,
+            "container": null,
+            "extension": null,
+            "extras": [],
+            "torrent": false,
+            "scene": false
+          },
+          "normalized": {
+            "title": "Чорна Конюшина Сезон 2, серії",
+            "year": 2026,
+            "source": "WEBRip",
+            "resolution": "1080p",
+            "codec": "H.265"
+          },
+          "checks": {
+            "oneExactAlias": false,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        }
+      }
+    },
+    {
+      "expected": {
+        "id": "700980",
+        "rawTitle": "Свята, яка приховує свою сутність (Сезон 1, серії 1-9 з 13) / Tensei shita Daiseijo wa, Seijo de Aru Koto wo Hitakakusu (Season 1) (2026) WEBRip Ai Rem 1080p H.265 Ukr/Jap | Sub Ukr",
+        "titles": "Свята, яка приховує свою сутність ~ Tensei shita Daiseijo wa, Seijo de Aru Koto wo Hitakakusu",
+        "year": "2026",
+        "source": "WEBRip",
+        "resolution": "1080p",
+        "codec": "H.265",
+        "audio": "uk,ja",
+        "subtitles": "uk",
+        "coverage": "S1:1-9"
+      },
+      "parsers": {
+        "PTT": {
+          "raw": {
+            "codec": "hevc",
+            "episodes": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9
+            ],
+            "languages": [
+              "ja",
+              "uk",
+              "ru"
+            ],
+            "quality": "WEBRip",
+            "resolution": "1080p",
+            "seasons": [
+              1
+            ],
+            "subbed": true,
+            "title": "Свята, яка приховує свою сутність Сезон 1, серії",
+            "year": 2026
+          },
+          "normalized": {
+            "title": "Свята, яка приховує свою сутність Сезон 1, серії",
+            "year": 2026,
+            "source": "WEBRip",
+            "resolution": "1080p",
+            "codec": "H.265"
+          },
+          "checks": {
+            "oneExactAlias": false,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        },
+        "RTN": {
+          "raw": {
+            "raw_title": "Свята, яка приховує свою сутність (Сезон 1, серії 1-9 з 13) / Tensei shita Daiseijo wa, Seijo de Aru Koto wo Hitakakusu (Season 1) (2026) WEBRip Ai Rem 1080p H.265 Ukr/Jap | Sub Ukr",
+            "parsed_title": "Свята, яка приховує свою сутність Сезон 1, серії",
+            "normalized_title": "свята яка приховує свою сутність сезон 1 серіі",
+            "trash": false,
+            "adult": false,
+            "year": 2026,
+            "resolution": "1080p",
+            "seasons": [
+              1
+            ],
+            "episodes": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9
+            ],
+            "complete": false,
+            "volumes": [],
+            "languages": [
+              "ja",
+              "uk",
+              "ru"
+            ],
+            "quality": "WEBRip",
+            "hdr": [],
+            "codec": "hevc",
+            "audio": [],
+            "channels": [],
+            "dubbed": false,
+            "subbed": true,
+            "date": null,
+            "group": null,
+            "edition": null,
+            "bit_depth": null,
+            "bitrate": null,
+            "network": null,
+            "extended": false,
+            "converted": false,
+            "hardcoded": false,
+            "region": null,
+            "ppv": false,
+            "_3d": false,
+            "site": null,
+            "size": null,
+            "proper": false,
+            "repack": false,
+            "retail": false,
+            "upscaled": false,
+            "remastered": false,
+            "unrated": false,
+            "uncensored": false,
+            "documentary": false,
+            "commentary": false,
+            "episode_code": null,
+            "country": null,
+            "container": null,
+            "extension": null,
+            "extras": [],
+            "torrent": false,
+            "scene": false
+          },
+          "normalized": {
+            "title": "Свята, яка приховує свою сутність Сезон 1, серії",
+            "year": 2026,
+            "source": "WEBRip",
+            "resolution": "1080p",
+            "codec": "H.265"
+          },
+          "checks": {
+            "oneExactAlias": false,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        }
+      }
+    },
+    {
+      "expected": {
+        "id": "701918",
+        "rawTitle": "Царство небесне / Kingdom of Heaven (2005) BDRemux 1080p Ukr/Eng | Sub Ukr/Eng [Theatrical Cut]",
+        "titles": "Царство небесне ~ Kingdom of Heaven",
+        "year": "2005",
+        "source": "BluRay",
+        "resolution": "1080p",
+        "codec": "",
+        "audio": "uk,en",
+        "subtitles": "uk,en",
+        "coverage": ""
+      },
+      "parsers": {
+        "PTT": {
+          "raw": {
+            "edition": "Theatrical",
+            "episodes": [],
+            "languages": [
+              "en",
+              "uk",
+              "ru"
+            ],
+            "quality": "BluRay REMUX",
+            "resolution": "1080p",
+            "seasons": [],
+            "subbed": true,
+            "title": "Kingdom of Heaven",
+            "year": 2005
+          },
+          "normalized": {
+            "title": "Kingdom of Heaven",
+            "year": 2005,
+            "source": "BluRay",
+            "resolution": "1080p",
+            "codec": ""
+          },
+          "checks": {
+            "oneExactAlias": true,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        },
+        "RTN": {
+          "raw": {
+            "raw_title": "Царство небесне / Kingdom of Heaven (2005) BDRemux 1080p Ukr/Eng | Sub Ukr/Eng [Theatrical Cut]",
+            "parsed_title": "Kingdom of Heaven",
+            "normalized_title": "kingdom of heaven",
+            "trash": false,
+            "adult": false,
+            "year": 2005,
+            "resolution": "1080p",
+            "seasons": [],
+            "episodes": [],
+            "complete": false,
+            "volumes": [],
+            "languages": [
+              "en",
+              "uk",
+              "ru"
+            ],
+            "quality": "BluRay REMUX",
+            "hdr": [],
+            "codec": null,
+            "audio": [],
+            "channels": [],
+            "dubbed": false,
+            "subbed": true,
+            "date": null,
+            "group": null,
+            "edition": "Theatrical",
+            "bit_depth": null,
+            "bitrate": null,
+            "network": null,
+            "extended": false,
+            "converted": false,
+            "hardcoded": false,
+            "region": null,
+            "ppv": false,
+            "_3d": false,
+            "site": null,
+            "size": null,
+            "proper": false,
+            "repack": false,
+            "retail": false,
+            "upscaled": false,
+            "remastered": false,
+            "unrated": false,
+            "uncensored": false,
+            "documentary": false,
+            "commentary": false,
+            "episode_code": null,
+            "country": null,
+            "container": null,
+            "extension": null,
+            "extras": [],
+            "torrent": false,
+            "scene": false
+          },
+          "normalized": {
+            "title": "Kingdom of Heaven",
+            "year": 2005,
+            "source": "BluRay",
+            "resolution": "1080p",
+            "codec": ""
+          },
+          "checks": {
+            "oneExactAlias": true,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        }
+      }
+    },
+    {
+      "expected": {
+        "id": "700716",
+        "rawTitle": "Астрал: За межами Потойбіччя / Insidious: Out of the Further (2026) BDRip-AVC Ukr/Eng | Sub Ukr/Eng",
+        "titles": "Астрал: За межами Потойбіччя ~ Insidious: Out of the Further",
+        "year": "2026",
+        "source": "BDRip",
+        "resolution": "",
+        "codec": "H.264",
+        "audio": "uk,en",
+        "subtitles": "uk,en",
+        "coverage": ""
+      },
+      "parsers": {
+        "PTT": {
+          "raw": {
+            "codec": "avc",
+            "episodes": [],
+            "languages": [
+              "en",
+              "uk",
+              "ru"
+            ],
+            "quality": "BDRip",
+            "seasons": [],
+            "subbed": true,
+            "title": "Insidious: Out of the Further",
+            "year": 2026
+          },
+          "normalized": {
+            "title": "Insidious: Out of the Further",
+            "year": 2026,
+            "source": "BDRip",
+            "resolution": "",
+            "codec": "H.264"
+          },
+          "checks": {
+            "oneExactAlias": true,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        },
+        "RTN": {
+          "raw": {
+            "raw_title": "Астрал: За межами Потойбіччя / Insidious: Out of the Further (2026) BDRip-AVC Ukr/Eng | Sub Ukr/Eng",
+            "parsed_title": "Insidious: Out of the Further",
+            "normalized_title": "insidious out of the further",
+            "trash": false,
+            "adult": false,
+            "year": 2026,
+            "resolution": "unknown",
+            "seasons": [],
+            "episodes": [],
+            "complete": false,
+            "volumes": [],
+            "languages": [
+              "en",
+              "uk",
+              "ru"
+            ],
+            "quality": "BDRip",
+            "hdr": [],
+            "codec": "avc",
+            "audio": [],
+            "channels": [],
+            "dubbed": false,
+            "subbed": true,
+            "date": null,
+            "group": null,
+            "edition": null,
+            "bit_depth": null,
+            "bitrate": null,
+            "network": null,
+            "extended": false,
+            "converted": false,
+            "hardcoded": false,
+            "region": null,
+            "ppv": false,
+            "_3d": false,
+            "site": null,
+            "size": null,
+            "proper": false,
+            "repack": false,
+            "retail": false,
+            "upscaled": false,
+            "remastered": false,
+            "unrated": false,
+            "uncensored": false,
+            "documentary": false,
+            "commentary": false,
+            "episode_code": null,
+            "country": null,
+            "container": null,
+            "extension": null,
+            "extras": [],
+            "torrent": false,
+            "scene": false
+          },
+          "normalized": {
+            "title": "Insidious: Out of the Further",
+            "year": 2026,
+            "source": "BDRip",
+            "resolution": "",
+            "codec": "H.264"
+          },
+          "checks": {
+            "oneExactAlias": true,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        }
+      }
+    },
+    {
+      "expected": {
+        "id": "701910",
+        "rawTitle": "Rammstein: Наживо в Мехіко / Rammstein: Live in Mexico City (2026) BDRip 1080p H.265 Ger | sub Ukr",
+        "titles": "Rammstein: Наживо в Мехіко ~ Rammstein: Live in Mexico City",
+        "year": "2026",
+        "source": "BDRip",
+        "resolution": "1080p",
+        "codec": "H.265",
+        "audio": "de",
+        "subtitles": "uk",
+        "coverage": ""
+      },
+      "parsers": {
+        "PTT": {
+          "raw": {
+            "codec": "hevc",
+            "episodes": [],
+            "languages": [
+              "de",
+              "uk",
+              "ru"
+            ],
+            "quality": "BDRip",
+            "resolution": "1080p",
+            "seasons": [],
+            "subbed": true,
+            "title": "Rammstein: Live in Mexico City",
+            "year": 2026
+          },
+          "normalized": {
+            "title": "Rammstein: Live in Mexico City",
+            "year": 2026,
+            "source": "BDRip",
+            "resolution": "1080p",
+            "codec": "H.265"
+          },
+          "checks": {
+            "oneExactAlias": true,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        },
+        "RTN": {
+          "raw": {
+            "raw_title": "Rammstein: Наживо в Мехіко / Rammstein: Live in Mexico City (2026) BDRip 1080p H.265 Ger | sub Ukr",
+            "parsed_title": "Rammstein: Live in Mexico City",
+            "normalized_title": "rammstein live in mexico city",
+            "trash": false,
+            "adult": false,
+            "year": 2026,
+            "resolution": "1080p",
+            "seasons": [],
+            "episodes": [],
+            "complete": false,
+            "volumes": [],
+            "languages": [
+              "de",
+              "uk",
+              "ru"
+            ],
+            "quality": "BDRip",
+            "hdr": [],
+            "codec": "hevc",
+            "audio": [],
+            "channels": [],
+            "dubbed": false,
+            "subbed": true,
+            "date": null,
+            "group": null,
+            "edition": null,
+            "bit_depth": null,
+            "bitrate": null,
+            "network": null,
+            "extended": false,
+            "converted": false,
+            "hardcoded": false,
+            "region": null,
+            "ppv": false,
+            "_3d": false,
+            "site": null,
+            "size": null,
+            "proper": false,
+            "repack": false,
+            "retail": false,
+            "upscaled": false,
+            "remastered": false,
+            "unrated": false,
+            "uncensored": false,
+            "documentary": false,
+            "commentary": false,
+            "episode_code": null,
+            "country": null,
+            "container": null,
+            "extension": null,
+            "extras": [],
+            "torrent": false,
+            "scene": false
+          },
+          "normalized": {
+            "title": "Rammstein: Live in Mexico City",
+            "year": 2026,
+            "source": "BDRip",
+            "resolution": "1080p",
+            "codec": "H.265"
+          },
+          "checks": {
+            "oneExactAlias": true,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        }
+      }
+    },
+    {
+      "expected": {
+        "id": "701898",
+        "rawTitle": "Карапузи зустрічаються з Торнберрі / Rugrats Go Wild (2003) BDRip 1080p Ukr/Eng | Sub Eng",
+        "titles": "Карапузи зустрічаються з Торнберрі ~ Rugrats Go Wild",
+        "year": "2003",
+        "source": "BDRip",
+        "resolution": "1080p",
+        "codec": "",
+        "audio": "uk,en",
+        "subtitles": "en",
+        "coverage": ""
+      },
+      "parsers": {
+        "PTT": {
+          "raw": {
+            "episodes": [],
+            "languages": [
+              "en",
+              "uk",
+              "ru"
+            ],
+            "quality": "BDRip",
+            "resolution": "1080p",
+            "seasons": [],
+            "subbed": true,
+            "title": "Rugrats Go Wild",
+            "year": 2003
+          },
+          "normalized": {
+            "title": "Rugrats Go Wild",
+            "year": 2003,
+            "source": "BDRip",
+            "resolution": "1080p",
+            "codec": ""
+          },
+          "checks": {
+            "oneExactAlias": true,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        },
+        "RTN": {
+          "raw": {
+            "raw_title": "Карапузи зустрічаються з Торнберрі / Rugrats Go Wild (2003) BDRip 1080p Ukr/Eng | Sub Eng",
+            "parsed_title": "Rugrats Go Wild",
+            "normalized_title": "rugrats go wild",
+            "trash": false,
+            "adult": false,
+            "year": 2003,
+            "resolution": "1080p",
+            "seasons": [],
+            "episodes": [],
+            "complete": false,
+            "volumes": [],
+            "languages": [
+              "en",
+              "uk",
+              "ru"
+            ],
+            "quality": "BDRip",
+            "hdr": [],
+            "codec": null,
+            "audio": [],
+            "channels": [],
+            "dubbed": false,
+            "subbed": true,
+            "date": null,
+            "group": null,
+            "edition": null,
+            "bit_depth": null,
+            "bitrate": null,
+            "network": null,
+            "extended": false,
+            "converted": false,
+            "hardcoded": false,
+            "region": null,
+            "ppv": false,
+            "_3d": false,
+            "site": null,
+            "size": null,
+            "proper": false,
+            "repack": false,
+            "retail": false,
+            "upscaled": false,
+            "remastered": false,
+            "unrated": false,
+            "uncensored": false,
+            "documentary": false,
+            "commentary": false,
+            "episode_code": null,
+            "country": null,
+            "container": null,
+            "extension": null,
+            "extras": [],
+            "torrent": false,
+            "scene": false
+          },
+          "normalized": {
+            "title": "Rugrats Go Wild",
+            "year": 2003,
+            "source": "BDRip",
+            "resolution": "1080p",
+            "codec": ""
+          },
+          "checks": {
+            "oneExactAlias": true,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        }
+      }
+    },
+    {
+      "expected": {
+        "id": "701927",
+        "rawTitle": "Чемпіон (Пентатлон. П'ятиборство зі смертю) / Pentathlon (1994) BDRemux 1080p 2xUkr/Eng | Sub Eng [FRA Transfer]",
+        "titles": "Чемпіон (Пентатлон. П'ятиборство зі смертю) ~ Pentathlon",
+        "year": "1994",
+        "source": "BluRay",
+        "resolution": "1080p",
+        "codec": "",
+        "audio": "uk,en",
+        "subtitles": "en",
+        "coverage": ""
+      },
+      "parsers": {
+        "PTT": {
+          "raw": {
+            "episodes": [],
+            "languages": [
+              "en",
+              "fr",
+              "ru"
+            ],
+            "quality": "BluRay REMUX",
+            "resolution": "1080p",
+            "seasons": [],
+            "subbed": true,
+            "title": "Pentathlon",
+            "year": 1994
+          },
+          "normalized": {
+            "title": "Pentathlon",
+            "year": 1994,
+            "source": "BluRay",
+            "resolution": "1080p",
+            "codec": ""
+          },
+          "checks": {
+            "oneExactAlias": true,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        },
+        "RTN": {
+          "raw": {
+            "raw_title": "Чемпіон (Пентатлон. П'ятиборство зі смертю) / Pentathlon (1994) BDRemux 1080p 2xUkr/Eng | Sub Eng [FRA Transfer]",
+            "parsed_title": "Pentathlon",
+            "normalized_title": "pentathlon",
+            "trash": false,
+            "adult": false,
+            "year": 1994,
+            "resolution": "1080p",
+            "seasons": [],
+            "episodes": [],
+            "complete": false,
+            "volumes": [],
+            "languages": [
+              "en",
+              "fr",
+              "ru"
+            ],
+            "quality": "BluRay REMUX",
+            "hdr": [],
+            "codec": null,
+            "audio": [],
+            "channels": [],
+            "dubbed": false,
+            "subbed": true,
+            "date": null,
+            "group": null,
+            "edition": null,
+            "bit_depth": null,
+            "bitrate": null,
+            "network": null,
+            "extended": false,
+            "converted": false,
+            "hardcoded": false,
+            "region": null,
+            "ppv": false,
+            "_3d": false,
+            "site": null,
+            "size": null,
+            "proper": false,
+            "repack": false,
+            "retail": false,
+            "upscaled": false,
+            "remastered": false,
+            "unrated": false,
+            "uncensored": false,
+            "documentary": false,
+            "commentary": false,
+            "episode_code": null,
+            "country": null,
+            "container": null,
+            "extension": null,
+            "extras": [],
+            "torrent": false,
+            "scene": false
+          },
+          "normalized": {
+            "title": "Pentathlon",
+            "year": 1994,
+            "source": "BluRay",
+            "resolution": "1080p",
+            "codec": ""
+          },
+          "checks": {
+            "oneExactAlias": true,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        }
+      }
+    },
+    {
+      "expected": {
+        "id": "701931",
+        "rawTitle": "Ласкаво просимо до капкану / Ласкаво просимо в капкан / Welcome to the Punch (2013) BDRip 1080p H.265 3xUkr/Eng | Sub Eng",
+        "titles": "Ласкаво просимо до капкану ~ Ласкаво просимо в капкан ~ Welcome to the Punch",
+        "year": "2013",
+        "source": "BDRip",
+        "resolution": "1080p",
+        "codec": "H.265",
+        "audio": "uk,en",
+        "subtitles": "en",
+        "coverage": ""
+      },
+      "parsers": {
+        "PTT": {
+          "raw": {
+            "codec": "hevc",
+            "episodes": [],
+            "languages": [
+              "en",
+              "ru"
+            ],
+            "quality": "BDRip",
+            "resolution": "1080p",
+            "seasons": [],
+            "subbed": true,
+            "title": "Welcome to the Punch",
+            "year": 2013
+          },
+          "normalized": {
+            "title": "Welcome to the Punch",
+            "year": 2013,
+            "source": "BDRip",
+            "resolution": "1080p",
+            "codec": "H.265"
+          },
+          "checks": {
+            "oneExactAlias": true,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        },
+        "RTN": {
+          "raw": {
+            "raw_title": "Ласкаво просимо до капкану / Ласкаво просимо в капкан / Welcome to the Punch (2013) BDRip 1080p H.265 3xUkr/Eng | Sub Eng",
+            "parsed_title": "Welcome to the Punch",
+            "normalized_title": "welcome to the punch",
+            "trash": false,
+            "adult": false,
+            "year": 2013,
+            "resolution": "1080p",
+            "seasons": [],
+            "episodes": [],
+            "complete": false,
+            "volumes": [],
+            "languages": [
+              "en",
+              "ru"
+            ],
+            "quality": "BDRip",
+            "hdr": [],
+            "codec": "hevc",
+            "audio": [],
+            "channels": [],
+            "dubbed": false,
+            "subbed": true,
+            "date": null,
+            "group": null,
+            "edition": null,
+            "bit_depth": null,
+            "bitrate": null,
+            "network": null,
+            "extended": false,
+            "converted": false,
+            "hardcoded": false,
+            "region": null,
+            "ppv": false,
+            "_3d": false,
+            "site": null,
+            "size": null,
+            "proper": false,
+            "repack": false,
+            "retail": false,
+            "upscaled": false,
+            "remastered": false,
+            "unrated": false,
+            "uncensored": false,
+            "documentary": false,
+            "commentary": false,
+            "episode_code": null,
+            "country": null,
+            "container": null,
+            "extension": null,
+            "extras": [],
+            "torrent": false,
+            "scene": false
+          },
+          "normalized": {
+            "title": "Welcome to the Punch",
+            "year": 2013,
+            "source": "BDRip",
+            "resolution": "1080p",
+            "codec": "H.265"
+          },
+          "checks": {
+            "oneExactAlias": true,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        }
+      }
+    },
+    {
+      "expected": {
+        "id": "696012",
+        "rawTitle": "Лови на духів (серії 01-20 з 22) / Shinreigari (2007) BDRip 1080p Ukr/Jap | Sub Ukr",
+        "titles": "Лови на духів ~ Shinreigari",
+        "year": "2007",
+        "source": "BDRip",
+        "resolution": "1080p",
+        "codec": "",
+        "audio": "uk,ja",
+        "subtitles": "uk",
+        "coverage": "A:1-20/22"
+      },
+      "parsers": {
+        "PTT": {
+          "raw": {
+            "episodes": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19,
+              20
+            ],
+            "languages": [
+              "ja",
+              "uk",
+              "ru"
+            ],
+            "quality": "BDRip",
+            "resolution": "1080p",
+            "seasons": [],
+            "subbed": true,
+            "title": "Лови на духів серії",
+            "year": 2007
+          },
+          "normalized": {
+            "title": "Лови на духів серії",
+            "year": 2007,
+            "source": "BDRip",
+            "resolution": "1080p",
+            "codec": ""
+          },
+          "checks": {
+            "oneExactAlias": false,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        },
+        "RTN": {
+          "raw": {
+            "raw_title": "Лови на духів (серії 01-20 з 22) / Shinreigari (2007) BDRip 1080p Ukr/Jap | Sub Ukr",
+            "parsed_title": "Лови на духів серії",
+            "normalized_title": "лови на духів серіі",
+            "trash": false,
+            "adult": false,
+            "year": 2007,
+            "resolution": "1080p",
+            "seasons": [],
+            "episodes": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19,
+              20
+            ],
+            "complete": false,
+            "volumes": [],
+            "languages": [
+              "ja",
+              "uk",
+              "ru"
+            ],
+            "quality": "BDRip",
+            "hdr": [],
+            "codec": null,
+            "audio": [],
+            "channels": [],
+            "dubbed": false,
+            "subbed": true,
+            "date": null,
+            "group": null,
+            "edition": null,
+            "bit_depth": null,
+            "bitrate": null,
+            "network": null,
+            "extended": false,
+            "converted": false,
+            "hardcoded": false,
+            "region": null,
+            "ppv": false,
+            "_3d": false,
+            "site": null,
+            "size": null,
+            "proper": false,
+            "repack": false,
+            "retail": false,
+            "upscaled": false,
+            "remastered": false,
+            "unrated": false,
+            "uncensored": false,
+            "documentary": false,
+            "commentary": false,
+            "episode_code": null,
+            "country": null,
+            "container": null,
+            "extension": null,
+            "extras": [],
+            "torrent": false,
+            "scene": false
+          },
+          "normalized": {
+            "title": "Лови на духів серії",
+            "year": 2007,
+            "source": "BDRip",
+            "resolution": "1080p",
+            "codec": ""
+          },
+          "checks": {
+            "oneExactAlias": false,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        }
+      }
+    },
+    {
+      "expected": {
+        "id": "700689",
+        "rawTitle": "Дядечко любить милі штучки (Сезон 1; серії 01-07 з хх) / Ojisan wa Kawaii Mono ga Osuki (Season 1) (2026) WEB-DL 1080p Ukr/Jap | Sub Ukr",
+        "titles": "Дядечко любить милі штучки ~ Ojisan wa Kawaii Mono ga Osuki",
+        "year": "2026",
+        "source": "WEB-DL",
+        "resolution": "1080p",
+        "codec": "",
+        "audio": "uk,ja",
+        "subtitles": "uk",
+        "coverage": "S1:1-7"
+      },
+      "parsers": {
+        "PTT": {
+          "raw": {
+            "channels": [
+              "mono"
+            ],
+            "episodes": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7
+            ],
+            "languages": [
+              "ja",
+              "uk",
+              "ru"
+            ],
+            "quality": "WEB-DL",
+            "resolution": "1080p",
+            "seasons": [
+              1
+            ],
+            "subbed": true,
+            "title": "Дядечко любить милі штучки Сезон 1; серії",
+            "year": 2026
+          },
+          "normalized": {
+            "title": "Дядечко любить милі штучки Сезон 1; серії",
+            "year": 2026,
+            "source": "WEB-DL",
+            "resolution": "1080p",
+            "codec": ""
+          },
+          "checks": {
+            "oneExactAlias": false,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        },
+        "RTN": {
+          "raw": {
+            "raw_title": "Дядечко любить милі штучки (Сезон 1; серії 01-07 з хх) / Ojisan wa Kawaii Mono ga Osuki (Season 1) (2026) WEB-DL 1080p Ukr/Jap | Sub Ukr",
+            "parsed_title": "Дядечко любить милі штучки Сезон 1; серії",
+            "normalized_title": "дядечко любить милі штучки сезон 1 серіі",
+            "trash": false,
+            "adult": false,
+            "year": 2026,
+            "resolution": "1080p",
+            "seasons": [
+              1
+            ],
+            "episodes": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7
+            ],
+            "complete": false,
+            "volumes": [],
+            "languages": [
+              "ja",
+              "uk",
+              "ru"
+            ],
+            "quality": "WEB-DL",
+            "hdr": [],
+            "codec": null,
+            "audio": [],
+            "channels": [
+              "mono"
+            ],
+            "dubbed": false,
+            "subbed": true,
+            "date": null,
+            "group": null,
+            "edition": null,
+            "bit_depth": null,
+            "bitrate": null,
+            "network": null,
+            "extended": false,
+            "converted": false,
+            "hardcoded": false,
+            "region": null,
+            "ppv": false,
+            "_3d": false,
+            "site": null,
+            "size": null,
+            "proper": false,
+            "repack": false,
+            "retail": false,
+            "upscaled": false,
+            "remastered": false,
+            "unrated": false,
+            "uncensored": false,
+            "documentary": false,
+            "commentary": false,
+            "episode_code": null,
+            "country": null,
+            "container": null,
+            "extension": null,
+            "extras": [],
+            "torrent": false,
+            "scene": false
+          },
+          "normalized": {
+            "title": "Дядечко любить милі штучки Сезон 1; серії",
+            "year": 2026,
+            "source": "WEB-DL",
+            "resolution": "1080p",
+            "codec": ""
+          },
+          "checks": {
+            "oneExactAlias": false,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        }
+      }
+    },
+    {
+      "expected": {
+        "id": "700820",
+        "rawTitle": "Весілля світлячків (Сезон 1, серії 1-7 з 12) / Hotaru no Yomeiri (Season 1) (2026) WEBRip 1080p H.265 Ukr/Jap | Sub Ukr",
+        "titles": "Весілля світлячків ~ Hotaru no Yomeiri",
+        "year": "2026",
+        "source": "WEBRip",
+        "resolution": "1080p",
+        "codec": "H.265",
+        "audio": "uk,ja",
+        "subtitles": "uk",
+        "coverage": "S1:1-7"
+      },
+      "parsers": {
+        "PTT": {
+          "raw": {
+            "codec": "hevc",
+            "episodes": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7
+            ],
+            "languages": [
+              "ja",
+              "uk",
+              "ru"
+            ],
+            "quality": "WEBRip",
+            "resolution": "1080p",
+            "seasons": [
+              1
+            ],
+            "subbed": true,
+            "title": "Весілля світлячків Сезон 1, серії",
+            "year": 2026
+          },
+          "normalized": {
+            "title": "Весілля світлячків Сезон 1, серії",
+            "year": 2026,
+            "source": "WEBRip",
+            "resolution": "1080p",
+            "codec": "H.265"
+          },
+          "checks": {
+            "oneExactAlias": false,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        },
+        "RTN": {
+          "raw": {
+            "raw_title": "Весілля світлячків (Сезон 1, серії 1-7 з 12) / Hotaru no Yomeiri (Season 1) (2026) WEBRip 1080p H.265 Ukr/Jap | Sub Ukr",
+            "parsed_title": "Весілля світлячків Сезон 1, серії",
+            "normalized_title": "весілля світлячків сезон 1 серіі",
+            "trash": false,
+            "adult": false,
+            "year": 2026,
+            "resolution": "1080p",
+            "seasons": [
+              1
+            ],
+            "episodes": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7
+            ],
+            "complete": false,
+            "volumes": [],
+            "languages": [
+              "ja",
+              "uk",
+              "ru"
+            ],
+            "quality": "WEBRip",
+            "hdr": [],
+            "codec": "hevc",
+            "audio": [],
+            "channels": [],
+            "dubbed": false,
+            "subbed": true,
+            "date": null,
+            "group": null,
+            "edition": null,
+            "bit_depth": null,
+            "bitrate": null,
+            "network": null,
+            "extended": false,
+            "converted": false,
+            "hardcoded": false,
+            "region": null,
+            "ppv": false,
+            "_3d": false,
+            "site": null,
+            "size": null,
+            "proper": false,
+            "repack": false,
+            "retail": false,
+            "upscaled": false,
+            "remastered": false,
+            "unrated": false,
+            "uncensored": false,
+            "documentary": false,
+            "commentary": false,
+            "episode_code": null,
+            "country": null,
+            "container": null,
+            "extension": null,
+            "extras": [],
+            "torrent": false,
+            "scene": false
+          },
+          "normalized": {
+            "title": "Весілля світлячків Сезон 1, серії",
+            "year": 2026,
+            "source": "WEBRip",
+            "resolution": "1080p",
+            "codec": "H.265"
+          },
+          "checks": {
+            "oneExactAlias": false,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        }
+      }
+    },
+    {
+      "expected": {
+        "id": "701902",
+        "rawTitle": "Дилема / Dilemma (1999) DVDRemux 576i Ukr/Eng",
+        "titles": "Дилема ~ Dilemma",
+        "year": "1999",
+        "source": "DVDRemux",
+        "resolution": "576i",
+        "codec": "",
+        "audio": "uk,en",
+        "subtitles": "",
+        "coverage": ""
+      },
+      "parsers": {
+        "PTT": {
+          "raw": {
+            "episodes": [],
+            "languages": [
+              "en",
+              "uk",
+              "ru"
+            ],
+            "quality": "DVD",
+            "resolution": "576i",
+            "seasons": [],
+            "title": "Dilemma",
+            "year": 1999
+          },
+          "normalized": {
+            "title": "Dilemma",
+            "year": 1999,
+            "source": "DVD",
+            "resolution": "576i",
+            "codec": ""
+          },
+          "checks": {
+            "oneExactAlias": true,
+            "allAliases": false,
+            "year": true,
+            "source": false,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        },
+        "RTN": {
+          "raw": {
+            "raw_title": "Дилема / Dilemma (1999) DVDRemux 576i Ukr/Eng",
+            "parsed_title": "Dilemma",
+            "normalized_title": "dilemma",
+            "trash": false,
+            "adult": false,
+            "year": 1999,
+            "resolution": "576i",
+            "seasons": [],
+            "episodes": [],
+            "complete": false,
+            "volumes": [],
+            "languages": [
+              "en",
+              "uk",
+              "ru"
+            ],
+            "quality": "DVD",
+            "hdr": [],
+            "codec": null,
+            "audio": [],
+            "channels": [],
+            "dubbed": false,
+            "subbed": false,
+            "date": null,
+            "group": null,
+            "edition": null,
+            "bit_depth": null,
+            "bitrate": null,
+            "network": null,
+            "extended": false,
+            "converted": false,
+            "hardcoded": false,
+            "region": null,
+            "ppv": false,
+            "_3d": false,
+            "site": null,
+            "size": null,
+            "proper": false,
+            "repack": false,
+            "retail": false,
+            "upscaled": false,
+            "remastered": false,
+            "unrated": false,
+            "uncensored": false,
+            "documentary": false,
+            "commentary": false,
+            "episode_code": null,
+            "country": null,
+            "container": null,
+            "extension": null,
+            "extras": [],
+            "torrent": false,
+            "scene": false
+          },
+          "normalized": {
+            "title": "Dilemma",
+            "year": 1999,
+            "source": "DVD",
+            "resolution": "576i",
+            "codec": ""
+          },
+          "checks": {
+            "oneExactAlias": true,
+            "allAliases": false,
+            "year": true,
+            "source": false,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        }
+      }
+    },
+    {
+      "expected": {
+        "id": "701685",
+        "rawTitle": "Нестерпність почуттів  / Bad Timing (1980) BDRip-AVC Eng | sub Ukr",
+        "titles": "Нестерпність почуттів ~ Bad Timing",
+        "year": "1980",
+        "source": "BDRip",
+        "resolution": "",
+        "codec": "H.264",
+        "audio": "en",
+        "subtitles": "uk",
+        "coverage": ""
+      },
+      "parsers": {
+        "PTT": {
+          "raw": {
+            "codec": "avc",
+            "episodes": [],
+            "languages": [
+              "en",
+              "uk",
+              "ru"
+            ],
+            "quality": "BDRip",
+            "seasons": [],
+            "subbed": true,
+            "title": "Bad Timing",
+            "year": 1980
+          },
+          "normalized": {
+            "title": "Bad Timing",
+            "year": 1980,
+            "source": "BDRip",
+            "resolution": "",
+            "codec": "H.264"
+          },
+          "checks": {
+            "oneExactAlias": true,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        },
+        "RTN": {
+          "raw": {
+            "raw_title": "Нестерпність почуттів  / Bad Timing (1980) BDRip-AVC Eng | sub Ukr",
+            "parsed_title": "Bad Timing",
+            "normalized_title": "bad timing",
+            "trash": false,
+            "adult": false,
+            "year": 1980,
+            "resolution": "unknown",
+            "seasons": [],
+            "episodes": [],
+            "complete": false,
+            "volumes": [],
+            "languages": [
+              "en",
+              "uk",
+              "ru"
+            ],
+            "quality": "BDRip",
+            "hdr": [],
+            "codec": "avc",
+            "audio": [],
+            "channels": [],
+            "dubbed": false,
+            "subbed": true,
+            "date": null,
+            "group": null,
+            "edition": null,
+            "bit_depth": null,
+            "bitrate": null,
+            "network": null,
+            "extended": false,
+            "converted": false,
+            "hardcoded": false,
+            "region": null,
+            "ppv": false,
+            "_3d": false,
+            "site": null,
+            "size": null,
+            "proper": false,
+            "repack": false,
+            "retail": false,
+            "upscaled": false,
+            "remastered": false,
+            "unrated": false,
+            "uncensored": false,
+            "documentary": false,
+            "commentary": false,
+            "episode_code": null,
+            "country": null,
+            "container": null,
+            "extension": null,
+            "extras": [],
+            "torrent": false,
+            "scene": false
+          },
+          "normalized": {
+            "title": "Bad Timing",
+            "year": 1980,
+            "source": "BDRip",
+            "resolution": "",
+            "codec": "H.264"
+          },
+          "checks": {
+            "oneExactAlias": true,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        }
+      }
+    },
+    {
+      "expected": {
+        "id": "700839",
+        "rawTitle": "Magical★Explorer: Переродився другом головного героя в ероге (Сезон 1, серії 1-9 з 13) / Magical★Explorer: Eroge no Yuujin Chara ni Tensei (Season 1) (2026) WEBRip Ai Rem 1080p H.265 Ukr/Jap | Sub Ukr",
+        "titles": "Magical★Explorer: Переродився другом головного героя в ероге ~ Magical★Explorer: Eroge no Yuujin Chara ni Tensei",
+        "year": "2026",
+        "source": "WEBRip",
+        "resolution": "1080p",
+        "codec": "H.265",
+        "audio": "uk,ja",
+        "subtitles": "uk",
+        "coverage": "S1:1-9"
+      },
+      "parsers": {
+        "PTT": {
+          "raw": {
+            "codec": "hevc",
+            "episodes": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9
+            ],
+            "languages": [
+              "ja",
+              "uk",
+              "ru"
+            ],
+            "quality": "WEBRip",
+            "resolution": "1080p",
+            "seasons": [
+              1
+            ],
+            "subbed": true,
+            "title": "Magical★Explorer: Переродився другом головного героя в ероге Сезон 1, серії",
+            "year": 2026
+          },
+          "normalized": {
+            "title": "Magical★Explorer: Переродився другом головного героя в ероге Сезон 1, серії",
+            "year": 2026,
+            "source": "WEBRip",
+            "resolution": "1080p",
+            "codec": "H.265"
+          },
+          "checks": {
+            "oneExactAlias": false,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        },
+        "RTN": {
+          "raw": {
+            "raw_title": "Magical★Explorer: Переродився другом головного героя в ероге (Сезон 1, серії 1-9 з 13) / Magical★Explorer: Eroge no Yuujin Chara ni Tensei (Season 1) (2026) WEBRip Ai Rem 1080p H.265 Ukr/Jap | Sub Ukr",
+            "parsed_title": "Magical★Explorer: Переродився другом головного героя в ероге Сезон 1, серії",
+            "normalized_title": "magicalexplorer переродився другом головного героя в ероге сезон 1 серіі",
+            "trash": false,
+            "adult": false,
+            "year": 2026,
+            "resolution": "1080p",
+            "seasons": [
+              1
+            ],
+            "episodes": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9
+            ],
+            "complete": false,
+            "volumes": [],
+            "languages": [
+              "ja",
+              "uk",
+              "ru"
+            ],
+            "quality": "WEBRip",
+            "hdr": [],
+            "codec": "hevc",
+            "audio": [],
+            "channels": [],
+            "dubbed": false,
+            "subbed": true,
+            "date": null,
+            "group": null,
+            "edition": null,
+            "bit_depth": null,
+            "bitrate": null,
+            "network": null,
+            "extended": false,
+            "converted": false,
+            "hardcoded": false,
+            "region": null,
+            "ppv": false,
+            "_3d": false,
+            "site": null,
+            "size": null,
+            "proper": false,
+            "repack": false,
+            "retail": false,
+            "upscaled": false,
+            "remastered": false,
+            "unrated": false,
+            "uncensored": false,
+            "documentary": false,
+            "commentary": false,
+            "episode_code": null,
+            "country": null,
+            "container": null,
+            "extension": null,
+            "extras": [],
+            "torrent": false,
+            "scene": false
+          },
+          "normalized": {
+            "title": "Magical★Explorer: Переродився другом головного героя в ероге Сезон 1, серії",
+            "year": 2026,
+            "source": "WEBRip",
+            "resolution": "1080p",
+            "codec": "H.265"
+          },
+          "checks": {
+            "oneExactAlias": false,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        }
+      }
+    },
+    {
+      "expected": {
+        "id": "700614",
+        "rawTitle": "Монолог травниці (Сезон 3, серії 08 з 12) / Kusuriya no Hitorigoto (Season 3) (2026) WEBDLRip 1080p H.265 Ukr/Jap | sub Ukr",
+        "titles": "Монолог травниці ~ Kusuriya no Hitorigoto",
+        "year": "2026",
+        "source": "WEBDLRip",
+        "resolution": "1080p",
+        "codec": "H.265",
+        "audio": "uk,ja",
+        "subtitles": "uk",
+        "coverage": "S3:1-8"
+      },
+      "parsers": {
+        "PTT": {
+          "raw": {
+            "codec": "hevc",
+            "episodes": [],
+            "languages": [
+              "ja",
+              "uk",
+              "ru"
+            ],
+            "quality": "WEB-DLRip",
+            "resolution": "1080p",
+            "seasons": [
+              3
+            ],
+            "subbed": true,
+            "title": "Kusuriya no Hitorigoto",
+            "year": 2026
+          },
+          "normalized": {
+            "title": "Kusuriya no Hitorigoto",
+            "year": 2026,
+            "source": "WEBDLRip",
+            "resolution": "1080p",
+            "codec": "H.265"
+          },
+          "checks": {
+            "oneExactAlias": true,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": false,
+            "languageUnion": false
+          }
+        },
+        "RTN": {
+          "raw": {
+            "raw_title": "Монолог травниці (Сезон 3, серії 08 з 12) / Kusuriya no Hitorigoto (Season 3) (2026) WEBDLRip 1080p H.265 Ukr/Jap | sub Ukr",
+            "parsed_title": "Kusuriya no Hitorigoto",
+            "normalized_title": "kusuriya no hitorigoto",
+            "trash": false,
+            "adult": false,
+            "year": 2026,
+            "resolution": "1080p",
+            "seasons": [
+              3
+            ],
+            "episodes": [],
+            "complete": false,
+            "volumes": [],
+            "languages": [
+              "ja",
+              "uk",
+              "ru"
+            ],
+            "quality": "WEB-DLRip",
+            "hdr": [],
+            "codec": "hevc",
+            "audio": [],
+            "channels": [],
+            "dubbed": false,
+            "subbed": true,
+            "date": null,
+            "group": null,
+            "edition": null,
+            "bit_depth": null,
+            "bitrate": null,
+            "network": null,
+            "extended": false,
+            "converted": false,
+            "hardcoded": false,
+            "region": null,
+            "ppv": false,
+            "_3d": false,
+            "site": null,
+            "size": null,
+            "proper": false,
+            "repack": false,
+            "retail": false,
+            "upscaled": false,
+            "remastered": false,
+            "unrated": false,
+            "uncensored": false,
+            "documentary": false,
+            "commentary": false,
+            "episode_code": null,
+            "country": null,
+            "container": null,
+            "extension": null,
+            "extras": [],
+            "torrent": false,
+            "scene": false
+          },
+          "normalized": {
+            "title": "Kusuriya no Hitorigoto",
+            "year": 2026,
+            "source": "WEBDLRip",
+            "resolution": "1080p",
+            "codec": "H.265"
+          },
+          "checks": {
+            "oneExactAlias": true,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": false,
+            "languageUnion": false
+          }
+        }
+      }
+    },
+    {
+      "expected": {
+        "id": "700976",
+        "rawTitle": "Військові хроніки Ромелії (Сезон 1, серії 1-8 з 24) / Romelia Senki (Season 1) (2026) WEBRip Ai Rem 1080p H.265 Ukr/Jap | Sub Ukr",
+        "titles": "Військові хроніки Ромелії ~ Romelia Senki",
+        "year": "2026",
+        "source": "WEBRip",
+        "resolution": "1080p",
+        "codec": "H.265",
+        "audio": "uk,ja",
+        "subtitles": "uk",
+        "coverage": "S1:1-8"
+      },
+      "parsers": {
+        "PTT": {
+          "raw": {
+            "codec": "hevc",
+            "episodes": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8
+            ],
+            "languages": [
+              "ja",
+              "uk",
+              "ru"
+            ],
+            "quality": "WEBRip",
+            "resolution": "1080p",
+            "seasons": [
+              1
+            ],
+            "subbed": true,
+            "title": "Військові хроніки Ромелії Сезон 1, серії",
+            "year": 2026
+          },
+          "normalized": {
+            "title": "Військові хроніки Ромелії Сезон 1, серії",
+            "year": 2026,
+            "source": "WEBRip",
+            "resolution": "1080p",
+            "codec": "H.265"
+          },
+          "checks": {
+            "oneExactAlias": false,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        },
+        "RTN": {
+          "raw": {
+            "raw_title": "Військові хроніки Ромелії (Сезон 1, серії 1-8 з 24) / Romelia Senki (Season 1) (2026) WEBRip Ai Rem 1080p H.265 Ukr/Jap | Sub Ukr",
+            "parsed_title": "Військові хроніки Ромелії Сезон 1, серії",
+            "normalized_title": "віиськові хроніки ромеліі сезон 1 серіі",
+            "trash": false,
+            "adult": false,
+            "year": 2026,
+            "resolution": "1080p",
+            "seasons": [
+              1
+            ],
+            "episodes": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8
+            ],
+            "complete": false,
+            "volumes": [],
+            "languages": [
+              "ja",
+              "uk",
+              "ru"
+            ],
+            "quality": "WEBRip",
+            "hdr": [],
+            "codec": "hevc",
+            "audio": [],
+            "channels": [],
+            "dubbed": false,
+            "subbed": true,
+            "date": null,
+            "group": null,
+            "edition": null,
+            "bit_depth": null,
+            "bitrate": null,
+            "network": null,
+            "extended": false,
+            "converted": false,
+            "hardcoded": false,
+            "region": null,
+            "ppv": false,
+            "_3d": false,
+            "site": null,
+            "size": null,
+            "proper": false,
+            "repack": false,
+            "retail": false,
+            "upscaled": false,
+            "remastered": false,
+            "unrated": false,
+            "uncensored": false,
+            "documentary": false,
+            "commentary": false,
+            "episode_code": null,
+            "country": null,
+            "container": null,
+            "extension": null,
+            "extras": [],
+            "torrent": false,
+            "scene": false
+          },
+          "normalized": {
+            "title": "Військові хроніки Ромелії Сезон 1, серії",
+            "year": 2026,
+            "source": "WEBRip",
+            "resolution": "1080p",
+            "codec": "H.265"
+          },
+          "checks": {
+            "oneExactAlias": false,
+            "allAliases": false,
+            "year": true,
+            "source": true,
+            "resolution": true,
+            "codec": true,
+            "seasonAndEpisodes": true,
+            "languageUnion": false
+          }
+        }
+      }
+    }
+  ]
+}
