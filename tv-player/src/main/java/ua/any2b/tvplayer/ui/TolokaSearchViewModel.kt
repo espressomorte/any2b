@@ -7,6 +7,8 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -26,6 +28,8 @@ import ua.any2b.tvplayer.data.TorrServerAuthStore
 import ua.any2b.tvplayer.data.TolokaConnections
 import ua.any2b.tvplayer.data.TolokaRelevanceStore
 import ua.any2b.tvplayer.data.TolokaTmdbMappingStore
+import ua.any2b.tvplayer.data.TolokaAutomaticQueryStore
+import ua.any2b.tvplayer.data.TolokaCredentialStore
 import ua.any2b.tvplayer.data.AniListRomajiResolver
 import ua.any2b.domain.playback.PlaybackRequest
 
@@ -45,6 +49,7 @@ class TolokaSearchViewModel(
     private val serverAuth = TorrServerAuthStore(application)
     private val relevance = TolokaRelevanceStore(application)
     private val mappings = TolokaTmdbMappingStore(application)
+    private val queryHints = TolokaAutomaticQueryStore(application)
     private val romajiResolver = AniListRomajiResolver(application)
     private val server = TorrServerClient()
     private val serverProbe = TorrServerProbe()
@@ -69,7 +74,7 @@ class TolokaSearchViewModel(
         preparationJob?.cancel()
         clearAutomaticSearch()
         currentDetails = null
-        searchInternal(query, null, null)
+        searchInternal(query, null, null, forceRefresh = true)
     }
 
     fun searchForTmdb(details: TmdbDetails, query: String) {
@@ -77,7 +82,7 @@ class TolokaSearchViewModel(
         clearAutomaticSearch()
         currentDetails = details
         savedState.remove<String>(selectedTopicKey(details))
-        searchInternal(query, null, details)
+        searchInternal(query, null, details, forceRefresh = true)
     }
 
     fun searchAutomatically(details: TmdbDetails, query: String, englishTitle: String?) {
@@ -87,11 +92,27 @@ class TolokaSearchViewModel(
         preparationJob?.cancel()
         _state.value = _state.value.copy(search = TolokaSearchState.Loading)
         preparationJob = viewModelScope.launch {
+            val identity = withContext(Dispatchers.IO) {
+                listOf(TolokaCredentialStore(getApplication()).read()?.username, details.title.type.path,
+                    details.title.id, details.title.matchedSeasonNumber, query, englishTitle).joinToString("|")
+            }
+            val hint = withContext(Dispatchers.IO) { queryHints.get(identity) }
+            if (hint != null && TolokaConnections.cachedSearch(getApplication(), hint.query) != null) {
+                aniListRomaji = hint.romaji
+                val saved = mappings.aliases(details.title.type, details.title.id)
+                _state.value = _state.value.copy(queryOptions =
+                    listOfNotNull(hint.romaji?.let { "AniList · ромадзі" to it }) +
+                        saved.map { "Підтверджений синонім" to it })
+                automaticQuery = hint.query
+                searchInternal(hint.query, automaticEnglishTitle, details, preserveTransfer = true)
+                return@launch
+            }
             aniListRomaji = romajiResolver.resolve(details)
             val saved = mappings.aliases(details.title.type, details.title.id)
             val primary = TolokaSearchPlan.primary(aniListRomaji, saved,
                 details.title.ukrainianTitle, englishTitle, query)
             automaticQuery = primary.trim()
+            withContext(Dispatchers.IO) { queryHints.put(identity, primary.trim(), aniListRomaji) }
             _state.value = _state.value.copy(queryOptions =
                 listOfNotNull(aniListRomaji?.let { "AniList · ромадзі" to it }) +
                     saved.map { "Підтверджений синонім" to it })
@@ -194,7 +215,7 @@ class TolokaSearchViewModel(
     }
 
     private fun searchInternal(query: String, englishTitle: String?, details: TmdbDetails?,
-        retainedWeak: List<TolokaHit> = emptyList(), preserveTransfer: Boolean = false) {
+        retainedWeak: List<TolokaHit> = emptyList(), preserveTransfer: Boolean = false, forceRefresh: Boolean = false) {
         val trimmed = query.trim()
         if (trimmed.isBlank()) {
             _state.value = _state.value.copy(search = TolokaSearchState.Error("Введіть назву для пошуку"))
@@ -205,7 +226,7 @@ class TolokaSearchViewModel(
                 "Налаштуйте Toloka в розділі «Інтеграції»"))
             return
         }
-        if (_state.value.search is TolokaSearchState.Loading && activeSearchQuery == trimmed) return
+        if (searchJob?.isActive == true && _state.value.search is TolokaSearchState.Loading && activeSearchQuery == trimmed) return
         searchJob?.cancel()
         if (!preserveTransfer) {
             transferJob?.cancel()
@@ -218,7 +239,7 @@ class TolokaSearchViewModel(
             playbackStatus = null)
         searchJob = viewModelScope.launch {
             try {
-                val first = TolokaConnections.search(getApplication(), trimmed)
+                val first = TolokaConnections.search(getApplication(), trimmed, forceRefresh = forceRefresh)
                 val attempts = mutableListOf(first)
                 val firstDetails = if (automaticQuery == trimmed) automaticDetails ?: details else details
                 val learned = firstDetails?.let {
@@ -240,7 +261,7 @@ class TolokaSearchViewModel(
                     aliases, firstDetails?.title?.ukrainianTitle, availableEnglish)
                 for (fallback in fallbackQueries) {
                     if (ranked?.visible?.isNotEmpty() == true) break
-                    val response = TolokaConnections.search(getApplication(), fallback)
+                    val response = TolokaConnections.search(getApplication(), fallback, forceRefresh = forceRefresh)
                     attempts += response
                     searchedQuery = fallback
                     val currentDetails = if (automaticQuery == trimmed)
@@ -438,7 +459,7 @@ class TolokaSearchViewModel(
             .distinctBy(String::lowercase)
             .take(4)
         for (query in queries) {
-            val refreshed = TolokaConnections.search(getApplication(), query)
+            val refreshed = TolokaConnections.search(getApplication(), query, forceRefresh = true)
             if (refreshed.results.any { it.id == topicId }) {
                 Log.i("TorrentPlayback", "Download link refreshed topic=$topicId queryMatched=true")
                 return

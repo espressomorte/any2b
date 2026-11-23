@@ -15,6 +15,7 @@ class DirectTolokaClientTest {
     fun logsInSearchesAndDownloadsOnlySelectedTorrent() = runBlocking {
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         val logins = AtomicInteger()
+        val searchRequests = AtomicInteger()
         var searchedQuery = ""
         server.createContext("/") { exchange ->
             val path = exchange.requestURI.path
@@ -28,6 +29,7 @@ class DirectTolokaClientTest {
                     return@createContext
                 }
                 path == "/tracker.php" && exchange.requestURI.query?.contains("nm=") == true -> {
+                    searchRequests.incrementAndGet()
                     searchedQuery = exchange.requestURI.rawQuery.orEmpty()
                     """<a href="/login.php?logout=true">Вихід</a><table class="forumline">
                     <tr class="prow1"><td></td><td></td><td><a href="/t123">Тест</a></td>
@@ -49,6 +51,10 @@ class DirectTolokaClientTest {
             assertEquals(listOf("123"), first.results.map { it.id })
             assertFalse(first.sessionReused ?: true)
             assertTrue(searchedQuery.contains("nm="))
+            assertTrue(client.search("user", "password", "Тест 2020").cached)
+            assertEquals(1, searchRequests.get())
+            assertFalse(client.search("user", "password", "Тест 2020", forceRefresh = true).cached)
+            assertEquals(2, searchRequests.get())
             val second = client.search("user", "password", "Тест 2021")
             assertTrue(second.sessionReused == true)
             assertEquals('d'.code.toByte(), client.torrent("user", "password", "123")[0])

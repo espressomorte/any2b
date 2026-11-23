@@ -780,7 +780,7 @@ class TmdbLibraryViewModel(application: Application,
             // Search refreshes the attachment URL too; an old URL can still serve an old infohash.
             var sourceTitle: String? = null
             for (query in listOfNotNull(title.ukrainianTitle, title.originalTitle, title.title).distinct()) {
-                sourceTitle = TolokaConnections.search(getApplication(), query).results
+                sourceTitle = TolokaConnections.recentSearch(getApplication(), query).results
                     .firstOrNull { it.id == topicId }?.title
                 if (sourceTitle != null) break
             }
@@ -801,7 +801,7 @@ class TmdbLibraryViewModel(application: Application,
                         .distinctBy(String::lowercase).take(4)
                     var refreshed = false
                     for (query in queries) {
-                        val result = TolokaConnections.search(getApplication(), query)
+                        val result = TolokaConnections.search(getApplication(), query, forceRefresh = true)
                         if (result.results.any { it.id == topicId }) {
                             refreshed = true
                             break

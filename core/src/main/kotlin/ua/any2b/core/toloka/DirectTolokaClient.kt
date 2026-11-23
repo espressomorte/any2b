@@ -81,11 +81,12 @@ class DirectTolokaClient(
         }
     }
 
-    suspend fun search(username: String, password: String, query: String): TolokaSearch = lock.withLock {
+    suspend fun search(username: String, password: String, query: String, forceRefresh: Boolean = false): TolokaSearch = lock.withLock {
+        searches.entries.removeAll { it.value.second <= System.currentTimeMillis() }
         val trimmed = query.trim()
         require(trimmed.isNotEmpty() && trimmed.length <= 150) { "Запит має містити 1–150 символів" }
-        val cacheKey = trimmed.lowercase().replace(Regex("\\s+"), " ")
-        searches[cacheKey]?.takeIf { it.second > System.currentTimeMillis() }?.let {
+        val cacheKey = username + "\u0000" + trimmed.lowercase().replace(Regex("\\s+"), " ")
+        searches[cacheKey]?.takeIf { !forceRefresh && it.second > System.currentTimeMillis() }?.let {
             return@withLock it.first.copy(query = trimmed, cached = true, sessionReused = null)
         }
         val reused = ensureSession(username, password)
@@ -101,7 +102,8 @@ class DirectTolokaClient(
         val now = System.currentTimeMillis()
         parsed.downloads.forEach { (id, path) -> downloads[id] = path to (now + 3_600_000) }
         val result = TolokaSearch(trimmed, parsed.hits, cached = false, sessionReused = reused)
-        if (result.results.isNotEmpty()) searches[cacheKey] = result to (now + 300_000)
+        searches[cacheKey] = result to (now + 300_000)
+        while (searches.size > 128) searches.remove(searches.keys.first())
         result
     }
 
