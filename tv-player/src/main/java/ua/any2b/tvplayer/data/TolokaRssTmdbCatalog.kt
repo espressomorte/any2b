@@ -13,6 +13,7 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import ua.any2b.core.toloka.TolokaReleaseQueries
 import ua.any2b.core.anilist.AniListClient
 import ua.any2b.core.tmdb.TmdbMediaType
 import ua.any2b.core.tmdb.TmdbTitle
@@ -33,7 +34,7 @@ class TolokaRssTmdbCatalog(context: Context) {
     private val aniList = AniListClient()
     private val aniListCatalog = AniListTmdbCatalog(appContext)
     private val animeMappings = LocalAnimeMappingRepository.get(appContext)
-    private val file = File(appContext.filesDir, "toloka-rss-tmdb-v2.json")
+    private val file = File(appContext.filesDir, "toloka-rss-tmdb-v3.json")
     private val trendsFile = File(appContext.filesDir, "toloka-rss-trends.json")
 
     fun cached(): TolokaRssTmdbRows = ordered(rss.cached(), readMappings(), readTrends())
@@ -132,12 +133,15 @@ class TolokaRssTmdbCatalog(context: Context) {
         val trendingIds = snapshot?.trending.orEmpty().toSet()
         fun mapped(animated: Boolean) = releases.filter { it.animated == animated }
             .mapNotNull { release ->
-                val title = mappings[key(release)]?.title ?: release.tmdbId?.let { id ->
+                val mapping = mappings[key(release)]
+                // An explicit no-match from the current parser supersedes an old RSS attachment.
+                if (mapping != null && mapping.title == null) return@mapNotNull null
+                val title = mapping?.title ?: release.tmdbId?.let { id ->
                     val type = TmdbMediaType.entries.firstOrNull {
                         it.path == release.tmdbType
                     } ?: return@let null
                     TmdbTitle(id, type, release.tmdbName ?: release.title, null,
-                        YEAR.find(release.title)?.value?.toIntOrNull(),
+                        TolokaReleaseQueries.year(release.title),
                         release.tmdbPoster ?: release.thumbnail, null, release.tmdbRating,
                         popularity = release.tmdbPopularity, airDate = release.tmdbAirDate)
                 } ?: return@mapNotNull null
@@ -151,7 +155,7 @@ class TolokaRssTmdbCatalog(context: Context) {
     private suspend fun findMatch(release: TolokaRssRelease,
         search: suspend (String) -> List<TmdbTitle>): TmdbTitle? {
         val names = names(release.title)
-        val year = YEAR.find(release.title)?.value?.toIntOrNull()
+        val year = TolokaReleaseQueries.year(release.title)
         if (release.animated) {
             findAnimeMatch(release, names, year)?.let { return it }
         }
@@ -298,25 +302,12 @@ class TolokaRssTmdbCatalog(context: Context) {
         .put("backdropUrl", title.backdropUrl)
         .put("popularity", title.popularity).put("airDate", title.airDate)
 
-    private fun key(release: TolokaRssRelease): String {
-        val year = YEAR.find(release.title)?.value.orEmpty()
-        return "${release.animated}:$year:${names(release.title).firstOrNull()?.let(::normalize).orEmpty()}"
-    }
+    private fun key(release: TolokaRssRelease): String =
+        TolokaReleaseQueries.cacheKey(release.id, release.title, release.animated)
 
-    private fun names(title: String): List<String> {
-        val year = YEAR.find(title)
-        val prefix = if (year == null) title.substringBefore(" | ")
-            else title.substring(0, year.range.first)
-        return prefix.split(" / ").map { it.replace(BRACKETED, " ").trim() }
-            .filter { it.length >= 2 }.distinctBy(::normalize)
-    }
-
-    private fun hasSeasonMarker(title: String): Boolean = SEASON_MARKER.containsMatchIn(title)
-
-    private fun seasonNumber(title: String): Int? {
-        val match = SEASON_NUMBER.find(title) ?: return null
-        return match.groupValues.drop(1).firstNotNullOfOrNull { it.toIntOrNull() }
-    }
+    private fun names(title: String): List<String> = TolokaReleaseQueries.names(title)
+    private fun hasSeasonMarker(title: String): Boolean = seasonNumber(title) != null
+    private fun seasonNumber(title: String): Int? = TolokaReleaseQueries.season(title)
 
     private fun normalize(name: String) = name.lowercase(Locale.ROOT)
         .replace(NON_WORD, " ").trim().replace(WHITESPACE, " ")
@@ -347,19 +338,7 @@ class TolokaRssTmdbCatalog(context: Context) {
         private const val SEASON_IDENTITY_RETRY_MS = 7L * 24 * 60 * 60 * 1000
         private const val MATCH_BATCH_SIZE = 120
         private const val TREND_CACHE_AGE_MS = 6L * 60 * 60 * 1000
-        private val YEAR = Regex("(?<!\\d)(?:19|20)\\d{2}(?!\\d)")
-        private val BRACKETED = Regex("\\([^)]*\\)|\\[[^]]*]")
         private val NON_WORD = Regex("[^\\p{L}\\p{N}]+")
         private val WHITESPACE = Regex("\\s+")
-        private val SEASON_MARKER = Regex(
-            "(?:\\bseason\\s*\\d+\\b|\\b\\d+\\s*(?:st|nd|rd|th)?\\s+season\\b|" +
-                "\\bсезон\\s*\\d+\\b|\\b\\d+\\s*сезон\\b|\\bs\\s*\\d+\\b)",
-            RegexOption.IGNORE_CASE,
-        )
-        private val SEASON_NUMBER = Regex(
-            "\\bseason\\s*(\\d+)\\b|\\b(\\d+)\\s*(?:st|nd|rd|th)?\\s+season\\b|" +
-                "\\bсезон\\s*(\\d+)\\b|\\b(\\d+)\\s*сезон\\b|\\bs\\s*(\\d+)\\b",
-            RegexOption.IGNORE_CASE,
-        )
     }
 }

@@ -34,7 +34,7 @@ data class ParsedRelease(
     val evidence: List<Evidence> = emptyList(),
     val warnings: Set<ParseWarning> = emptySet(),
     val parserVersion: Int = 1,
-    val rulesVersion: Int = 2,
+    val rulesVersion: Int = 3,
     val editions: Set<String> = emptySet(),
     val notes: Set<String> = emptySet(),
 )

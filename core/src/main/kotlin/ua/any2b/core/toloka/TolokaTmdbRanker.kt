@@ -13,7 +13,6 @@ data class RankedTolokaHits(
 
 /** Keeps video releases, ranks title variants, and leaves uncertain matches for manual review. */
 object TolokaTmdbRanker {
-    private val yearRe = Regex("""\b(?:19|20)\d{2}\b""")
     private val nonVideoRe = Regex(
         """(?i)(?<![\p{L}\p{N}])(?:pdf|epub|fb2|mobi|azw3?|djvu|docx?|audiobook|audio[ -]?book|аудіокнига|аудиокнига|саундтрек|soundtrack|ost|mp3|flac|m4b|ebook|електронна[ -]?книга|amv|music[ ._-]*video|music[ ._-]*clip|музичн(?:е|ий)[ ._-]*(?:відео|кліп)|видеоклип|кліп)(?![\p{L}\p{N}])"""
     )
@@ -71,8 +70,7 @@ object TolokaTmdbRanker {
             val ua = bestNameScore(normalized, ukrainian)
             val en = bestNameScore(normalized, english)
             val alt = bestNameScore(normalized, other)
-            val years = yearRe.findAll(hit.title).mapNotNull { it.value.toIntOrNull() }
-                .distinct().toList()
+            val years = release.yearRanges.flatMap { listOf(it.first, it.last) }.distinct()
             val absoluteSeasonRanges = TolokaReleaseMetadataParser.mapAbsoluteEpisodes(
                 release, details.seasonEntries)
             val releaseSeason = release.season?.takeIf { release.seasonEnd == null || release.seasonEnd == it }?.let { number ->
@@ -120,7 +118,7 @@ object TolokaTmdbRanker {
                 (if (wrongSeason) 12 else 0) - (if (episodeOverflow) 7 else 0) -
                 (if (collection) 4 else 0)
             val weak = !learned && (wrongYear || wrongSeason || episodeOverflow || collection ||
-                maxOf(ua, en, alt) < 5 ||
+                release.hasConflictingMetadata || maxOf(ua, en, alt) < 5 ||
                 (ua > 0 && english.isNotEmpty() && en == 0 && alt == 0)
             )
             Triple(hit, score, weak)

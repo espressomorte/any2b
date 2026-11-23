@@ -31,5 +31,9 @@ Reproduction and the original comparison are documented in
 Parser changes are evaluated against the same frozen, manually reviewed
 fixtures; expectations must not be rewritten to match parser output.
 
-Run `./gradlew :release-intelligence:test :core:test`. Production search still
-uses its existing parser: neither core nor tv-player depends on this module yet.
+Run `./gradlew :release-intelligence:test :core:test :tv-player:testDebugUnitTest :tv-player:assembleDebug`.
+Core now depends on this module, and Android TV packages it transitively.
+`TolokaReleaseMetadataParser` preserves the existing display/playback API as an
+adapter; RSS queries and both hit filters consume the same structured metadata.
+Derived RSS mappings use a new versioned cache; manual mapping stores are unchanged.
+Integration compatibility additions increment rulesVersion to 3.

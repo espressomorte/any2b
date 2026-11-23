@@ -3,6 +3,7 @@ plugins {
 }
 
 dependencies {
+    implementation(project(":release-intelligence"))
     implementation(libs.okhttp)
     implementation(libs.coroutines.core)
     implementation(libs.json)

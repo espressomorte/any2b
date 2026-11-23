@@ -11,7 +11,14 @@ object KotlinReleaseParser : ReleaseParser {
     private val episodePack = pattern("(?<!\\d)(\\d{1,3})(?:\\s*[-–—]\\s*(\\d{1,3}))?\\s*(?:із|з|of)\\s*(\\d{1,4})(?:\\s*(?:серій|серії|епізодів))?(?![\\p{L}\\p{N}])")
     private val seasonEpisodes = pattern("(?<![\\p{L}\\p{N}])S(\\d{1,2})[ ._-]*E(\\d{1,3})(?:\\s*[-–—]\\s*E?(\\d{1,3}))?(?!\\d)")
     private val seasons = pattern("(?<![\\p{L}\\p{N}])(?:S|сезон(?:и|ів)?[ ._-]*|seasons?[ ._-]*)(\\d{1,2})(?:\\s*[-–—]\\s*S?(\\d{1,2}))?(?![\\p{L}\\p{N}])")
-    private val trailingOrdinalSeason = pattern("(?<![\\p{L}\\p{N}])(\\d{1,2})\\s+сезон(?=\\s*(?:[)\\]]|$))")
+    private val trailingOrdinalSeason = pattern("(?<![\\p{L}\\p{N}])(\\d{1,2})\\s+сезон(?![\\p{L}\\p{N}])")
+    private val ordinalSeason = pattern("(?<![\\p{L}\\p{N}])(\\d{1,2})(?:st|nd|rd|th)[ ._-]+season(?![\\p{L}\\p{N}])")
+    private val namedEpisodes = listOf(
+        pattern("(?<!\\d)(\\d{1,3})\\s*[-–—]\\s*(\\d{1,3})\\s*(?:episodes?|eps?|серії)(?![\\p{L}])"),
+        pattern("(?<![\\p{L}\\p{N}])(?:episodes?|ep|серії|серія|епізод)[ ._-]*(\\d{1,3})(?:[ ._-]*[-–—][ ._-]*(\\d{1,3}))?(?!\\d)"),
+    )
+    private val seasonEpisodeCount = pattern("(?<!\\d)(\\d{1,3})\\s*(?:episodes?|eps?|серії)(?![\\p{L}])")
+    private val packRange = pattern("(?<!\\d)(\\d{1,3})[ ._-]*[-–—][ ._-]*(\\d{1,3})(?=[ ._-]*(?:mkv|mp4|avi|1080p|720p|2160p|[)\\]]|$))")
     private val knownGroups = setOf("amanogawa", "fanvoxua", "anitube", "subsplease", "erai-raws")
     private val languageCodes = mapOf(
         "ukr" to "uk", "ukrainian" to "uk", "укр" to "uk", "eng" to "en", "english" to "en",
@@ -97,6 +104,9 @@ object KotlinReleaseParser : ReleaseParser {
             if (start > 0 && end >= start) setCoverage(EpisodeCoverage.SeasonEpisodes(match.groupValues[1].toInt(), start, end), match, "seasonEpisodes")
             else warnings += ParseWarning.INVALID_EPISODE_RANGE
         }
+        ordinalSeason.findAll(raw).filter { available(it.range) }.forEach { match ->
+            setCoverage(EpisodeCoverage.SeasonPack(match.groupValues[1].toInt()), match, "seasonPack")
+        }
         seasons.findAll(raw).filter { available(it.range) }.forEach { match ->
             val start = match.groupValues[1].toInt()
             val end = match.groupValues[2].toIntOrNull() ?: start
@@ -119,6 +129,37 @@ object KotlinReleaseParser : ReleaseParser {
                 setCoverage(EpisodeCoverage.AbsoluteEpisodes(start, end, total), match, "absoluteEpisodes")
             } else warnings += ParseWarning.INVALID_EPISODE_RANGE
         }
+        // Compatibility with episode-labelled files and season packs used by playback.
+        val seasonPack = coverage as? EpisodeCoverage.SeasonPack
+        if (coverage == EpisodeCoverage.Unknown || (seasonPack != null && seasonPack.start == seasonPack.end)) {
+            val match = namedEpisodes.firstNotNullOfOrNull { regex -> regex.findAll(raw).firstOrNull { available(it.range) } }
+                ?: if (seasonPack != null) packRange.findAll(raw).firstOrNull { available(it.range) } else null
+            val countMatch = if (match == null && seasonPack != null)
+                seasonEpisodeCount.findAll(raw).firstOrNull { available(it.range) } else null
+            val selected = match ?: countMatch
+            if (selected != null) {
+                val start = if (countMatch != null) 1 else selected.groupValues[1].toInt()
+                val end = if (countMatch != null) selected.groupValues[1].toInt()
+                    else selected.groupValues.getOrNull(2)?.toIntOrNull() ?: start
+                if (start > 0 && end >= start) {
+                    val value = if (seasonPack != null) EpisodeCoverage.SeasonEpisodes(seasonPack.start, start, end)
+                        else EpisodeCoverage.AbsoluteEpisodes(start, end, null)
+                    setCoverage(value, selected, "labelledEpisodes")
+                } else warnings += ParseWarning.INVALID_EPISODE_RANGE
+            }
+        }
+        // A bare year after an explicit season is release metadata, unlike a number in a film title.
+        if (years.isEmpty()) {
+            val seasonEnd = evidence.filter { it.ruleId in setOf("seasonPack", "seasonEpisodes", "localizedEpisodes") }
+                .maxOfOrNull { it.range.last }
+            if (seasonEnd != null) {
+                Regex("(?<![\\p{L}\\p{N}])(?:19|20)\\d{2}(?![\\p{L}\\p{N}])").findAll(raw)
+                    .firstOrNull { it.range.first > seasonEnd && available(it.range) }?.let {
+                        years += ReleaseYears(it.value.toInt())
+                        consume(it.range, "year")
+                    }
+            }
+        }
         val facts = mutableMapOf<String, MutableSet<String>>()
         val lastYearEnd = evidence.filter { it.ruleId == "year" }.maxOfOrNull { it.range.last }
         TechnicalRules.all.forEach { rule ->
@@ -126,7 +167,7 @@ object KotlinReleaseParser : ReleaseParser {
                 // A bracketed year anchors the metadata suffix; technical words before it belong to the title.
                 if (lastYearEnd != null && match.range.first < lastYearEnd) return@forEach
                 // Require a preceding title or a bracketed technical block.
-                if (!raw.take(match.range.first).any(Char::isLetter) && blocks.none { match.range.first in it.range }) return@forEach
+                if (!raw.take(match.range.first).any(Char::isLetterOrDigit) && blocks.none { match.range.first in it.range }) return@forEach
                 val value = rule.value.ifEmpty { match.value }
                 facts.getOrPut(rule.id) { linkedSetOf() } += value
                 consume(match.range, rule.id, value)
@@ -176,6 +217,17 @@ object KotlinReleaseParser : ReleaseParser {
             val left = part.indexOfFirst { !it.isWhitespace() && it !in "|/._-" }
             val right = part.indexOfLast { !it.isWhitespace() && it !in "|/._-" }
             if (left < 0 || right < left) return
+            val alias = Regex("\\(([^()]*)\\)\\s*$").find(part)
+            if (alias != null) {
+                val baseScript = script(part.substring(0, alias.range.first))
+                val aliasScript = script(alias.groupValues[1])
+                if (baseScript in setOf(ScriptHint.CYRILLIC, ScriptHint.LATIN, ScriptHint.JAPANESE) &&
+                    aliasScript in setOf(ScriptHint.CYRILLIC, ScriptHint.LATIN, ScriptHint.JAPANESE) && baseScript != aliasScript) {
+                    addCandidate(start, start + alias.range.first)
+                    addCandidate(start + alias.groups[1]!!.range.first, start + alias.groups[1]!!.range.last + 1)
+                    return
+                }
+            }
             val text = part.substring(left, right + 1).replace('_', ' ')
                 .let { if (sceneStyle) it.replace(Regex("(?<=\\p{L})\\.(?=\\p{L})"), " ") else it }
                 .replace(Regex("\\s+"), " ").trim()
@@ -194,10 +246,10 @@ object KotlinReleaseParser : ReleaseParser {
     private fun normalize(value: String) = Normalizer.normalize(value, Normalizer.Form.NFKC)
         .lowercase(Locale.ROOT).replace(Regex("[^\\p{L}\\p{N}]+"), " ").trim()
     private fun script(value: String): ScriptHint {
-        val scripts = value.filter(Char::isLetter).map { char -> when (Character.UnicodeScript.of(char.code)) {
-            Character.UnicodeScript.CYRILLIC -> ScriptHint.CYRILLIC
-            Character.UnicodeScript.LATIN -> ScriptHint.LATIN
-            Character.UnicodeScript.HAN, Character.UnicodeScript.HIRAGANA, Character.UnicodeScript.KATAKANA -> ScriptHint.JAPANESE
+        val scripts = value.filter(Char::isLetter).map { char -> when (char) {
+            in '\u0400'..'\u052f' -> ScriptHint.CYRILLIC
+            in 'A'..'Z', in 'a'..'z', in '\u00c0'..'\u024f' -> ScriptHint.LATIN
+            in '\u3040'..'\u30ff', in '\u3400'..'\u9fff' -> ScriptHint.JAPANESE
             else -> ScriptHint.UNKNOWN
         } }.toSet()
         return scripts.singleOrNull() ?: if (scripts.isEmpty()) ScriptHint.UNKNOWN else ScriptHint.MIXED
