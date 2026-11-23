@@ -93,16 +93,9 @@ class TmdbWatchHistoryStore(context: Context) {
             if (progress >= 0.98f) watchlist.remove(title)
             else watchlist.onPlaybackStarted(title)
         } else {
-            val seasons = watchlist.cachedSeasons(title.id).orEmpty()
-                .filter { it.number > 0 && (it.episodeCount ?: 0) > 0 }
-            val finalSeason = seasons.maxByOrNull { it.number }
-            if (progress >= 0.98f && finalSeason?.number == seasonNumber &&
-                episodeNumber >= (finalSeason.episodeCount ?: Int.MAX_VALUE)) {
-                watchlist.remove(title)
-            } else {
-                watchlist.onPlaybackStarted(title.copy(matchedSeasonNumber = seasonNumber))
-            }
+            watchlist.onPlaybackStarted(title.copy(matchedSeasonNumber = seasonNumber))
         }
+
         val key = TitleKey.Tmdb(title.type, title.id).storageKey
         val values = try { JSONObject(prefs.getString("episode_progress", "{}").orEmpty()) }
             catch (_: Exception) { JSONObject() }
@@ -118,6 +111,18 @@ class TmdbWatchHistoryStore(context: Context) {
             put("updatedAt", System.currentTimeMillis())
         })
         prefs.edit().putString("episode_progress", values.toString()).apply()
+        if (title.type == TmdbMediaType.TV && progress >= 0.98f) {
+            val watchedKey = "watched_${title.id}_$seasonNumber"
+            val watched = prefs.getStringSet(watchedKey, emptySet()).orEmpty() + episodeNumber.toString()
+            prefs.edit().putStringSet(watchedKey, watched).apply()
+            val selection = playbackSelection(title.type, title.id, seasonNumber)
+            val playlistKey = when (selection?.source) {
+                TmdbPlaybackSelection.Source.TORRENT -> selection.topicId?.let { "torrent_$it" }
+                TmdbPlaybackSelection.Source.ANITUBE -> selection.anitubeReleaseId?.let { "anitube_${it}_${selection.voiceIndex}" }
+                null -> null
+            }
+            watchlist.completeSeasonIfEligible(title, seasonNumber, playlistKey, watched.mapNotNull(String::toIntOrNull).toSet())
+        }
         val now = System.currentTimeMillis()
         if (progress >= 0.98f || now - lastProgressLogAt >= 30_000L) {
             lastProgressLogAt = now
@@ -125,6 +130,10 @@ class TmdbWatchHistoryStore(context: Context) {
                 "season=$seasonNumber episode=$episodeNumber voice=$voiceIndex " +
                 "progress=${progress.coerceIn(0f, 1f)} positionMs=$positionMs durationMs=$durationMs")
         }
+    }
+
+    fun watchedEpisodes(id: Int, season: Int): Set<Int> = synchronized(lock) {
+        prefs.getStringSet("watched_${id}_$season", emptySet()).orEmpty().mapNotNull(String::toIntOrNull).toSet()
     }
 
     fun episodeProgress(type: TmdbMediaType, id: Int): TmdbEpisodeProgress? = synchronized(lock) {

@@ -65,6 +65,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.lerp
@@ -924,11 +925,11 @@ private fun WatchlistHomeSection(
                         verticalAlignment = Alignment.CenterVertically) {
                         Button(onClick = {
                             val resumeEpisode = selected.nextEpisodes
-                                .firstOrNull { !it.watched }?.episode
-                                ?: selected.nextEpisodes.firstOrNull()?.episode
-                            onContinue(title.copy(matchedSeasonNumber = selected.selectedSeasonNumber),
+                                .firstOrNull { !it.watched && it.available }?.episode
+                                ?: selected.nextEpisodes.firstOrNull { it.available }?.episode
+                            if (title.type == TmdbMediaType.MOVIE || resumeEpisode != null) onContinue(title.copy(matchedSeasonNumber = selected.selectedSeasonNumber),
                                 resumeEpisode)
-                        }, scale = ButtonDefaults.scale(scale = 1f, focusedScale = 1f),
+                        }, enabled = title.type == TmdbMediaType.MOVIE || selected.nextEpisodes.any { it.available }, scale = ButtonDefaults.scale(scale = 1f, focusedScale = 1f),
                             shape = ButtonDefaults.shape(RoundedCornerShape(12.dp)),
                             glow = ButtonDefaults.glow(glow = Glow.None,
                                 focusedGlow = Glow(elevationColor = AppColors.NeonCyan, elevation = 8.dp)),
@@ -1075,7 +1076,7 @@ private fun WatchlistHomeSection(
                                     selected.nextEpisodes.getOrNull(targetEpisodeIndex)
                                 val cardFocusRequester = if (isSeasonFocusTarget)
                                     seasonEpisodeFocusRequester else episodeFocusRequester
-                                Card(onClick = { onOpenEpisode(title, card.episode) },
+                                Card(onClick = { if (card.available) onOpenEpisode(title, card.episode) },
                                     scale = CardDefaults.scale(scale = 1f, focusedScale = 1f),
                                     colors = CardDefaults.colors(
                                         containerColor = if (card.watched) AppColors.SurfaceDark
@@ -1084,6 +1085,7 @@ private fun WatchlistHomeSection(
                                             else AppColors.SkeletonBg),
                                     shape = CardDefaults.shape(RoundedCornerShape(10.dp)),
                                     modifier = Modifier.width(204.dp).height(164.dp)
+                                        .alpha(if (card.available) 1f else 0.45f)
                                         .focusRequester(cardFocusRequester)
                                         .focusProperties {
                                             if (card == selected.nextEpisodes.firstOrNull()) {
@@ -1114,12 +1116,17 @@ private fun WatchlistHomeSection(
                                                     else AppColors.TextSecondary,
                                                 style = MaterialTheme.typography.labelSmall,
                                                 maxLines = 1)
-                                            Text(card.episode.name, color = Color.White,
+                                            ua.any2b.domain.watchlist.WatchlistPolicy.episodeSubtitle(card.episode.name)?.let { subtitle ->
+                                                Text(subtitle, color = Color.White,
                                                 fontWeight = FontWeight.Medium, maxLines = 1,
                                                 overflow = TextOverflow.Ellipsis,
                                                 modifier = Modifier.weight(1f),
                                                 style = MaterialTheme.typography.labelLarge)
+                                            }
                                         }
+                                        if (!card.available) Text("Недоступно", color = AppColors.TextSecondary,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            modifier = Modifier.padding(horizontal = 8.dp))
                                     }
                                 }
                             }

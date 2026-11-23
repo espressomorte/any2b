@@ -262,31 +262,21 @@ class TmdbDetailsActivity : ComponentActivity() {
                         .episodeProgress(details.title.type, details.title.id)
                     val fallbackSeason = progress?.seasonNumber
                         ?: details.title.matchedSeasonNumber ?: seasonNumber ?: 1
-                    val episodesBySeason = mutableMapOf<Int, MutableSet<Int>>()
-                    files.forEach { file ->
-                        val metadata = TolokaReleaseMetadataParser.parse(file.name)
-                        val start = metadata.episodeStart ?: return@forEach
-                        val end = metadata.episodeEnd ?: start
-                        val absoluteRanges = TolokaReleaseMetadataParser
-                            .mapAbsoluteEpisodes(metadata, details.seasonEntries)
-                        if (absoluteRanges != null) {
-                            absoluteRanges.forEach { range ->
-                                episodesBySeason.getOrPut(range.seasonNumber) { mutableSetOf() }
-                                    .addAll(range.episodeStart..range.episodeEnd)
-                            }
-                            return@forEach
-                        }
-                        val firstSeason = metadata.season
-                        val targetSeasons = if (firstSeason != null) {
-                            (firstSeason..(metadata.seasonEnd ?: firstSeason)).toList()
-                        } else listOf(fallbackSeason)
-                        targetSeasons.forEach { targetSeason ->
-                            episodesBySeason.getOrPut(targetSeason) { mutableSetOf() }
-                                .addAll(start..end)
-                        }
+                    val availabilityStore = TmdbWatchlistStore(this@TmdbDetailsActivity)
+                    val searchResults = tolokaState.search as? TolokaSearchState.Results
+                    val releaseTitle = (searchResults?.hits.orEmpty() + searchResults?.weakHits.orEmpty())
+                        .firstOrNull { it.id == topicId }?.title
+                    releaseTitle?.let { value ->
+                        availabilityStore.saveTorrentUkrainian(topicId,
+                            TolokaReleaseMetadataParser.parse(value).audioTags.any { it.contains("Ukr") })
                     }
-                    if (episodesBySeason.isNotEmpty()) TmdbWatchlistStore(this@TmdbDetailsActivity)
-                        .savePlayableEpisodes(details.title.type, details.title.id,
+                    val episodesBySeason = ua.any2b.core.toloka.TolokaEpisodeAvailability.index(
+                        ua.any2b.core.toloka.TolokaEpisodeAvailability.ukrainianFiles(files,
+                            availabilityStore.torrentUkrainian(topicId) == true), details.seasonEntries, fallbackSeason)
+                        .mapValues { it.value.toMutableSet() }.toMutableMap()
+                    if (availabilityStore.torrentUkrainian(topicId) != true) episodesBySeason.clear()
+                    episodesBySeason.getOrPut(fallbackSeason) { mutableSetOf() }
+                    availabilityStore.savePlayableEpisodes(details.title.type, details.title.id,
                             "torrent_$topicId", episodesBySeason)
                 }
                 LaunchedEffect(anitubeState, readyDetails?.title?.id) {
@@ -351,7 +341,8 @@ class TmdbDetailsActivity : ComponentActivity() {
                         tolokaViewModel.playbackFileId(autoPlaySeason, it)
                     }
                     when (val effect = playbackCoordinator.decideAutoPlayback(
-                        request = AutoPlaybackRequest(playbackSource, autoPlayEpisode, savedFileId),
+                        request = AutoPlaybackRequest(playbackSource, autoPlayEpisode,
+                            ua.any2b.domain.watchlist.WatchlistPolicy.savedFileForEpisode(savedFileId, autoPlayEpisode, episodeFileId)),
                         detailsReady = readyDetails != null,
                         torrentFilesReady = torrentFilesReady,
                         savedFileAvailable = savedFileId?.let {
@@ -701,7 +692,7 @@ class TmdbDetailsActivity : ComponentActivity() {
                         history.record(it)
                         history.savePlaybackSelection(it.type, it.id,
                             TmdbPlaybackSelection(TmdbPlaybackSelection.Source.TORRENT,
-                                topicId = topicId, fileId = fileId, fileName = fileName))
+                                topicId = topicId, fileId = fileId, fileName = fileName, tmdbSeasonNumber = currentSeason))
                         if (it.type == TmdbMediaType.TV) {
                             if (currentEpisode != null) {
                                 history.saveEpisodeProgress(it, 0, currentEpisode - 1,

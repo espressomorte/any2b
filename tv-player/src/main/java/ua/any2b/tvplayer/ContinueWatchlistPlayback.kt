@@ -39,6 +39,11 @@ internal class ContinueWatchlistPlayback(
             }
         } else null
         val episodeNumber = episode?.episodeNumber ?: cachedEpisode?.episodeNumber ?: requestedEpisode
+        if (selection?.source == TmdbPlaybackSelection.Source.TORRENT && season != null && episodeNumber != null) {
+            val key = selection.topicId?.let { "torrent_$it" } ?: return
+            val available = watchlist.cachedPlayableEpisodes(title.type, title.id, key, season)
+            if (available?.contains(episodeNumber) != true || watchlist.torrentUkrainian(selection.topicId!!) != true) return
+        }
         openDetails(title.copy(
             matchedSeasonNumber = season,
             matchedAnimeSeasonNumber = selection?.anitubeSeasonNumber

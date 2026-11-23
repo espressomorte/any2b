@@ -103,7 +103,8 @@ class TmdbWatchlistStore(context: Context) {
                     item.optInt("episodeNumber"), item.optString("name"),
                     item.optString("overview").takeIf(String::isNotBlank),
                     item.optString("stillUrl").takeIf(String::isNotBlank),
-                    item.optString("airDate").takeIf(String::isNotBlank))
+                    item.optString("airDate").takeIf(String::isNotBlank),
+                    item.optString("episodeType").takeIf(String::isNotBlank))
             }
         } catch (_: Exception) { null }
     }
@@ -125,6 +126,7 @@ class TmdbWatchlistStore(context: Context) {
                 put("overview", episode.overview)
                 put("stillUrl", episode.stillUrl)
                 put("airDate", episode.airDate)
+                put("episodeType", episode.episodeType)
             }) }
         }.toString()).apply()
     }
@@ -204,6 +206,41 @@ class TmdbWatchlistStore(context: Context) {
         (0 until array.length()).mapNotNull { index ->
             array.optInt(index).takeIf { it > 0 }
         }.toSet()
+    }
+
+    fun saveTorrentUkrainian(topicId: String, available: Boolean) {
+        prefs.edit().putBoolean("torrent_uk_$topicId", available).apply()
+    }
+
+    fun torrentUkrainian(topicId: String): Boolean? =
+        if (prefs.contains("torrent_uk_$topicId")) prefs.getBoolean("torrent_uk_$topicId", false) else null
+
+    fun completedSeasons(id: Int): Set<Int> = prefs.getStringSet("completed_seasons_$id", emptySet())
+        .orEmpty().mapNotNull(String::toIntOrNull).toSet()
+
+    fun completeSeasonIfEligible(title: TmdbTitle, season: Int, playlistKey: String?, watched: Set<Int>): Boolean {
+        if (playlistKey == null) return false
+        if (playlistKey.startsWith("torrent_") && torrentUkrainian(playlistKey.removePrefix("torrent_")) != true) return false
+        val episodes = cachedEpisodes(title.id, season).orEmpty()
+        val expected = episodes.map { it.episodeNumber }.toSet()
+        val seasonCount = cachedSeasons(title.id)?.firstOrNull { it.number == season }?.episodeCount
+        val completeMetadata = seasonCount != null && seasonCount > 0 && expected.size == seasonCount
+        val finished = prefs.getBoolean("season_finished_${title.id}_$season", false)
+        val playable = cachedPlayableEpisodes(title.type, title.id, playlistKey, season)
+        if (!ua.any2b.domain.watchlist.WatchlistPolicy.seasonComplete(
+                finished && completeMetadata, expected, playable, watched)) return false
+        synchronized(lock) {
+            val completed = completedSeasons(title.id) + season
+            prefs.edit().putStringSet("completed_seasons_${title.id}", completed.map(Int::toString).toSet()).apply()
+            // Keep history and caches; remove only the watchlist entry representing this season.
+            persistEntries(readEntries().filterNot { it.title.type == title.type && it.title.id == title.id &&
+                (it.title.matchedSeasonNumber == null || it.title.matchedSeasonNumber == season) })
+        }
+        return true
+    }
+
+    fun saveSeasonFinished(id: Int, season: Int, finished: Boolean) {
+        prefs.edit().putBoolean("season_finished_${id}_$season", finished).apply()
     }
 
     fun cachedSeasons(seriesId: Int): List<TmdbSeason>? = synchronized(lock) {

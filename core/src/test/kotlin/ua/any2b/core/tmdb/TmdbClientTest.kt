@@ -14,6 +14,17 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class TmdbClientTest {
+    @Test fun seasonMetadataIncludesUpcomingEpisodesAndFinaleSignal() = runBlocking {
+        val client = client { request -> fixture(request, 200, """{"name":"Season 1","episodes":[
+            {"id":1,"season_number":1,"episode_number":1,"name":"Episode 1","air_date":"2026-01-01","episode_type":"standard"},
+            {"id":2,"season_number":1,"episode_number":2,"name":"Stray Dog Strut","air_date":"2099-01-01","episode_type":"finale"}
+        ]}""") }
+        val result = client.seasonDetails(1, 1, "token")
+        assertEquals(listOf(1, 2), result.episodes.map { it.episodeNumber })
+        assertEquals("finale", result.episodes.last().episodeType)
+        assertEquals("2099-01-01", result.episodes.last().airDate)
+    }
+
     @Test
     fun multiSearchEncodesQueryAndKeepsMoviesAndTvInServerOrder() = runBlocking {
         var request: Request? = null

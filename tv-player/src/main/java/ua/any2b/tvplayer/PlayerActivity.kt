@@ -462,7 +462,8 @@ class PlayerActivity : FragmentActivity() {
                                     ua.any2b.tvplayer.data.TmdbPlaybackSelection(
                                         ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.TORRENT,
                                         topicId = topicId, fileId = fileId,
-                                        fileName = intent.getStringExtra(EXTRA_TOLOKA_FILE_NAME)))
+                                        fileName = intent.getStringExtra(EXTRA_TOLOKA_FILE_NAME),
+                                        tmdbSeasonNumber = intent.getIntExtra(EXTRA_TMDB_SEASON, 0).takeIf { it > 0 }))
                                 tolokaPlaybackMarked = true
                             }
                         }

@@ -107,6 +107,7 @@ data class TmdbEpisodeHomeCard(
     val episode: TmdbEpisode,
     val cachedImagePath: String?,
     val watched: Boolean = false,
+    val available: Boolean = false,
 )
 
 private data class PersonalListsSnapshot(
@@ -483,22 +484,14 @@ class TmdbLibraryViewModel(application: Application,
         }
         val playable = playlistKey?.let {
             watchlist.cachedPlayableEpisodes(title.type, title.id, it, season)
-        }?.takeIf { it.isNotEmpty() }
-        val nextNumber = if (progress?.seasonNumber == season) {
-            if (progress.progress >= 0.95f) progress.episodeNumber + 1 else progress.episodeNumber
-        } else 1
-        val aired = episodes.filter { it.hasAired() || isAniTube }
-        val watched = aired.filter { progress != null &&
-            (season < progress.seasonNumber || season == progress.seasonNumber &&
-                (it.episodeNumber < progress.episodeNumber ||
-                    it.episodeNumber == progress.episodeNumber && progress.progress >= 0.95f)) }
-        val upcoming = aired.filter { it.episodeNumber >= nextNumber }.let { candidates ->
-            candidates.filter { playable == null || it.episodeNumber in playable }
-                .ifEmpty { candidates }
         }
-        return (watched + upcoming).distinctBy { it.episodeNumber }.map { episode ->
+        val watched = history.watchedEpisodes(title.id, season)
+        return episodes.map { episode ->
             TmdbEpisodeHomeCard(episode, watchlist.cachedStill(title.id, episode)?.absolutePath,
-                watched = episode in watched)
+                watched = episode.episodeNumber in watched,
+                available = ua.any2b.domain.watchlist.WatchlistPolicy.available(episode.episodeNumber,
+                    episode.hasAired() || isAniTube, selection != null, if (selection?.source == TmdbPlaybackSelection.Source.TORRENT &&
+                        watchlist.torrentUkrainian(selection.topicId.orEmpty()) != true) emptySet() else playable))
         }
     }
 
@@ -586,7 +579,7 @@ class TmdbLibraryViewModel(application: Application,
                     val logoLanguagePriority = settings.logoLanguagePriority()
                     val cachedSeasons = if (title.type == TmdbMediaType.TV)
                         watchlist.cachedSeasons(title.id) else null
-                    val requiresDetails = !watchlist.hasCachedLogo(title.type, title.id,
+                    val requiresDetails = title.type == TmdbMediaType.TV || !watchlist.hasCachedLogo(title.type, title.id,
                         logoLanguagePriority) ||
                         title.originCountries.isEmpty() || title.ukrainianTitle.isNullOrBlank() ||
                         // An empty season cache is not usable metadata. In particular, don't
@@ -610,19 +603,24 @@ class TmdbLibraryViewModel(application: Application,
                         _state.value = _state.value.copy(watchlist = _state.value.watchlist.map {
                             if (it.entry.title.type == title.type && it.entry.title.id == title.id)
                                 it.copy(entry = it.entry.copy(title = enrichedTitle),
-                                    seasons = details.seasonEntries,
+                                    seasons = details.seasonEntries.filterNot { season ->
+                                        season.number in watchlist.completedSeasons(title.id) },
                                     logoUrl = details.logoUrl) else it
                         })
                         if (title.type == TmdbMediaType.TV)
                             watchlist.saveSeasons(title.id, details.seasonEntries)
                     }
                     if (title.type != TmdbMediaType.TV) continue
-                    val seasons = watchlist.cachedSeasons(title.id).orEmpty().toMutableList()
+                    val seasons = watchlist.cachedSeasons(title.id).orEmpty()
+                        .filterNot { it.number in watchlist.completedSeasons(title.id) }.toMutableList()
                     val progress = history.episodeProgress(TmdbMediaType.TV, title.id)
                     val selectedSeason = _state.value.watchlist.firstOrNull {
                         it.entry.title.type == title.type && it.entry.title.id == title.id
                     }?.selectedSeasonNumber
-                    var seasonNumber = selectedSeason ?: progress?.seasonNumber ?: seasons.firstOrNull {
+                    updateWatchlistSeasons(title, seasons)
+                    var seasonNumber = listOfNotNull(selectedSeason, progress?.seasonNumber).firstOrNull { number ->
+                        number !in watchlist.completedSeasons(title.id)
+                    } ?: seasons.firstOrNull {
                         it.number > 0 && (it.episodeCount ?: 0) > 0
                     }?.number ?: 1
                     val selection = history.playbackSelection(title.type, title.id, seasonNumber)
@@ -630,30 +628,23 @@ class TmdbLibraryViewModel(application: Application,
                             it.source == ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.TORRENT ||
                                 (it.tmdbSeasonNumber ?: it.anitubeSeasonNumber) == seasonNumber
                         }
-                    var episodeNumber = if (selectedSeason != null &&
-                        selectedSeason != progress?.seasonNumber) 1 else progress?.let {
+                    val episodeNumber = if (progress?.seasonNumber != seasonNumber) 1 else progress?.let {
                         if (it.progress >= 0.95f) it.episodeNumber + 1 else it.episodeNumber
                     } ?: 1
                     suspend fun seasonEpisodes(number: Int): List<TmdbEpisode> {
                         val cachedEpisodes = watchlist.cachedEpisodes(title.id, number)
                             ?.takeIf(List<TmdbEpisode>::isNotEmpty)
-                        if (cachedEpisodes != null &&
-                            watchlist.hasTmdbEpisodeMetadata(title.id, number))
-                            return cachedEpisodes
-
                         val tmdbEpisodes = homeNetworkPermits.withPermit {
                             connection.client.seasonDetails(title.id, number,
                                 connection.accessKey).episodes
                         }
                         // AniTube contributes episode names/numbers but no TMDB still paths.
                         // Enrich those records from TMDB while keeping the provider's titles.
-                        val episodes = if (cachedEpisodes == null) tmdbEpisodes else {
-                            val tmdbByNumber = tmdbEpisodes.associateBy { it.episodeNumber }
-                            cachedEpisodes.map { cached ->
-                                val tmdb = tmdbByNumber[cached.episodeNumber]
-                                cached.copy(stillUrl = cached.stillUrl ?: tmdb?.stillUrl,
-                                    airDate = cached.airDate ?: tmdb?.airDate)
-                            }
+                        val cachedByNumber = cachedEpisodes.orEmpty().associateBy { it.episodeNumber }
+                        val episodes = tmdbEpisodes.map { tmdb ->
+                            val cached = cachedByNumber[tmdb.episodeNumber]
+                            if (cached != null && ua.any2b.domain.watchlist.WatchlistPolicy.episodeSubtitle(cached.name) != null)
+                                tmdb.copy(name = cached.name) else tmdb
                         }
                         watchlist.saveEpisodes(title.id, number, episodes)
                         watchlist.markTmdbEpisodeMetadata(title.id, number)
@@ -689,56 +680,16 @@ class TmdbLibraryViewModel(application: Application,
                     }
                     var playableEpisodes = playlistKey?.let {
                         watchlist.cachedPlayableEpisodes(title.type, title.id, it, seasonNumber)
-                    }?.takeIf { it.isNotEmpty() }
-                    if (playableEpisodes == null && selection?.source ==
+                    }
+                    if (selection?.source ==
                         ua.any2b.tvplayer.data.TmdbPlaybackSelection.Source.TORRENT) {
                         recoverTolokaEpisodes(title, selection, seasonNumber, seasons)
                         playableEpisodes = playlistKey?.let {
                             watchlist.cachedPlayableEpisodes(title.type, title.id, it, seasonNumber)
-                        }?.takeIf { it.isNotEmpty() }
-                    }
-                    val airedEpisodes = episodes.filter {
-                        it.episodeNumber >= episodeNumber && (it.hasAired() || isAniTubeSeason)
-                    }
-                    var upcoming = playableEpisodes?.let { playable ->
-                        airedEpisodes.filter { it.episodeNumber in playable }
-                    } ?: airedEpisodes
-                    // A Toloka file index is only a playback hint. If parsing its names mapped
-                    // files to the wrong episode numbers, don't let that hide the whole series
-                    // from the watchlist carousel.
-                    if (upcoming.isEmpty() && airedEpisodes.isNotEmpty() &&
-                        !playableEpisodes.isNullOrEmpty()) {
-                        Log.w(TAG, "Playable episode index matched no upcoming TMDB episodes " +
-                            "title=${title.type.path}:${title.id} season=$seasonNumber " +
-                            "requestedEpisode=$episodeNumber indexed=${playableEpisodes.size}")
-                        upcoming = airedEpisodes
-                    }
-                    if (upcoming.isEmpty() && !isAniTubeSeason) {
-                        for (candidate in seasons.filter { it.number > seasonNumber }
-                            .sortedBy { it.number }) {
-                            val released = seasonEpisodes(candidate.number).filter { it.hasAired() }
-                            if (released.isNotEmpty()) {
-                                season = candidate
-                                seasonNumber = candidate.number
-                                episodes = released
-                                upcoming = released.take(1)
-                                val nextSeasonPlayable = playlistKey?.let {
-                                    watchlist.cachedPlayableEpisodes(title.type, title.id, it,
-                                        seasonNumber)
-                                }?.takeIf { it.isNotEmpty() }
-                                if (nextSeasonPlayable != null) {
-                                    val indexedNextSeason = released.filter {
-                                        it.episodeNumber in nextSeasonPlayable
-                                    }.take(1)
-                                    if (indexedNextSeason.isNotEmpty()) upcoming = indexedNextSeason
-                                    else Log.w(TAG, "Playable episode index matched no episodes " +
-                                        "in next season title=${title.type.path}:${title.id} " +
-                                        "season=$seasonNumber; keeping TMDB episode")
-                                }
-                                break
-                            }
                         }
                     }
+                    // TMDB supplies the complete row, including announced/missing source episodes.
+                    val upcoming = episodes.filter { it.episodeNumber >= episodeNumber }
                     if (season == null) {
                         updateWatchlistEpisodes(title, emptyList(), false)
                         continue
@@ -747,23 +698,46 @@ class TmdbLibraryViewModel(application: Application,
                     val airedCount = if (isAniTubeSeason) episodes.size else episodes.count { it.hasAired() }
                     updateWatchlistSeasonCounts(title, airedCount,
                         season?.episodeCount ?: episodes.size)
-                    val progressSeason = progress?.seasonNumber
-                    val watchedEpisodes = episodes.filter { episode ->
-                        (episode.hasAired() || isAniTubeSeason) && (progressSeason != null &&
-                            (seasonNumber < progressSeason || seasonNumber == progressSeason &&
-                                (episode.episodeNumber < (progress?.episodeNumber ?: 1) ||
-                                    episode.episodeNumber == progress.episodeNumber &&
-                                    (progress?.progress ?: 0f) >= 0.95f)))
+                    val watchedNumbers = history.watchedEpisodes(title.id, seasonNumber)
+                    val expectedCount = season?.episodeCount
+                    val allAired = episodes.isNotEmpty() && episodes.all { episode ->
+                        episode.airDate?.let { runCatching { java.time.LocalDate.parse(it) }.getOrNull() }
+                            ?.let { !it.isAfter(java.time.LocalDate.now()) } == true
                     }
-                    // The carousel is a LazyRow, so keep the complete season list here;
-                    // limiting the model to 12 made longer seasons appear incomplete.
+                    val finalEpisode = episodes.maxByOrNull { it.episodeNumber }
+                    val finished = allAired && expectedCount == episodes.size &&
+                        (finalEpisode?.episodeType == "finale" || details?.status in setOf("Ended", "Canceled") ||
+                            seasons.any { next -> next.number > seasonNumber &&
+                                watchlist.cachedEpisodes(title.id, next.number).orEmpty().any {
+                                    it.airDate?.let { date -> runCatching { java.time.LocalDate.parse(date) }.getOrNull() }
+                                        ?.let { date -> !date.isAfter(java.time.LocalDate.now()) } == true
+                                } })
+                    watchlist.saveSeasonFinished(title.id, seasonNumber, finished)
+                    if (watchlist.completeSeasonIfEligible(title, seasonNumber, playlistKey, watchedNumbers)) {
+                        val retained = watchlist.contains(title.type, title.id)
+                        _state.value = _state.value.copy(watchlist = _state.value.watchlist.mapNotNull { item ->
+                            if (item.entry.title.type != title.type || item.entry.title.id != title.id) item
+                            else if (!retained) null
+                            else {
+                                val remaining = item.seasons.filterNot { it.number == seasonNumber }
+                                val next = item.entry.title.matchedSeasonNumber?.takeIf { it != seasonNumber }
+                                    ?: remaining.firstOrNull()?.number
+                                item.copy(seasons = remaining, selectedSeasonNumber = next,
+                                    nextEpisodes = cachedWatchlistCards(item.entry.title, next, progress,
+                                        next?.let { history.playbackSelection(title.type, title.id, it) }))
+                            }
+                        })
+                        continue
+                    }
                     val visibleUpcoming = upcoming
-                    val visibleEpisodes = (watchedEpisodes + visibleUpcoming)
-                        .distinctBy { it.episodeNumber }
-                    val cards = visibleEpisodes.map { episode ->
+                    val cards = episodes.map { episode ->
                         TmdbEpisodeHomeCard(episode,
                             watchlist.cachedStill(title.id, episode)?.absolutePath,
-                            watched = episode in watchedEpisodes)
+                            watched = episode.episodeNumber in watchedNumbers,
+                            available = ua.any2b.domain.watchlist.WatchlistPolicy.available(
+                                episode.episodeNumber, episode.hasAired() || isAniTubeSeason,
+                                selection != null, if (selection?.source == TmdbPlaybackSelection.Source.TORRENT &&
+                                    watchlist.torrentUkrainian(selection.topicId.orEmpty()) != true) emptySet() else playableEpisodes))
                     }
                     updateWatchlistEpisodes(title, cards, false)
                     // Fill the visible episode still cache after the row is already usable.
@@ -787,7 +761,7 @@ class TmdbLibraryViewModel(application: Application,
         }
     }
 
-    /** Rebuilds a missing playlist episode index from TorrServer's persisted file stats. */
+    /** Refreshes the saved tracker topic and indexes its actual current files. */
     private suspend fun recoverTolokaEpisodes(
         title: TmdbTitle,
         selection: ua.any2b.tvplayer.data.TmdbPlaybackSelection,
@@ -803,14 +777,21 @@ class TmdbLibraryViewModel(application: Application,
                 ?.let { TorrServerBasicAuth(it.username, it.password) }
             val hashPrefs = getApplication<Application>().getSharedPreferences(
                 "torrserver_topic_hashes", 0)
-            val savedHash = hashPrefs.getString(hashKey, null)
-            val torrent = try {
-                savedHash?.let { torrServer.get(serverUrl, it, credentials) }
-            } catch (error: TorrServerFailure.Http) {
-                if (error.status != 404) throw error
-                Log.i("WatchlistPlayback", "Saved TorrServer hash expired; reloading topic=$topicId")
-                null
-            } ?: run {
+            // Search refreshes the attachment URL too; an old URL can still serve an old infohash.
+            var sourceTitle: String? = null
+            for (query in listOfNotNull(title.ukrainianTitle, title.originalTitle, title.title).distinct()) {
+                sourceTitle = TolokaConnections.search(getApplication(), query).results
+                    .firstOrNull { it.id == topicId }?.title
+                if (sourceTitle != null) break
+            }
+            if (sourceTitle == null) sourceTitle = ua.any2b.tvplayer.data.TolokaRssCatalog(getApplication())
+                .cached().firstOrNull { it.id == topicId }?.title
+            sourceTitle?.let { value ->
+                watchlist.saveTorrentUkrainian(topicId,
+                    TolokaReleaseMetadataParser.parse(value).audioTags.any { it.contains("Ukr") })
+            }
+            // Refresh the selected topic itself: an ongoing release can acquire a new infohash.
+            val torrent = run {
                 val bytes = try {
                     TolokaConnections.torrent(getApplication(), topicId)
                 } catch (_: TolokaFailure.LinkExpired) {
@@ -835,30 +816,15 @@ class TmdbLibraryViewModel(application: Application,
                         "topic=$topicId files=${refreshed.files.size}")
                 }
             }
-            val episodesBySeason = mutableMapOf<Int, MutableSet<Int>>()
-            torrent.videoFiles.forEach { file ->
-                val metadata = TolokaReleaseMetadataParser.parse(file.name)
-                val folderSeason = file.path.substringBeforeLast('/', "")
-                    .takeIf(String::isNotBlank)?.let(TolokaReleaseMetadataParser::parse)?.season
-                val absolute = TolokaReleaseMetadataParser.mapAbsoluteEpisodes(metadata, seasons)
-                if (absolute != null) {
-                    absolute.forEach { range ->
-                        episodesBySeason.getOrPut(range.seasonNumber) { mutableSetOf() }
-                            .addAll(range.episodeStart..range.episodeEnd)
-                    }
-                } else {
-                    val season = metadata.season ?: folderSeason ?: selectedSeason
-                    val first = metadata.episodeStart ?: return@forEach
-                    val last = metadata.episodeEnd ?: first
-                    if (season > 0 && first > 0 && last >= first) {
-                        episodesBySeason.getOrPut(season) { mutableSetOf() }
-                            .addAll(first..last)
-                    }
-                }
-            }
-            if (episodesBySeason.isNotEmpty()) {
-                watchlist.savePlayableEpisodes(title.type, title.id, "torrent_$topicId",
-                    episodesBySeason)
+            val sourceSeason = selection.tmdbSeasonNumber
+                ?: history.episodeProgress(title.type, title.id)?.seasonNumber ?: selectedSeason
+            val episodesBySeason = ua.any2b.core.toloka.TolokaEpisodeAvailability.index(
+                ua.any2b.core.toloka.TolokaEpisodeAvailability.ukrainianFiles(torrent.videoFiles,
+                    watchlist.torrentUkrainian(topicId) == true), seasons, sourceSeason).mapValues { it.value.toMutableSet() }.toMutableMap()
+            if (watchlist.torrentUkrainian(topicId) != true) episodesBySeason.clear()
+            episodesBySeason.getOrPut(selectedSeason) { mutableSetOf() }
+            run {
+                watchlist.savePlayableEpisodes(title.type, title.id, "torrent_$topicId", episodesBySeason)
                 Log.i("WatchlistPlayback", "Rebuilt playlist episode index from TorrServer " +
                     "tmdb=${title.type.path}:${title.id} topic=$topicId " +
                     "seasons=${episodesBySeason.mapValues { it.value.size }}")

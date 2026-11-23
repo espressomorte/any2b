@@ -176,6 +176,7 @@ data class TmdbEpisode(
     val overview: String?,
     val stillUrl: String?,
     val airDate: String?,
+    val episodeType: String? = null,
 )
 
 data class TmdbSeasonDetails(val season: TmdbSeason, val episodes: List<TmdbEpisode>)
@@ -634,6 +635,7 @@ class TmdbClient(
                     stillUrl = episode.optionalString("still_path")
                         ?.let { "https://image.tmdb.org/t/p/w780$it" },
                     airDate = episode.optionalString("air_date"),
+                    episodeType = episode.optionalString("episode_type"),
                 )
             }
         }.orEmpty()
