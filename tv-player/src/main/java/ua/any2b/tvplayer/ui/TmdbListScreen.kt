@@ -64,6 +64,7 @@ fun TmdbListScreen(state: TmdbListState, onOpen: (TmdbTitle) -> Unit,
         "mal_top" -> "Аніме з найвищими оцінками"
         "toloka_animation" -> "Анімація Toloka"
         "toloka_video" -> "Фільми й серіали Toloka"
+        "whats_popular" -> "What's Popular"
         else -> "Обрані тайтли"
     }
     Column(Modifier.fillMaxSize().background(AppColors.BackgroundDark)
@@ -74,7 +75,8 @@ fun TmdbListScreen(state: TmdbListState, onOpen: (TmdbTitle) -> Unit,
             Text(heading, style = MaterialTheme.typography.headlineLarge, color = Color.White)
             OutlinedButton(onClick = onBack) { Text("Назад") }
         }
-        if (state.category !in setOf("favorites", "history", "recommendations", "upcoming") &&
+        if (state.category !in setOf("favorites", "history", "recommendations", "upcoming",
+                "whats_popular") &&
             !state.category.startsWith("toloka_")) {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 ListSortButton("Популярність", selected = state.sort == TmdbListSort.POPULARITY,
@@ -107,7 +109,16 @@ fun TmdbListScreen(state: TmdbListState, onOpen: (TmdbTitle) -> Unit,
             horizontalArrangement = Arrangement.spacedBy(20.dp),
             verticalArrangement = Arrangement.spacedBy(28.dp)) {
             items(state.titles, key = { "${it.type}:${it.id}" }) { title ->
-                TmdbPosterCard(title, onClick = { onOpen(title) })
+                if (state.category == "whats_popular")
+                    TmdbPosterCard(title, onClick = { onOpen(title) },
+                        artUrl = title.backdropUrl ?: title.posterUrl, aspectRatio = 16f / 9f,
+                        caption = listOfNotNull(
+                            title.ukrainianTitle?.takeIf(String::isNotBlank)
+                                ?: title.englishTitle?.takeIf(String::isNotBlank)
+                                ?: title.originalTitle?.takeIf(String::isNotBlank)
+                                ?: title.title,
+                            title.year?.toString()).joinToString(" · "))
+                else TmdbPosterCard(title, onClick = { onOpen(title) })
             }
             if (state.loading) item(key = "loading") {
                 Text("Завантаження…", color = AppColors.TextSecondary)

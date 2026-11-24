@@ -183,6 +183,7 @@ class TmdbWatchlistStore(context: Context) {
         seasonEpisodes: Map<Int, Set<Int>>,
     ) = synchronized(lock) {
         if (titleId <= 0 || playlistKey.isBlank()) return@synchronized
+        val now = System.currentTimeMillis()
         prefs.edit().putString(playableEpisodesKey(type, titleId, playlistKey),
             JSONObject().apply {
                 seasonEpisodes.filterKeys { it > 0 }.forEach { (season, episodes) ->
@@ -190,7 +191,21 @@ class TmdbWatchlistStore(context: Context) {
                         episodes.filter { it > 0 }.sorted().forEach { episode -> put(episode) }
                     })
                 }
-            }.toString()).apply()
+            }.toString())
+            .putLong(playlistRefreshKey(type, titleId, playlistKey), now)
+            .apply()
+    }
+
+    /** Recheck changing torrent playlists lazily; cached availability remains usable between checks. */
+    fun shouldRefreshPlaylist(
+        type: TmdbMediaType,
+        titleId: Int,
+        playlistKey: String,
+        now: Long = System.currentTimeMillis(),
+    ): Boolean = synchronized(lock) {
+        if (titleId <= 0 || playlistKey.isBlank()) return@synchronized false
+        val lastRefresh = prefs.getLong(playlistRefreshKey(type, titleId, playlistKey), 0L)
+        lastRefresh <= 0L || now < lastRefresh || now - lastRefresh >= PLAYLIST_REFRESH_INTERVAL_MS
     }
 
     fun cachedPlayableEpisodes(
@@ -332,6 +347,8 @@ class TmdbWatchlistStore(context: Context) {
         prefs.edit().remove(logoKey(type, id)).remove(logoPriorityKey(type, id)).apply()
         prefs.all.keys.filter { it.startsWith("playable_${type.path}_${id}_") }
             .forEach { prefs.edit().remove(it).apply() }
+        prefs.all.keys.filter { it.startsWith("playlist_refresh_${type.path}_${id}_") }
+            .forEach { prefs.edit().remove(it).apply() }
         if (type != TmdbMediaType.TV) return
         val prefix = "episodes_${id}_"
         val editor = prefs.edit()
@@ -420,11 +437,14 @@ class TmdbWatchlistStore(context: Context) {
     private fun logoPriorityKey(type: TmdbMediaType, id: Int) = "logo_priority_${type.path}_$id"
     private fun playableEpisodesKey(type: TmdbMediaType, id: Int, playlistKey: String) =
         "playable_${type.path}_${id}_$playlistKey"
+    private fun playlistRefreshKey(type: TmdbMediaType, id: Int, playlistKey: String) =
+        "playlist_refresh_${type.path}_${id}_$playlistKey"
 
     private companion object {
         const val ENTRIES_KEY = "entries"
         const val MAX_WATCHLIST_ENTRIES = 13
         const val MAX_CACHED_STILLS = 13
+        const val PLAYLIST_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000L
         val lock = Any()
     }
 }

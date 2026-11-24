@@ -93,10 +93,13 @@ class SettingsManager(context: Context) {
             val item = saved.optJSONObject(index) ?: continue
             val default = defaultsById[item.optString("id")] ?: continue
             if (result.any { it.id == default.id }) continue
+            val page = item.optString("page", default.page)
+                .takeIf { it == PAGE_WATCHLIST || it == PAGE_TMDB } ?: default.page
             result.add(default.copy(enabled = item.optBoolean("enabled", true) ||
-                (default.id == "mal_top" && legacyAniListEnabled)))
+                (default.id == "mal_top" && legacyAniListEnabled), page = page))
         }
-        return result + defaults.filterNot { default -> result.any { it.id == default.id } }
+        val merged = result + defaults.filterNot { default -> result.any { it.id == default.id } }
+        return merged.filter { it.page == PAGE_WATCHLIST } + merged.filter { it.page == PAGE_TMDB }
     }
 
     fun setMainHomeSectionEnabled(id: String, enabled: Boolean): List<HomeSectionSetting> =
@@ -113,8 +116,21 @@ class SettingsManager(context: Context) {
             val updated = mainHomeSections().toMutableList()
             val index = updated.indexOfFirst { it.id == id }
             val target = index + offset
-            if (index >= 0 && target in updated.indices) {
-                java.util.Collections.swap(updated, index, target)
+            val section = updated.getOrNull(index)
+            if (section != null && target in updated.indices) {
+                val samePageTarget = updated[target].page == section.page
+                if (samePageTarget) {
+                    java.util.Collections.swap(updated, index, target)
+                } else if (offset > 0 && section.page == PAGE_WATCHLIST) {
+                    updated.removeAt(index)
+                    val boundary = updated.indexOfFirst { it.page == PAGE_TMDB }
+                        .takeIf { it >= 0 } ?: updated.size
+                    updated.add(boundary, section.copy(page = PAGE_TMDB))
+                } else if (offset < 0 && section.page == PAGE_TMDB) {
+                    updated.removeAt(index)
+                    val boundary = updated.indexOfLast { it.page == PAGE_WATCHLIST } + 1
+                    updated.add(boundary, section.copy(page = PAGE_WATCHLIST))
+                }
                 saveHomeSections("main_home_sections", updated)
             }
             updated
@@ -123,7 +139,8 @@ class SettingsManager(context: Context) {
     private fun saveHomeSections(key: String, sections: List<HomeSectionSetting>) {
         val array = JSONArray()
         sections.forEach { section ->
-            array.put(JSONObject().put("id", section.id).put("enabled", section.enabled))
+            array.put(JSONObject().put("id", section.id).put("enabled", section.enabled)
+                .put("page", section.page))
         }
         prefs.edit().putString(key, array.toString()).apply()
     }

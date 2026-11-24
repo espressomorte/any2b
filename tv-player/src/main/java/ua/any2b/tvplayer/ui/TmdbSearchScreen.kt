@@ -217,7 +217,10 @@ internal fun TmdbPosterCard(title: TmdbTitle, query: String = "",
     onClick: () -> Unit, onFocused: (() -> Unit)? = null,
     focusRequester: FocusRequester? = null, onLongClick: (() -> Unit)? = null,
     navigateLeftTo: FocusRequester? = null,
-    onFocusTarget: ((FocusRequester) -> Unit)? = null) {
+    onFocusTarget: ((FocusRequester) -> Unit)? = null,
+    artUrl: String? = title.posterUrl,
+    aspectRatio: Float = 2f / 3f,
+    caption: String? = null) {
     var focused by remember { mutableStateOf(false) }
     var suppressClickUntil by remember { mutableLongStateOf(0L) }
     var centerKeyDown by remember { mutableStateOf(false) }
@@ -246,7 +249,7 @@ internal fun TmdbPosterCard(title: TmdbTitle, query: String = "",
             },
             scale = CardDefaults.scale(scale = 1f, focusedScale = 1f),
             shape = CardDefaults.shape(RoundedCornerShape(12.dp)),
-            modifier = Modifier.fillMaxWidth().aspectRatio(2f / 3f)
+            modifier = Modifier.fillMaxWidth().aspectRatio(aspectRatio)
                 .then(activeFocusRequester?.let(Modifier::focusRequester) ?: Modifier)
                 .focusProperties { navigateLeftTo?.let { left = it } }
                 .onPreviewKeyEvent { event ->
@@ -296,27 +299,35 @@ internal fun TmdbPosterCard(title: TmdbTitle, query: String = "",
                         activeFocusRequester?.let { onFocusTarget?.invoke(it) }
                     }
                 },
-        ) { TmdbPosterArt(title, Modifier.fillMaxSize()) }
+        ) { TmdbPosterArt(title, Modifier.fillMaxSize(), artUrl) }
         Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 5.dp)) {
-            Text((if (query.isBlank()) listOf(title.title) else title.searchNames(query)).joinToString(" · "),
-                color = if (focused) AppColors.NeonCyan else AppColors.TextLight,
-                maxLines = 2, minLines = 2, overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.labelMedium, modifier = Modifier.heightIn(min = 36.dp))
-            title.year?.let { year ->
-                Spacer(Modifier.height(2.dp))
-                Text(year.toString(), style = MaterialTheme.typography.labelMedium,
+            if (caption != null) {
+                Text(caption, color = if (focused) AppColors.NeonCyan else AppColors.TextLight,
+                    maxLines = 1, minLines = 1, overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.labelMedium)
+            } else {
+                Text((if (query.isBlank()) listOf(title.title) else title.searchNames(query)).joinToString(" · "),
                     color = if (focused) AppColors.NeonCyan else AppColors.TextLight,
-                    fontSize = 10.sp,
-                    fontWeight = if (focused) FontWeight.Bold else FontWeight.Normal)
+                    maxLines = 2, minLines = 2, overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.heightIn(min = 36.dp))
+                title.year?.let { year ->
+                    Spacer(Modifier.height(2.dp))
+                    Text(year.toString(), style = MaterialTheme.typography.labelMedium,
+                        color = if (focused) AppColors.NeonCyan else AppColors.TextLight,
+                        fontSize = 10.sp,
+                        fontWeight = if (focused) FontWeight.Bold else FontWeight.Normal)
+                }
             }
         }
     }
 }
 
 @Composable
-private fun TmdbPosterArt(title: TmdbTitle, modifier: Modifier = Modifier) {
+private fun TmdbPosterArt(title: TmdbTitle, modifier: Modifier = Modifier,
+    artUrl: String? = title.posterUrl) {
     Box(modifier.background(AppColors.SurfaceCard)) {
-        AsyncImage(model = title.posterUrl, contentDescription = title.title,
+        AsyncImage(model = artUrl, contentDescription = title.title,
             contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
         title.rating?.let { score ->
             ReleaseBadge((score * 10).toInt(), Modifier.align(Alignment.TopEnd).padding(8.dp))

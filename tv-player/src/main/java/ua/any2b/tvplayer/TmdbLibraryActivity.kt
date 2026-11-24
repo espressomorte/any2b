@@ -4,6 +4,7 @@ import android.content.Intent
 import android.os.Bundle
 import android.os.SystemClock
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
@@ -34,9 +35,34 @@ class TmdbLibraryActivity : ComponentActivity() {
                     onOpen = { title ->
                         startActivity(TvNavigation.details(this, title, torrentsOnly = true))
                     },
+                    onOpenSpecialListTitle = { title ->
+                        startActivity(TvNavigation.details(this, title, torrentsOnly = true).apply {
+                            putExtra(TmdbDetailsActivity.EXTRA_SPECIAL_AUTO_PLAY, true)
+                            putExtra(TmdbDetailsActivity.EXTRA_PLAYBACK_ONLY, true)
+                        })
+                    },
+                    onOpenFavorite = { title ->
+                        startActivity(TvNavigation.details(this, title, torrentsOnly = true).apply {
+                            putExtra(TmdbDetailsActivity.EXTRA_SPECIAL_AUTO_PLAY, true)
+                            putExtra(TmdbDetailsActivity.EXTRA_PLAYBACK_ONLY, true)
+                        })
+                    },
+                    onToggleFavorite = { title ->
+                        val added = viewModel.toggleFavorite(title)
+                        Toast.makeText(this,
+                            if (added) "Додано в обране" else "Вилучено з обраного",
+                            Toast.LENGTH_SHORT).show()
+                    },
                     onRetry = viewModel::refreshPopular,
+                    onLoadWatchlistSimilar = viewModel::loadWatchlistSimilar,
                     onRetryTolokaRss = viewModel::refreshTolokaRss,
                     onLoadTolokaRss = viewModel::loadTolokaRssIfNeeded,
+                    onRetryWhatsPopular = { viewModel.refreshWhatsPopular(forceRefresh = true) },
+                    onResolveWhatsPopularBackdrop = viewModel::resolveWhatsPopularBackdrop,
+                    onRetryMdblistPopular = {
+                        viewModel.refreshMdblistPopularMovies(forceRefresh = true)
+                    },
+                    onResolveMdblistPopularCard = viewModel::resolveMdblistPopularCard,
                     onMore = { category ->
                         startActivity(Intent(this, TmdbListActivity::class.java).apply {
                             putExtra(TmdbListActivity.EXTRA_CATEGORY, category)

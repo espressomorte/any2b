@@ -163,11 +163,11 @@ fun TmdbDetailsScreen(
 }
 
 @Composable
-internal fun TmdbDetailsPreparingScreen(message: String = "Підготовка оформлення…") {
-    Box(Modifier.fillMaxSize().background(AppColors.BackgroundDark),
-        contentAlignment = Alignment.Center) {
-        Text(message, color = AppColors.AccentLight)
-    }
+internal fun TmdbDetailsPreparingScreen(
+    message: String = "Підготовка оформлення…",
+    logoUrl: String? = null,
+) {
+    BlackLoadingScreen(message, logoUrl)
 }
 
 @OptIn(ExperimentalTvMaterial3Api::class)

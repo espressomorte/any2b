@@ -7,6 +7,7 @@ import java.time.format.DateTimeFormatter
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -49,6 +50,7 @@ class DirectTolokaClient(
         .callTimeout(20, TimeUnit.SECONDS).followRedirects(false).build()
     private var sessionUntil = 0L
     private var cooldownUntil = 0L
+    private var lastTrackerSearchAt = 0L
     private val downloads = mutableMapOf<String, Pair<HttpUrl, Long>>()
     private val searches = mutableMapOf<String, Pair<TolokaSearch, Long>>()
 
@@ -90,9 +92,13 @@ class DirectTolokaClient(
             return@withLock it.first.copy(query = trimmed, cached = true, sessionReused = null)
         }
         val reused = ensureSession(username, password)
+        val waitMs = (lastTrackerSearchAt + MIN_TRACKER_SEARCH_INTERVAL_MS -
+            System.currentTimeMillis()).coerceAtLeast(0L)
+        if (waitMs > 0L) delay(waitMs)
         val url = origin.newBuilder().addPathSegment("tracker.php")
             .addQueryParameter("nm", trimmed).addQueryParameter("o", "1")
             .addQueryParameter("s", "2").build()
+        lastTrackerSearchAt = System.currentTimeMillis()
         val html = page(request(url))
         if (!isAuthenticated(html)) {
             sessionUntil = 0
@@ -209,6 +215,11 @@ class DirectTolokaClient(
             if (body != null && response.code in listOf(301, 302, 303)) body = null
         }
         throw TolokaFailure.InvalidResponse()
+    }
+
+    private companion object {
+        /** Shared across manual and background searches for this process-wide client. */
+        const val MIN_TRACKER_SEARCH_INTERVAL_MS = 2_000L
     }
 }
 

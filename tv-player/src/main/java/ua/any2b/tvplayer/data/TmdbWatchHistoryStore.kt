@@ -111,7 +111,7 @@ class TmdbWatchHistoryStore(context: Context) {
             put("updatedAt", System.currentTimeMillis())
         })
         prefs.edit().putString("episode_progress", values.toString()).apply()
-        if (title.type == TmdbMediaType.TV && progress >= 0.98f) {
+        if (title.type == TmdbMediaType.TV && progress > WATCHED_EPISODE_THRESHOLD) {
             val watchedKey = "watched_${title.id}_$seasonNumber"
             val watched = prefs.getStringSet(watchedKey, emptySet()).orEmpty() + episodeNumber.toString()
             prefs.edit().putStringSet(watchedKey, watched).apply()
@@ -133,7 +133,13 @@ class TmdbWatchHistoryStore(context: Context) {
     }
 
     fun watchedEpisodes(id: Int, season: Int): Set<Int> = synchronized(lock) {
-        prefs.getStringSet("watched_${id}_$season", emptySet()).orEmpty().mapNotNull(String::toIntOrNull).toSet()
+        val explicitlyWatched = prefs.getStringSet("watched_${id}_$season", emptySet())
+            .orEmpty().mapNotNull(String::toIntOrNull).toSet()
+        val latestProgress = episodeProgress(TmdbMediaType.TV, id)
+        if (latestProgress?.seasonNumber == season &&
+            latestProgress.progress > WATCHED_EPISODE_THRESHOLD)
+            explicitlyWatched + latestProgress.episodeNumber
+        else explicitlyWatched
     }
 
     fun episodeProgress(type: TmdbMediaType, id: Int): TmdbEpisodeProgress? = synchronized(lock) {
@@ -367,6 +373,7 @@ class TmdbWatchHistoryStore(context: Context) {
 
     private companion object {
         const val MOVIE_FINISH_GUARD_MS = 30_000L
+        const val WATCHED_EPISODE_THRESHOLD = 0.95f
         val lock = Any()
         var lastProgressLogAt = 0L
     }

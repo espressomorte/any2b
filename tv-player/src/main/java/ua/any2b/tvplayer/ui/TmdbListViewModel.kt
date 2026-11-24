@@ -56,18 +56,24 @@ class TmdbListViewModel(application: Application) : AndroidViewModel(application
         val normalized = category.takeIf {
             it == "tv" || it == "movie" || it == "history" ||
                 it == "animation_tv" || it == "animation_movie" ||
-                it == "mal_top" || it == "recommendations" || it in TOLOKA_LISTS
+                it == "mal_top" || it == "recommendations" || it == "whats_popular" ||
+                it in TOLOKA_LISTS
         } ?: "favorites"
         if (_state.value.category == normalized && (_state.value.page > 0 || _state.value.loading)) return
         loadJob?.cancel()
         val initial = TmdbListState(category = normalized,
             sort = if (normalized == "mal_top") TmdbListSort.RATING else TmdbListSort.POPULARITY,
             minimumRating = preferences.getFloat("mal_top_minimum_rating", 0f).toDouble())
-        _state.value = initial.copy(titles = when {
+        val cached = when {
+            normalized == "whats_popular" -> rowCache.read("whats_popular")
             normalized in setOf("favorites", "history") -> emptyList()
             normalized in TOLOKA_LISTS -> tolokaTitles(tolokaRss.cached(), normalized)
             else -> rowCache.read(cacheKey(initial))
-        })
+        }
+        _state.value = initial.copy(titles = cached,
+            page = if (normalized == "whats_popular") 1 else 0,
+            hasMore = false)
+        if (normalized == "whats_popular") return
         if (normalized == "favorites" || normalized == "history") refreshPersonalList() else loadMore()
     }
 
@@ -147,7 +153,7 @@ class TmdbListViewModel(application: Application) : AndroidViewModel(application
             }
             return
         }
-        if (current.category == "favorites" || current.category == "history" ||
+        if (current.category in SPECIAL_LISTS ||
             current.loading || current.page > 0 && !current.hasMore) return
         val type = if (current.category == "tv" || current.category == "animation_tv")
             TmdbMediaType.TV else TmdbMediaType.MOVIE
@@ -205,7 +211,7 @@ class TmdbListViewModel(application: Application) : AndroidViewModel(application
     }
 
     private companion object {
-        val SPECIAL_LISTS = setOf("favorites", "history", "recommendations", "upcoming")
+        val SPECIAL_LISTS = setOf("favorites", "history", "recommendations", "upcoming", "whats_popular")
         val TOLOKA_LISTS = setOf("toloka_animation", "toloka_video")
     }
 

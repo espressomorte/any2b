@@ -20,23 +20,47 @@
         app:use_controller="false"
         app:resize_mode="fit" />
 
-    <FrameLayout
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:importantForAccessibility="no"
+    <androidx.constraintlayout.widget.Guideline
+        android:id="@+id/statusBottomGuide"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        app:layout_constraintGuide_percent="0.85" />
+
+    <ImageView
+        android:id="@+id/playerLoadingLogo"
+        android:layout_width="480dp"
+        android:layout_height="132dp"
+        android:contentDescription="Логотип тайтлу"
+        android:scaleType="fitCenter"
+        android:visibility="gone"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent">
+        app:layout_constraintTop_toTopOf="parent" />
 
-        <ImageView
-            android:id="@+id/playerLoadingLogo"
-            android:layout_width="300dp"
-            android:layout_height="86dp"
-            android:layout_gravity="center"
-            android:contentDescription="Логотип тайтлу"
-            android:scaleType="fitCenter"
-            android:visibility="gone" />
+    <FrameLayout
+        android:id="@+id/statusOverlay"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:importantForAccessibility="no"
+        android:visibility="visible"
+        app:layout_constraintBottom_toTopOf="@id/statusBottomGuide"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent">
+
+        <TextView
+            android:id="@+id/tvStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:maxWidth="1100dp"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:text="Підключення до відеопотоку…"
+            android:fontFamily="@font/geist_mono_regular"
+            android:textColor="#FFFFFF"
+            android:textSize="8sp" />
 
     </FrameLayout>
 
@@ -74,53 +98,5 @@
         app:layout_constraintEnd_toEndOf="parent"
         android:layout_marginEnd="36dp"
         android:layout_marginBottom="20dp" />
-
-    <!-- Оверлей зі статусом завантаження / кнопкою наступної серії -->
-    <LinearLayout
-        android:id="@+id/statusOverlay"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="16dp"
-        android:background="#88000000"
-        android:visibility="visible"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        android:layout_marginStart="32dp"
-        android:layout_marginBottom="32dp">
-
-        <TextView
-            android:id="@+id/tvStatus"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Завантаження потоку…"
-            android:fontFamily="@font/ibm_plex_sans_regular"
-            android:textColor="#FFFFFF"
-            android:textSize="14sp" />
-
-        <TextView
-            android:id="@+id/tvUrl"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text=""
-            android:fontFamily="@font/ibm_plex_sans_regular"
-            android:textColor="#AAAAAA"
-            android:textSize="10sp"
-            android:maxWidth="600dp"
-            android:ellipsize="middle"
-            android:singleLine="true" />
-
-        <Button
-            android:id="@+id/btnNextEpisode"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="▶ Наступна серія"
-            android:fontFamily="@font/ibm_plex_sans_regular"
-            android:textColor="#21005D"
-            android:backgroundTint="#D0BCFF"
-            android:visibility="gone"
-            android:layout_marginTop="8dp" />
-
-    </LinearLayout>
 
 </androidx.constraintlayout.widget.ConstraintLayout>

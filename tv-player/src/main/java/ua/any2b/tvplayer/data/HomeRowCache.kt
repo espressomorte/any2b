@@ -11,11 +11,24 @@ import java.io.File
 class HomeRowCache(context: Context) {
     private val file = File(context.applicationContext.filesDir, "home-rows.json")
 
+    fun isFresh(key: String, maxAgeMs: Long, now: Long = System.currentTimeMillis()): Boolean =
+        synchronized(lock) {
+            if (maxAgeMs <= 0L) return@synchronized false
+            val updatedAt = runCatching {
+                JSONObject(file.readText()).optLong("${key}_updated_at", 0L)
+            }.getOrDefault(0L)
+            updatedAt > 0L && now >= updatedAt && now - updatedAt < maxAgeMs
+        }
+
     fun read(key: String): List<TmdbTitle> = synchronized(lock) {
         runCatching {
             val rows = JSONObject(file.readText()).optJSONArray(key) ?: return@synchronized emptyList()
             (0 until rows.length()).mapNotNull { rows.optJSONObject(it)?.let(::decode) }
         }.getOrDefault(emptyList())
+    }
+
+    fun containsRow(key: String): Boolean = synchronized(lock) {
+        runCatching { JSONObject(file.readText()).optJSONArray(key) != null }.getOrDefault(false)
     }
 
     /** Decode several cached rows from one disk read during home initialization. */
@@ -29,11 +42,22 @@ class HomeRowCache(context: Context) {
         }.getOrElse { keys.associateWith { emptyList() } }
     }
 
-    fun save(key: String, titles: List<TmdbTitle>) = synchronized(lock) {
+    fun save(key: String, titles: List<TmdbTitle>, markFresh: Boolean = true) = synchronized(lock) {
         if (titles.isEmpty()) return@synchronized
         val root = runCatching { JSONObject(file.readText()) }.getOrElse { JSONObject() }
         root.put(key, JSONArray().apply { titles.forEach { put(encode(it)) } })
-        root.put("${key}_updated_at", System.currentTimeMillis())
+        if (markFresh) root.put("${key}_updated_at", System.currentTimeMillis())
+        val temporary = File(file.parentFile, "${file.name}.tmp")
+        temporary.writeText(root.toString())
+        if (!temporary.renameTo(file)) {
+            file.writeText(temporary.readText())
+            temporary.delete()
+        }
+    }
+
+    fun saveEmpty(key: String) = synchronized(lock) {
+        val root = runCatching { JSONObject(file.readText()) }.getOrElse { JSONObject() }
+        root.put(key, JSONArray()).put("${key}_updated_at", System.currentTimeMillis())
         val temporary = File(file.parentFile, "${file.name}.tmp")
         temporary.writeText(root.toString())
         if (!temporary.renameTo(file)) {
@@ -57,6 +81,8 @@ class HomeRowCache(context: Context) {
         .put("matchedSeasonNumber", title.matchedSeasonNumber)
         .put("matchedAniListId", title.matchedAniListId)
         .put("popularity", title.popularity).put("airDate", title.airDate)
+        .put("voteCount", title.voteCount)
+        .put("backdropEnglish", title.backdropEnglish)
 
     private fun decode(row: JSONObject): TmdbTitle? {
         val id = row.optInt("id").takeIf { it > 0 } ?: return null
@@ -88,6 +114,8 @@ class HomeRowCache(context: Context) {
             backdropUrl = optional("backdropUrl"),
             popularity = row.optDouble("popularity", Double.NaN).takeIf(Double::isFinite),
             airDate = optional("airDate"),
+            voteCount = row.optInt("voteCount").takeIf { it > 0 },
+            backdropEnglish = row.optBoolean("backdropEnglish"),
             matchedAniListId = row.optInt("matchedAniListId")
                 .takeIf { row.has("matchedAniListId") && !row.isNull("matchedAniListId") && it > 0 })
     }

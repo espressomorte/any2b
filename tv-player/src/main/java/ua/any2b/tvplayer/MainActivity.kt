@@ -2,6 +2,7 @@ package ua.any2b.tvplayer
 
 import android.os.Bundle
 import android.content.Intent
+import android.widget.Toast
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -57,8 +58,15 @@ class MainActivity : ComponentActivity() {
                     onOpen = { title ->
                         startActivity(TvNavigation.details(this, title))
                     },
+                    onOpenSpecialListTitle = ::openSpecialListTitle,
                     onOpenFavorite = { title ->
-                        startActivity(TvNavigation.details(this, title))
+                        openSpecialListTitle(title)
+                    },
+                    onToggleFavorite = { title ->
+                        val added = viewModel.toggleFavorite(title)
+                        Toast.makeText(this,
+                            if (added) "Додано в обране" else "Вилучено з обраного",
+                            Toast.LENGTH_SHORT).show()
                     },
                     onRetry = viewModel::refreshPopular,
                     onMore = { category ->
@@ -112,6 +120,7 @@ class MainActivity : ComponentActivity() {
                             includeLiveCast = 16 !in title.genreIds &&
                                 (title.type == TmdbMediaType.MOVIE || title.genreIds.isNotEmpty()))
                     },
+                    onLoadWatchlistSimilar = viewModel::loadWatchlistSimilar,
                     onRetryPeople = { title ->
                         peopleViewModel.loadPeople(title.type, title.id,
                             includeLiveCast = 16 !in title.genreIds &&
@@ -154,6 +163,17 @@ class MainActivity : ComponentActivity() {
             // Avoid repeating synchronous preference parsing before the first frame.
             hasResumedOnce = true
         }
+    }
+
+    private fun openSpecialListTitle(title: TmdbTitle) {
+        val season = TmdbWatchHistoryStore(this).episodeProgress(title.type, title.id)?.seasonNumber
+        val saved = TmdbWatchHistoryStore(this).playbackSelection(title.type, title.id, season)
+        startActivity(TvNavigation.details(this, title, torrentsOnly = true).apply {
+            putExtra(TmdbDetailsActivity.EXTRA_SPECIAL_AUTO_PLAY, true)
+            putExtra(TmdbDetailsActivity.EXTRA_PLAYBACK_ONLY, true)
+            if (saved?.source == TmdbPlaybackSelection.Source.TORRENT)
+                saved.topicId?.let { putExtra(TmdbDetailsActivity.EXTRA_AUTO_PLAY_TORRENT_TOPIC, it) }
+        })
     }
 
     private fun openWatchlistPlayback(title: TmdbTitle, episode: TmdbEpisode?) {

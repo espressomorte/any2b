@@ -56,6 +56,8 @@ data class TmdbTitle(
     val matchedAniListId: Int? = null,
     /** Franchise season number from MAL/AniList; distinct from TMDB's season number. */
     val matchedAnimeSeasonNumber: Int? = null,
+    val voteCount: Int? = null,
+    val backdropEnglish: Boolean = false,
 ) {
     fun searchNames(query: String): List<String> {
         val original = originalTitle?.takeIf { originalLanguage != "en" && originalLanguage != "uk" }
@@ -257,10 +259,91 @@ class TmdbClient(
             excludedGenreIds = excludedGenreIds).titles
 
     suspend fun trendingTv(token: String, window: String = "week", page: Int = 1): List<TmdbTitle> {
+        return trendingPage(TmdbMediaType.TV, token, window, page).titles
+    }
+
+    suspend fun trendingPage(type: TmdbMediaType, token: String, window: String = "week",
+        page: Int = 1, language: String = "en-US"): TmdbPage {
         require(window == "day" || window == "week")
         require(page in 1..500)
-        return parseList(request(listOf("trending", "tv", window), token, "uk-UA",
-            "page" to page.toString()), TmdbMediaType.TV, "uk-UA")
+        require(language in setOf("en-US", "uk-UA"))
+        val json = request(listOf("trending", type.path, window), token, language,
+            "page" to page.toString())
+        return TmdbPage(parseList(json, type, language), page,
+            json.optInt("total_pages", page).coerceIn(page, 500))
+    }
+
+    suspend fun providerPage(type: TmdbMediaType, token: String, monetization: String,
+        page: Int, region: String = "UA", language: String = "en-US"): TmdbPage {
+        require(monetization in setOf("flatrate", "rent"))
+        require(page in 1..500 && region.matches(Regex("[A-Z]{2}")))
+        require(language in setOf("en-US", "uk-UA"))
+        val json = request(listOf("discover", type.path), token, language,
+            "page" to page.toString(), "sort_by" to "popularity.desc",
+            "watch_region" to region, "with_watch_monetization_types" to monetization)
+        return TmdbPage(parseList(json, type, language).filter {
+            it.genreIds.none { genre -> genre in
+                (TmdbGeneralCatalog.excludedGenreIds - TmdbGeneralCatalog.ANIMATION) }
+        }, page, json.optInt("total_pages", page).coerceIn(page, 500))
+    }
+
+    suspend fun onTheAirTvPage(token: String, page: Int = 1,
+        language: String = "en-US"): TmdbPage {
+        require(page in 1..500)
+        require(language in setOf("en-US", "uk-UA"))
+        val json = request(listOf("tv", "on_the_air"), token, language,
+            "page" to page.toString())
+        return TmdbPage(parseList(json, TmdbMediaType.TV, language).filter {
+            it.genreIds.none { genre -> genre in
+                (TmdbGeneralCatalog.excludedGenreIds - TmdbGeneralCatalog.ANIMATION) }
+        }, page,
+            json.optInt("total_pages", page).coerceIn(page, 500))
+    }
+
+    /** Returns the highest-rated English-language backdrop, if the title has one. */
+    suspend fun englishBackdrop(type: TmdbMediaType, id: Int, token: String): String? {
+        require(id > 0)
+        val json = request(listOf(type.path, id.toString(), "images"), token, "en-US",
+            "include_image_language" to "en,null")
+        val backdrops = json.optJSONArray("backdrops") ?: return null
+        val english = (0 until backdrops.length()).mapNotNull { backdrops.optJSONObject(it) }
+            .filter { it.optString("iso_639_1") == "en" }
+        val chosen = english.maxWithOrNull(compareBy<JSONObject> { it.optDouble("vote_average") }
+            .thenBy { it.optInt("vote_count") }.thenBy { it.optInt("width") }) ?: return null
+        val path = chosen.optionalString("file_path")?.takeIf { it.startsWith("/") }
+            ?: return null
+        return "https://image.tmdb.org/t/p/w1280$path"
+    }
+
+    /** Lightweight localized card metadata with an English-tagged backdrop when available. */
+    suspend fun movieCatalogCard(id: Int, token: String): TmdbTitle {
+        require(id > 0)
+        val json = request(listOf("movie", id.toString()), token, "en-US",
+            "append_to_response" to "images,translations",
+            "include_image_language" to "en,null")
+        val title = json.toTitle(TmdbMediaType.MOVIE, "en-US")
+            ?: throw TmdbFailure.InvalidResponse()
+        val translations = json.optJSONObject("translations")?.optJSONArray("translations")
+        val ukrainianTitle = translations?.let { rows ->
+            (0 until rows.length()).asSequence().mapNotNull { rows.optJSONObject(it) }
+                .firstOrNull { it.optString("iso_639_1") == "uk" }
+                ?.optJSONObject("data")?.optionalString("title")
+        }
+        val backdrops = json.optJSONObject("images")?.optJSONArray("backdrops")
+        val englishBackdrop = backdrops?.let { rows ->
+            (0 until rows.length()).mapNotNull { rows.optJSONObject(it) }
+                .filter { it.optString("iso_639_1") == "en" }
+                .maxWithOrNull(compareBy<JSONObject> { it.optDouble("vote_average") }
+                    .thenBy { it.optInt("vote_count") }.thenBy { it.optInt("width") })
+                ?.optionalString("file_path")?.takeIf { it.startsWith("/") }
+                ?.let { "https://image.tmdb.org/t/p/w1280$it" }
+        }
+        return title.copy(
+            ukrainianTitle = ukrainianTitle,
+            englishTitle = title.title,
+            backdropUrl = englishBackdrop ?: title.backdropUrl,
+            backdropEnglish = englishBackdrop != null,
+        )
     }
 
     suspend fun onTheAirTv(token: String, page: Int = 1): List<TmdbTitle> {
@@ -325,6 +408,18 @@ class TmdbClient(
         val json = request(listOf(type.path, id.toString(), "recommendations"),
             token, "uk-UA", "page" to "1")
         return parseList(json, type, "uk-UA").filterNot { it.id == id }
+    }
+
+    /** TMDB's title recommendations, used for the More Like This row. */
+    suspend fun similar(type: TmdbMediaType, id: Int, token: String,
+        seedGenreIds: Set<Int> = emptySet()): List<TmdbTitle> {
+        require(id > 0)
+        val json = request(listOf(type.path, id.toString(), "recommendations"),
+            token, "en-US", "page" to "1")
+        return parseList(json, type, "en-US")
+            .filterNot { it.id == id }
+            .filter { candidate -> seedGenreIds.isEmpty() ||
+                (16 in candidate.genreIds) == (16 in seedGenreIds) }
     }
 
     /** Explicit movie franchise membership; unlike recommendations these share a TMDB collection. */
@@ -537,11 +632,20 @@ class TmdbClient(
                 }
             }
         }
-        return people.values.sortedWith(compareBy<TmdbPersonCredit> {
+        val ordered = people.values.sortedWith(compareBy<TmdbPersonCredit> {
             when { TmdbPersonRole.DIRECTOR in it.roles -> 0
                 TmdbPersonRole.WRITER in it.roles -> 1
                 else -> 2 }
         })
+        val creators = ordered.filter { person ->
+            !person.profileUrl.isNullOrBlank() &&
+                person.roles.any { it == TmdbPersonRole.DIRECTOR || it == TmdbPersonRole.WRITER }
+        }.take(5)
+        val cast = ordered.filter { person ->
+            !person.profileUrl.isNullOrBlank() &&
+                person.roles.any { it == TmdbPersonRole.ACTOR || it == TmdbPersonRole.VOICE }
+        }.take(20)
+        return (creators + cast).distinctBy(TmdbPersonCredit::id)
     }
 
     suspend fun personFilmography(personId: Int, token: String): TmdbPersonFilmography {
@@ -755,6 +859,7 @@ private fun JSONObject.toTitle(type: TmdbMediaType, language: String): TmdbTitle
         popularity = optDouble("popularity", Double.NaN)
             .takeIf { it.isFinite() && it >= 0.0 },
         airDate = date,
+        voteCount = optInt("vote_count").takeIf { it > 0 },
     )
 }
 

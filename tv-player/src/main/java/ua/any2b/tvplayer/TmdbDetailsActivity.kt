@@ -84,6 +84,7 @@ class TmdbDetailsActivity : ComponentActivity() {
         const val EXTRA_AUTO_PLAY_ANITUBE_VOICE_NAME = "AUTO_PLAY_ANITUBE_VOICE_NAME"
         const val EXTRA_RETURN_TO_WATCHLIST = "RETURN_TO_WATCHLIST"
         const val EXTRA_PLAYBACK_ONLY = "PLAYBACK_ONLY"
+        const val EXTRA_SPECIAL_AUTO_PLAY = "SPECIAL_AUTO_PLAY"
     }
 
     private val detailsViewModel: TmdbDetailsViewModel by viewModels {
@@ -102,12 +103,20 @@ class TmdbDetailsActivity : ComponentActivity() {
     private val tolokaViewModel: TolokaSearchViewModel by viewModels()
     private val torrServeLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
-    ) { tolokaViewModel.retryTorrServer() }
+    ) { _ ->
+        // Returning from TorrServe, including with Back, must not restart the torrent upload.
+        // The user can explicitly retry from the recovery screen.
+    }
     private val artworkViewModel: FanartArtworkViewModel by viewModels()
     private val torrServerProbe = TorrServerProbe()
     private var openedTopics by mutableStateOf(emptySet<String>())
     private var openedFiles by mutableStateOf(emptySet<Int>())
     private var selectedTopicId: String? = null
+    private var specialAutoStarted = false
+    private var specialCandidates: List<ua.any2b.core.toloka.TolokaHit> = emptyList()
+    private var specialAttempt = 0
+    private var specialTargetSeason = 1
+    private var specialTargetEpisode = 1
     private var tmdbId = -1
     private var tmdbType = ""
     private val playbackScenarioViewModel: PlaybackScenarioViewModel by viewModels()
@@ -142,11 +151,18 @@ class TmdbDetailsActivity : ComponentActivity() {
     }
 
     private val autoPlayEpisode: Int
-        get() = intent.getIntExtra(EXTRA_AUTO_PLAY_EPISODE, -1)
+        get() = intent.getIntExtra(EXTRA_AUTO_PLAY_EPISODE, -1).takeIf { it > 0 }
+            ?: if (intent.getBooleanExtra(EXTRA_SPECIAL_AUTO_PLAY, false) &&
+                (detailsViewModel.state.value as? TmdbDetailsState.Ready)?.details?.title?.type == TmdbMediaType.TV)
+                specialTargetEpisode else -1
     private val autoPlaySeason: Int
-        get() = intent.getIntExtra(EXTRA_TMDB_SEASON, 1).coerceAtLeast(1)
+        get() = intent.getIntExtra(EXTRA_TMDB_SEASON, -1).takeIf { it > 0 }
+            ?: if (intent.getBooleanExtra(EXTRA_SPECIAL_AUTO_PLAY, false)) specialTargetSeason else 1
     private val autoPlaySource: String?
         get() = intent.getStringExtra(EXTRA_AUTO_PLAY_SOURCE)
+            ?: TmdbPlaybackSelection.Source.TORRENT.name.takeIf {
+                intent.getBooleanExtra(EXTRA_SPECIAL_AUTO_PLAY, false) && selectedTopicId != null
+            }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -198,9 +214,17 @@ class TmdbDetailsActivity : ComponentActivity() {
                 "${intent.getIntExtra(EXTRA_AUTO_PLAY_ANITUBE_RELEASE, -1)} " +
                 "voice=${intent.getIntExtra(EXTRA_AUTO_PLAY_ANITUBE_VOICE, 0)}")
         }
-        if (autoPlaySource == TmdbPlaybackSelection.Source.TORRENT.name) {
+        if (autoPlaySource == TmdbPlaybackSelection.Source.TORRENT.name ||
+            intent.getBooleanExtra(EXTRA_SPECIAL_AUTO_PLAY, false)) {
             selectedTopicId = intent.getStringExtra(EXTRA_AUTO_PLAY_TORRENT_TOPIC)
             selectedTopicId?.let(tolokaViewModel::selectSavedTopic)
+        }
+        if (intent.getBooleanExtra(EXTRA_SPECIAL_AUTO_PLAY, false)) {
+            val progress = TmdbWatchHistoryStore(this).episodeProgress(type, id)
+            specialTargetSeason = progress?.seasonNumber?.coerceAtLeast(1) ?: 1
+            specialTargetEpisode = progress?.let {
+                it.episodeNumber + if (it.progress >= 0.95f) 1 else 0
+            }?.coerceAtLeast(1) ?: 1
         }
         val experimental = SettingsManager(this).isExperimentalAppearanceEnabled()
         detailsViewModel.load(type, id, query, preferredTitle, originalLanguage, originalTitle,
@@ -233,7 +257,51 @@ class TmdbDetailsActivity : ComponentActivity() {
                 LaunchedEffect(tolokaState.search) {
                     (tolokaState.search as? ua.any2b.tvplayer.ui.TolokaSearchState.Results)
                         ?.selectedId?.let { selectedTopicId = it }
+                    if (intent.getBooleanExtra(EXTRA_SPECIAL_AUTO_PLAY, false) && !specialAutoStarted) {
+                        val results = tolokaState.search as? TolokaSearchState.Results
+                        if (results != null) {
+                            val candidates = rankSpecialCandidates(results.hits + results.weakHits,
+                                readyDetails?.title, specialTargetSeason)
+                            specialCandidates = candidates
+                            specialAttempt = 0
+                            val chosen = candidates.firstOrNull()
+                            if (chosen != null) {
+                                specialAutoStarted = true
+                                tolokaViewModel.selectHit(chosen.id)
+                                val metadata = TolokaReleaseMetadataParser.parse(chosen.title)
+                                val detailsLine = (metadata.qualityTags + metadata.audioTags +
+                                    metadata.subtitleTags.map { "$it субтитри" })
+                                    .distinct().joinToString(" · ")
+                                tolokaViewModel.reportPlaybackStatus(
+                                    "Роздача: ${detailsLine.ifBlank { "перевіряємо доріжки" }}")
+                            } else if (readyDetails != null) {
+                                specialAutoStarted = true
+                                openDetailsFallback(readyDetails.title)
+                            }
+                        } else if (tolokaState.search is TolokaSearchState.Error && readyDetails != null) {
+                            specialAutoStarted = true
+                            openDetailsFallback(readyDetails.title)
+                        }
+                    }
                     refreshPlaybackMarks()
+                }
+                LaunchedEffect(tolokaState.transfer, selectedTopicId) {
+                    val transferError = tolokaState.transfer as? TolokaTransferState.Error
+                    if (!intent.getBooleanExtra(EXTRA_SPECIAL_AUTO_PLAY, false) ||
+                        transferError == null || transferError.torrServerUnavailable)
+                        return@LaunchedEffect
+                    val next = specialCandidates.getOrNull(specialAttempt + 1)
+                    if (next != null && specialAttempt < 2) {
+                        specialAttempt++
+                        specialAutoPlaybackLaunched = false
+                        tolokaViewModel.selectHit(next.id)
+                        val metadata = TolokaReleaseMetadataParser.parse(next.title)
+                        tolokaViewModel.reportPlaybackStatus("Спроба ${specialAttempt + 1}/3 · " +
+                            (metadata.qualityTags + metadata.audioTags).distinct().joinToString(" · "))
+                    } else {
+                        val title = (detailsState as? TmdbDetailsState.Ready)?.details?.title
+                        if (title != null) openDetailsFallback(title)
+                    }
                 }
                 LaunchedEffect(detailsState, intent.getBooleanExtra(EXTRA_PLAYBACK_ONLY, false)) {
                     if (intent.getBooleanExtra(EXTRA_PLAYBACK_ONLY, false) &&
@@ -253,6 +321,24 @@ class TmdbDetailsActivity : ComponentActivity() {
                     val details = readyDetails ?: return@LaunchedEffect
                     val files = (tolokaState.transfer as? TolokaTransferState.Files)
                         ?.torrent?.videoFiles ?: return@LaunchedEffect
+                    if (intent.getBooleanExtra(EXTRA_SPECIAL_AUTO_PLAY, false)) {
+                        val targetFile = if (details.title.type == TmdbMediaType.MOVIE) {
+                            files.filterNot { file ->
+                                val name = file.name.lowercase()
+                                listOf("sample", "trailer", "bonus").any(name::contains)
+                            }.filter { it.length >= 0L }
+                                .maxByOrNull { it.length }?.id
+                        } else tolokaViewModel.playbackFileId(specialTargetSeason, specialTargetEpisode)
+                            ?: files.firstOrNull { file ->
+                                val parsed = TolokaReleaseMetadataParser.parse(file.name)
+                                parsed.season == specialTargetSeason && parsed.episodeStart == specialTargetEpisode
+                            }?.id
+                        if (targetFile != null && !specialAutoPlaybackLaunched) {
+                            specialAutoPlaybackLaunched = true
+                            openFile(targetFile)
+                        } else if (targetFile == null) openDetailsFallback(details.title)
+                        return@LaunchedEffect
+                    }
                     playbackScenarioId?.let {
                         playbackCoordinator.dispatch(PlaybackScenarioEvent.TorrentFilesReady(it))
                     }
@@ -331,6 +417,7 @@ class TmdbDetailsActivity : ComponentActivity() {
                     }
                     if (source == TmdbPlaybackSelection.Source.TORRENT &&
                         intent.getBooleanExtra(EXTRA_PLAYBACK_ONLY, false) &&
+                        !intent.getBooleanExtra(EXTRA_SPECIAL_AUTO_PLAY, false) &&
                         tolokaState.transfer is TolokaTransferState.Error &&
                         !(tolokaState.transfer as TolokaTransferState.Error).torrServerUnavailable) {
                         failWatchlistPlayback((tolokaState.transfer as TolokaTransferState.Error).message)
@@ -391,11 +478,13 @@ class TmdbDetailsActivity : ComponentActivity() {
                 if (intent.getBooleanExtra(EXTRA_PLAYBACK_ONLY, false)) {
                     WatchlistPlaybackScreen(
                         transfer = tolokaState.transfer,
+                        playbackStatus = tolokaState.playbackStatus,
+                        logoUrl = readyDetails?.logoUrl,
                         onRetryTorrServer = tolokaViewModel::retryTorrServer,
                         onOpenTorrServe = ::openTorrServe,
                     )
                 } else if (waitForArtwork) {
-                    TmdbDetailsPreparingScreen()
+                    TmdbDetailsPreparingScreen(logoUrl = readyDetails?.logoUrl)
                 } else {
                 AnimatedVisibility(visible = true, enter = fadeIn(tween(220))) {
                 TmdbDetailsScreen(
@@ -573,7 +662,69 @@ class TmdbDetailsActivity : ComponentActivity() {
         }
         Log.w("WatchlistPlayback", "Playback resolver failed tmdb=$tmdbType:$tmdbId: $message")
         Toast.makeText(this, effect?.message ?: message, Toast.LENGTH_LONG).show()
-        if (intent.getBooleanExtra(EXTRA_PLAYBACK_ONLY, false)) finish()
+        if (intent.getBooleanExtra(EXTRA_SPECIAL_AUTO_PLAY, false)) {
+            val title = (detailsViewModel.state.value as? TmdbDetailsState.Ready)?.details?.title
+            if (title != null) openDetailsFallback(title) else finish()
+        } else if (intent.getBooleanExtra(EXTRA_PLAYBACK_ONLY, false)) finish()
+    }
+
+    private var specialAutoPlaybackLaunched = false
+
+    private fun openDetailsFallback(title: ua.any2b.core.tmdb.TmdbTitle) {
+        if (isFinishing || isDestroyed) return
+        startActivity(TvNavigation.details(this, title, torrentsOnly = true))
+        finish()
+    }
+
+    private fun rankSpecialCandidates(
+        hits: List<ua.any2b.core.toloka.TolokaHit>,
+        title: ua.any2b.core.tmdb.TmdbTitle?,
+        season: Int,
+    ): List<ua.any2b.core.toloka.TolokaHit> {
+        val year = title?.year
+        return hits.distinctBy { it.id }.mapNotNull { hit ->
+            val seeds = hit.seeders ?: 0
+            if (seeds <= 0) return@mapNotNull null
+            val metadata = TolokaReleaseMetadataParser.parse(hit.title)
+            val releaseSeason = metadata.season
+            if (metadata.hasConflictingMetadata || Regex("(?i)\\b(?:3d|iso|bdmv)\\b")
+                    .containsMatchIn(hit.title) || Regex("(?i)(^|[ ._\\[(])(?:cam|hdcam|ts|telesync|tc)(?:$|[ ._\\])])")
+                    .containsMatchIn(hit.title)) return@mapNotNull null
+            if (year != null && metadata.yearRanges.isNotEmpty() &&
+                metadata.yearRanges.none { year in (it.first - 1)..(it.last + 1) }) return@mapNotNull null
+            if (title?.type == TmdbMediaType.TV && releaseSeason != null &&
+                season !in releaseSeason..(metadata.seasonEnd ?: releaseSeason)) return@mapNotNull null
+            if (title?.type == TmdbMediaType.TV && releaseSeason == null &&
+                !Regex("(?i)(?:\\bS0?${season}\\b|season[ ._-]*0?${season}\\b|\\bcomplete\\b)")
+                    .containsMatchIn(hit.title)) return@mapNotNull null
+            val size = Regex("(?i)([0-9]+(?:[.,][0-9]+)?)\\s*(GB|GiB|MB|MiB)")
+                .find(hit.sizeText)?.let { match ->
+                    match.groupValues[1].replace(',', '.').toDoubleOrNull()?.let { amount ->
+                        amount * if (match.groupValues[2].uppercase() in setOf("MB", "MIB")) 1.0 / 1024 else 1.0
+                    }
+                } ?: 0.0
+            val text = hit.title.lowercase()
+            val audio = when {
+                metadata.audioTags.any { it.contains("Ukr", true) } -> 100
+                metadata.subtitleTags.any { it.contains("Ukr", true) } -> 60
+                else -> 20
+            }
+            val videoQuality = when {
+                text.contains("remux") && size > 45 -> 15
+                (text.contains("2160p") || text.contains("4k")) && text.contains("web") && size <= 35 -> 40
+                text.contains("720p") -> 15
+                text.contains("1080p") && (title?.type == TmdbMediaType.TV || size in 3.0..18.0) &&
+                    listOf("web-dl", "webdl", "bdrip", "bluray").any(text::contains) -> 50
+                else -> 0
+            }
+            val source = when {
+                listOf("web-dl", "webdl", "bdrip", "bluray").any(text::contains) -> 8
+                listOf("hdtvrip", "dvdrip").any(text::contains) -> 0
+                else -> 3
+            }
+            val score = audio + videoQuality + source + minOf(seeds, 50) * 0.5
+            hit to score
+        }.sortedByDescending { it.second }.map { it.first }
     }
 
     private fun openTorrServe() {

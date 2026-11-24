@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.tv.material3.*
 import ua.any2b.tvplayer.data.HomeSectionSetting
+import ua.any2b.tvplayer.data.PAGE_TMDB
 
 @Composable
 internal fun AppearanceMenu(
@@ -443,6 +444,18 @@ internal fun HomeSectionsMenu(
                 Spacer(Modifier.height(8.dp))
 
                 sections.forEachIndexed { index, section ->
+                    if (index > 0 && sections[index - 1].page != section.page) {
+                        Spacer(Modifier.height(8.dp))
+                        Box(Modifier.fillMaxWidth().height(1.dp)
+                            .background(BiosSettingsTheme.BorderColor))
+                        Text(
+                            text = if (section.page == PAGE_TMDB) "TMDB-СТОРІНКА" else "ГОЛОВНА З WATCHLIST",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = IbmPlexMono,
+                            color = BiosSettingsTheme.TextNormal,
+                            modifier = Modifier.padding(vertical = 4.dp),
+                        )
+                    }
                     key(section.id) {
                         var isFocused by remember { mutableStateOf(false) }
                         val bg = if (isFocused) BiosSettingsTheme.FocusBg else Color.Transparent

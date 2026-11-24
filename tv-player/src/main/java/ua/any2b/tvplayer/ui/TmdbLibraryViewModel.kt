@@ -6,6 +6,9 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -15,7 +18,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import java.util.concurrent.ConcurrentHashMap
 import ua.any2b.core.tmdb.TmdbMediaType
+import ua.any2b.core.tmdb.TmdbPage
 import ua.any2b.core.tmdb.TmdbFailure
 import ua.any2b.core.tmdb.TmdbTitle
 import ua.any2b.core.tmdb.TmdbEpisode
@@ -27,6 +32,10 @@ import ua.any2b.core.toloka.TorrServerClient
 import ua.any2b.core.toloka.TorrServerFailure
 import ua.any2b.core.toloka.TolokaReleaseMetadataParser
 import ua.any2b.core.toloka.TolokaFailure
+import ua.any2b.core.toloka.TolokaHit
+import ua.any2b.core.toloka.TolokaTmdbRanker
+import ua.any2b.tvplayer.data.AnitubeResolver
+import ua.any2b.tvplayer.data.AniListAvailability
 import ua.any2b.tvplayer.data.AniListTmdbCatalog
 import ua.any2b.tvplayer.data.AniListLocalDataMigrator
 import ua.any2b.tvplayer.data.TmdbFavoritesStore
@@ -39,6 +48,8 @@ import ua.any2b.tvplayer.data.AniTubeVoiceOption
 import ua.any2b.tvplayer.data.MalTmdbCatalog
 import ua.any2b.tvplayer.data.HomeSectionSetting
 import ua.any2b.tvplayer.data.HomeRowCache
+import ua.any2b.tvplayer.data.HomeAvailability
+import ua.any2b.tvplayer.data.HomeAvailabilityCache
 import ua.any2b.tvplayer.data.SettingsManager
 import ua.any2b.tvplayer.data.TorrServerAuthStore
 import ua.any2b.tvplayer.data.TolokaConnections
@@ -46,6 +57,10 @@ import ua.any2b.tvplayer.data.tmdbHomeRecommendations
 import ua.any2b.tvplayer.data.workerTmdbConnection
 import ua.any2b.tvplayer.data.TolokaRssTmdbCatalog
 import ua.any2b.tvplayer.data.TolokaRssTmdbRows
+import ua.any2b.tvplayer.data.TolokaTmdbMappingStore
+import ua.any2b.tvplayer.data.WhatsPopularComposer
+import ua.any2b.tvplayer.data.RankedWhatsPopular
+import ua.any2b.tvplayer.data.MdblistPopularMoviesCatalog
 
 sealed interface TmdbPopularState {
     data object Loading : TmdbPopularState
@@ -73,6 +88,8 @@ sealed interface TolokaRssState {
 
 data class TmdbLibraryState(
     val watchlist: List<TmdbWatchlistHomeItem> = emptyList(),
+    val similarByWatchlistTitle: Map<String, List<TmdbTitle>> = emptyMap(),
+    val similarLoadingKeys: Set<String> = emptySet(),
     val history: List<TmdbTitle> = emptyList(),
     val favorites: List<TmdbTitle> = emptyList(),
     val recommendations: List<TmdbTitle> = emptyList(),
@@ -82,6 +99,8 @@ data class TmdbLibraryState(
     val malTop: MalTopState = MalTopState.Loading,
     val trending: AniListHomeState = AniListHomeState.Loading,
     val popularSeason: AniListHomeState = AniListHomeState.Loading,
+    val whatsPopular: TmdbPopularState = TmdbPopularState.Loading,
+    val mdblistPopularMovies: TmdbPopularState = TmdbPopularState.Loading,
     val tolokaReleases: TolokaRssState = TolokaRssState.Loading,
     val initialHomeLoading: Boolean = false,
 )
@@ -130,6 +149,8 @@ class TmdbLibraryViewModel(application: Application,
     private val torrServer = TorrServerClient()
     private val tolokaRss = TolokaRssTmdbCatalog(application)
     private val homeRows = HomeRowCache(application)
+    private val mdblistPopularCatalog = MdblistPopularMoviesCatalog()
+    private val homeAvailability = HomeAvailabilityCache(application)
     private val _state = MutableStateFlow(TmdbLibraryState(
         initialHomeLoading = animationOnly))
     val state: StateFlow<TmdbLibraryState> = _state
@@ -145,8 +166,26 @@ class TmdbLibraryViewModel(application: Application,
     private var lastTolokaRefreshAtMs = 0L
     private val popularJobs = mutableMapOf<TmdbMediaType, Job>()
     private var malTopJob: Job? = null
+    private var whatsPopularJob: Job? = null
+    private var mdblistPopularJob: Job? = null
+    @Volatile private var prioritizingWhatsPopularChecks = false
     private val homeNetworkPermits = Semaphore(2)
     private val stillCachePermits = Semaphore(1)
+    private val availabilityPermits = GLOBAL_AVAILABILITY_PERMITS
+    private val availabilityInFlight = GLOBAL_AVAILABILITY_IN_FLIGHT
+    private val availabilityLock = Any()
+    private val availabilityAttempted = mutableSetOf<String>()
+    private val popularBackdropInFlight = ConcurrentHashMap.newKeySet<String>()
+    private val similarInFlight = ConcurrentHashMap.newKeySet<String>()
+    private val mdblistCardInFlight = ConcurrentHashMap.newKeySet<String>()
+    private val mdblistCardResolved = ConcurrentHashMap.newKeySet<String>()
+    private val pendingAvailability = linkedMapOf<String, HomeAvailability>()
+    private var availabilityFlushJob: Job? = null
+    private val availabilityChecksRemaining = mutableMapOf(
+        AVAILABILITY_LANE_WHATS_POPULAR to AVAILABILITY_CHECKS_PER_LIST,
+        AVAILABILITY_LANE_MDBLIST to AVAILABILITY_CHECKS_PER_LIST,
+        AVAILABILITY_LANE_HOME to 4,
+    )
     // Network rows must never keep the watchlist behind the initial loading screen.
     private val initialSectionsPending = mutableSetOf("personal_lists")
 
@@ -158,6 +197,18 @@ class TmdbLibraryViewModel(application: Application,
             delay(200L)
             startHomeRefreshes()
         }
+    }
+
+    override fun onCleared() {
+        availabilityFlushJob?.cancel()
+        val pending = synchronized(availabilityLock) {
+            pendingAvailability.toMap().also { pendingAvailability.clear() }
+        }
+        if (pending.isNotEmpty()) {
+            homeAvailability.saveBatch(pending)
+            availabilityInFlight.removeAll(pending.keys)
+        }
+        super.onCleared()
     }
 
     private fun readCachedHomeState(): TmdbLibraryState {
@@ -192,12 +243,17 @@ class TmdbLibraryViewModel(application: Application,
                 selectedVoiceIndex = savedSelection?.voiceIndex ?: 0)
         } else emptyList()
         val cacheKeys = setOf("recommendations", "mal_top", "trending", "popular_season",
+            "whats_popular", "mdblist_popular_movies",
             if (animationOnly) "animation_tv" else "general_tv",
             if (animationOnly) "animation_movie" else "general_movie")
         val cachedRows = homeRows.readRows(cacheKeys)
         fun cachedRow(key: String) = cachedRows[key].orEmpty()
         fun cachedPopular(key: String) = cachedRow(key)
             .takeIf(List<TmdbTitle>::isNotEmpty)?.let(TmdbPopularState::Results)
+            ?: (if (key in setOf("whats_popular", "mdblist_popular_movies") &&
+                homeRows.containsRow(key) && homeRows.isFresh(key, WHATS_POPULAR_CACHE_TTL_MS))
+                TmdbPopularState.Error("Немає тайтлів з активною роздачею Toloka")
+            else null)
             ?: TmdbPopularState.Loading
         fun cachedAnime(key: String) = cachedRow(key)
             .takeIf(List<TmdbTitle>::isNotEmpty)?.let(AniListHomeState::Results)
@@ -208,13 +264,15 @@ class TmdbLibraryViewModel(application: Application,
             history = history.all().filter(::visibleInCurrentCatalog),
             favorites = favorites.all().filter(::visibleInCurrentCatalog),
             recommendations = cachedRow("recommendations"),
-            mainSections = if (animationOnly) settings.mainHomeSections() else emptyList(),
+            mainSections = settings.mainHomeSections(),
             tv = cachedPopular(if (animationOnly) "animation_tv" else "general_tv"),
             movies = cachedPopular(if (animationOnly) "animation_movie" else "general_movie"),
             malTop = cachedRow("mal_top").takeIf(List<TmdbTitle>::isNotEmpty)
                 ?.let { MalTopState.Results(it, hasMore = true) } ?: MalTopState.Loading,
             trending = cachedAnime("trending"),
             popularSeason = cachedAnime("popular_season"),
+            whatsPopular = cachedPopular("whats_popular"),
+            mdblistPopularMovies = cachedPopular("mdblist_popular_movies"),
             tolokaReleases = if (toloka.isEmpty) TolokaRssState.Loading
                 else TolokaRssState.Results(toloka),
             initialHomeLoading = false,
@@ -224,20 +282,66 @@ class TmdbLibraryViewModel(application: Application,
     private fun startHomeRefreshes() {
         migrateLegacyAniListData()
         refreshPersonalLists()
-        if (animationOnly) {
-            val enabled = _state.value.mainSections.filter { it.enabled }.map { it.id }.toSet()
-            Log.i(TAG, "Home load started animationOnly=true enabledSections=${enabled.sorted()}")
-            if ("animation_tv" in enabled) refreshPopular(TmdbMediaType.TV)
-            if ("animation_movie" in enabled) refreshPopular(TmdbMediaType.MOVIE)
-            if ("mal_top" in enabled) refreshMalTop()
-            if (enabled.any { it == "trending" || it == "popular_season" }) refreshAniListHome()
-        } else {
+        val enabledSections = settings.mainHomeSections().filter { it.enabled }
+        val enabledIds = enabledSections.map { it.id }.toSet()
+        if ("tmdb_whats_popular" in enabledIds) refreshWhatsPopular()
+        if ("tmdb_mdblist_popular_movies" in enabledIds) refreshMdblistPopularMovies()
+        if (enabledIds.any { it == "tmdb_tv" || it == "animation_tv" })
             refreshPopular(TmdbMediaType.TV)
+        if (enabledIds.any { it == "tmdb_movies" || it == "animation_movie" })
             refreshPopular(TmdbMediaType.MOVIE)
+        if ("mal_top" in enabledIds) refreshMalTop()
+        if (enabledIds.any { it == "trending" || it == "popular_season" }) refreshAniListHome()
+        if (animationOnly) scheduleHomeAvailabilityChecks()
+        if (animationOnly) {
+            Log.i(TAG, "Home load started animationOnly=true enabledSections=${enabledIds.sorted()}")
         }
     }
 
     fun loadTolokaRssIfNeeded() = refreshTolokaRss(force = false)
+
+    /** Loads TMDB's similar-title row only for the currently selected watchlist title. */
+    fun loadWatchlistSimilar(title: TmdbTitle, forceRefresh: Boolean = false) {
+        val key = similarCacheKey(title)
+        if (!similarInFlight.add(key)) return
+        _state.value = _state.value.copy(
+            similarLoadingKeys = _state.value.similarLoadingKeys + key)
+        viewModelScope.launch {
+            try {
+                val cached = withContext(Dispatchers.IO) { homeRows.read(key) }
+                if (withContext(Dispatchers.IO) { homeRows.containsRow(key) }) {
+                    _state.value = _state.value.copy(similarByWatchlistTitle =
+                        _state.value.similarByWatchlistTitle + (key to cached))
+                }
+                if (!forceRefresh && withContext(Dispatchers.IO) {
+                        homeRows.isFresh(key, WATCHLIST_SIMILAR_CACHE_TTL_MS)
+                    }) return@launch
+                val connection = withContext(Dispatchers.IO) {
+                    workerTmdbConnection(getApplication())
+                } ?: return@launch
+                val similar = homeNetworkPermits.withPermit {
+                    connection.client.similar(title.type, title.id, connection.accessKey,
+                        title.genreIds)
+                }
+                _state.value = _state.value.copy(similarByWatchlistTitle =
+                    _state.value.similarByWatchlistTitle + (key to similar))
+                withContext(Dispatchers.IO) {
+                    if (similar.isEmpty()) homeRows.saveEmpty(key) else homeRows.save(key, similar)
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                Log.w(TAG, "TMDB similar load failed title=$key: ${error.message}", error)
+            } finally {
+                similarInFlight.remove(key)
+                _state.value = _state.value.copy(
+                    similarLoadingKeys = _state.value.similarLoadingKeys - key)
+            }
+        }
+    }
+
+    private fun similarCacheKey(title: TmdbTitle) =
+        "watchlist_recommendations_v2_${title.type.path}_${title.id}"
 
     fun refreshTolokaRss() = refreshTolokaRss(force = true)
 
@@ -269,6 +373,12 @@ class TmdbLibraryViewModel(application: Application,
         if (_state.value.malTop !is MalTopState.Results)
             _state.value = _state.value.copy(malTop = MalTopState.Loading)
         malTopJob = viewModelScope.launch {
+            if (withContext(Dispatchers.IO) {
+                    homeRows.isFresh("mal_top", MAL_TOP_CACHE_TTL_MS)
+                }) {
+                completeInitialSection("mal_top")
+                return@launch
+            }
             val startedAt = SystemClock.elapsedRealtime()
             Log.i(TAG, "Home section load started section=mal_top source=MAL+Fribb")
             try {
@@ -277,6 +387,7 @@ class TmdbLibraryViewModel(application: Application,
                 }
                 _state.value = _state.value.copy(malTop =
                     MalTopState.Results(page.titles, page.hasMore))
+                scheduleHomeAvailabilityChecks()
                 withContext(Dispatchers.IO) { homeRows.save("mal_top", page.titles) }
                 Log.i(TAG, "Home section load succeeded section=mal_top count=${page.titles.size} " +
                     "hasMore=${page.hasMore} elapsedMs=${SystemClock.elapsedRealtime() - startedAt}")
@@ -303,6 +414,13 @@ class TmdbLibraryViewModel(application: Application,
             popularSeason = _state.value.popularSeason.takeIf { it is AniListHomeState.Results }
                 ?: AniListHomeState.Loading)
         aniListHomeJob = viewModelScope.launch {
+            val refreshTrending = withContext(Dispatchers.IO) {
+                !homeRows.isFresh("trending", ANILIST_HOME_CACHE_TTL_MS)
+            }
+            val refreshPopularSeason = withContext(Dispatchers.IO) {
+                !homeRows.isFresh("popular_season", ANILIST_HOME_CACHE_TTL_MS)
+            }
+            if (!refreshTrending && !refreshPopularSeason) return@launch
             val startedAt = SystemClock.elapsedRealtime()
             Log.i(TAG, "Home section load started section=trending,popular_season source=AniList")
             try {
@@ -312,13 +430,14 @@ class TmdbLibraryViewModel(application: Application,
                 val freshTrending = rows["trending"].orEmpty()
                 val freshSeason = rows["popular_season"].orEmpty()
                 _state.value = _state.value.copy(
-                    trending = freshTrending.takeIf(List<TmdbTitle>::isNotEmpty)
+                    trending = freshTrending.takeIf { refreshTrending && it.isNotEmpty() }
                         ?.let(AniListHomeState::Results) ?: _state.value.trending,
-                    popularSeason = freshSeason.takeIf(List<TmdbTitle>::isNotEmpty)
+                    popularSeason = freshSeason.takeIf { refreshPopularSeason && it.isNotEmpty() }
                         ?.let(AniListHomeState::Results) ?: _state.value.popularSeason)
+                scheduleHomeAvailabilityChecks()
                 withContext(Dispatchers.IO) {
-                    homeRows.save("trending", freshTrending)
-                    homeRows.save("popular_season", freshSeason)
+                    if (refreshTrending) homeRows.save("trending", freshTrending)
+                    if (refreshPopularSeason) homeRows.save("popular_season", freshSeason)
                 }
                 Log.i(TAG, "Home section load succeeded source=AniList " +
                     "trendingCount=${rows["trending"]?.size ?: 0} " +
@@ -352,7 +471,7 @@ class TmdbLibraryViewModel(application: Application,
             val watched = history.all()
             val saved = favorites.all()
             val savedWatchlist = if (animationOnly) watchlist.all() else emptyList()
-            val sections = if (animationOnly) settings.mainHomeSections() else emptyList()
+            val sections = settings.mainHomeSections()
             val items = savedWatchlist.map { entry ->
                 val previous = oldWatchlist.firstOrNull {
                     it.entry.title.type == entry.title.type && it.entry.title.id == entry.title.id
@@ -405,14 +524,26 @@ class TmdbLibraryViewModel(application: Application,
             mainSections = sections)
         if (animationOnly) refreshWatchlistEpisodes(savedWatchlist)
         if (!animationOnly) {
+            val enabledNow = sections.filter { it.enabled }.map { it.id }.toSet()
+            if ("tmdb_whats_popular" in enabledNow &&
+                ("tmdb_whats_popular" !in previouslyEnabled ||
+                    _state.value.whatsPopular is TmdbPopularState.Loading)) refreshWhatsPopular()
+            if ("tmdb_mdblist_popular_movies" in enabledNow &&
+                ("tmdb_mdblist_popular_movies" !in previouslyEnabled ||
+                    _state.value.mdblistPopularMovies is TmdbPopularState.Loading))
+                refreshMdblistPopularMovies()
+            if ("tmdb_tv" in enabledNow && "tmdb_tv" !in previouslyEnabled)
+                refreshPopular(TmdbMediaType.TV)
+            if ("tmdb_movies" in enabledNow && "tmdb_movies" !in previouslyEnabled)
+                refreshPopular(TmdbMediaType.MOVIE)
             return@launch
         }
-        if ("animation_tv" in nowEnabled && "animation_tv" !in previouslyEnabled &&
-            _state.value.tv == TmdbPopularState.Loading) refreshPopular(TmdbMediaType.TV)
-        if ("animation_movie" in nowEnabled && "animation_movie" !in previouslyEnabled &&
-            _state.value.movies == TmdbPopularState.Loading) refreshPopular(TmdbMediaType.MOVIE)
-        if ("mal_top" in nowEnabled && "mal_top" !in previouslyEnabled &&
-            _state.value.malTop == MalTopState.Loading) refreshMalTop()
+        if ("animation_tv" in nowEnabled && "animation_tv" !in previouslyEnabled)
+            refreshPopular(TmdbMediaType.TV)
+        if ("animation_movie" in nowEnabled && "animation_movie" !in previouslyEnabled)
+            refreshPopular(TmdbMediaType.MOVIE)
+        if ("mal_top" in nowEnabled && "mal_top" !in previouslyEnabled)
+            refreshMalTop()
         if (nowEnabled.any { it == "trending" || it == "popular_season" } &&
             (_state.value.trending == AniListHomeState.Loading || _state.value.popularSeason == AniListHomeState.Loading) &&
             nowEnabled.intersect(setOf("trending", "popular_season")) != previouslyEnabled.intersect(setOf("trending", "popular_season"))) refreshAniListHome()
@@ -434,6 +565,9 @@ class TmdbLibraryViewModel(application: Application,
             return@launch
         }
         recommendationsJob = viewModelScope.launch {
+            if (withContext(Dispatchers.IO) {
+                    homeRows.isFresh("recommendations", RECOMMENDATIONS_CACHE_TTL_MS)
+                }) return@launch
             val startedAt = SystemClock.elapsedRealtime()
             Log.i(TAG, "Home section load started section=recommendations source=TMDB " +
                 "seedCount=${sources.size}")
@@ -443,6 +577,7 @@ class TmdbLibraryViewModel(application: Application,
                 }
                 if (recommendationSources == sources) {
                     _state.value = _state.value.copy(recommendations = titles)
+                    scheduleHomeAvailabilityChecks()
                     withContext(Dispatchers.IO) { homeRows.save("recommendations", titles) }
                     Log.i(TAG, "Home section load succeeded section=recommendations " +
                         "count=${titles.size} elapsedMs=${SystemClock.elapsedRealtime() - startedAt}")
@@ -461,6 +596,638 @@ class TmdbLibraryViewModel(application: Application,
                 }
             }
         }
+        }
+    }
+
+    /** Builds the mixed TMDB pool, then fills it only with freshly confirmed active Toloka topics. */
+    fun resolveWhatsPopularBackdrop(title: TmdbTitle) {
+        if (title.backdropEnglish) return
+        val key = "${title.type.path}:${title.id}"
+        if (!popularBackdropInFlight.add(key)) return
+        viewModelScope.launch {
+            try {
+                val connection = withContext(Dispatchers.IO) {
+                    workerTmdbConnection(getApplication())
+                } ?: return@launch
+                val englishBackdrop = homeNetworkPermits.withPermit {
+                    connection.client.englishBackdrop(title.type, title.id, connection.accessKey)
+                }
+                val current = _state.value.whatsPopular as? TmdbPopularState.Results
+                    ?: return@launch
+                val updated = current.titles.map { item ->
+                    if (item.type == title.type && item.id == title.id)
+                        item.copy(backdropUrl = englishBackdrop ?: item.backdropUrl,
+                            backdropEnglish = true)
+                    else item
+                }
+                _state.value = _state.value.copy(whatsPopular = TmdbPopularState.Results(updated))
+                withContext(Dispatchers.IO) {
+                    homeRows.save("whats_popular", updated,
+                        markFresh = homeRows.isFresh("whats_popular", WHATS_POPULAR_CACHE_TTL_MS))
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                Log.d(TAG, "English backdrop lookup failed key=$key: ${error.message}")
+            } finally {
+                popularBackdropInFlight.remove(key)
+            }
+        }
+    }
+
+    fun resolveMdblistPopularCard(title: TmdbTitle) {
+        val key = "movie:${title.id}"
+        if (title.backdropEnglish || key in mdblistCardResolved ||
+            !mdblistCardInFlight.add(key)) return
+        viewModelScope.launch {
+            try {
+                val connection = withContext(Dispatchers.IO) {
+                    workerTmdbConnection(getApplication())
+                } ?: return@launch
+                val card = homeNetworkPermits.withPermit {
+                    connection.client.movieCatalogCard(title.id, connection.accessKey)
+                }.copy(backdropEnglish = true)
+                mdblistCardResolved += key
+                val current = _state.value.mdblistPopularMovies as? TmdbPopularState.Results
+                    ?: return@launch
+                val updated = current.titles.map { item ->
+                    if (item.id == title.id) card else item
+                }
+                _state.value = _state.value.copy(mdblistPopularMovies =
+                    TmdbPopularState.Results(updated))
+                withContext(Dispatchers.IO) {
+                    homeRows.save(MDBLIST_POPULAR_CACHE_KEY, updated,
+                        markFresh = homeRows.isFresh(MDBLIST_POPULAR_CACHE_KEY,
+                            WHATS_POPULAR_CACHE_TTL_MS))
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                Log.d(TAG, "MDBList TMDB card lookup failed key=$key: ${error.message}")
+            } finally {
+                mdblistCardInFlight.remove(key)
+            }
+        }
+    }
+
+    fun refreshWhatsPopular(forceRefresh: Boolean = false) {
+        if (animationOnly || whatsPopularJob?.isActive == true) return
+        prioritizingWhatsPopularChecks = true
+        whatsPopularJob = viewModelScope.launch {
+            try {
+                if (!forceRefresh && withContext(Dispatchers.IO) {
+                        homeRows.isFresh("whats_popular", WHATS_POPULAR_CACHE_TTL_MS)
+                    }) return@launch
+                val connection = withContext(Dispatchers.IO) {
+                    workerTmdbConnection(getApplication())
+                } ?: throw IllegalStateException("Налаштуйте інтеграцію TMDB у конфігу")
+                val sourceLists = fetchWhatsPopularSources(connection.client, connection.accessKey)
+                val ranked = WhatsPopularComposer.rank(sourceLists)
+                if (ranked.isEmpty()) {
+                    withContext(Dispatchers.IO) { homeRows.saveEmpty("whats_popular") }
+                    _state.value = _state.value.copy(whatsPopular = TmdbPopularState.Error(
+                        "TMDB не повернув популярних тайтлів"))
+                    return@launch
+                }
+
+                val confirmed = linkedSetOf<String>()
+                val checkedInThisRun = mutableMapOf<String, HomeAvailability>()
+                var unresolvedCandidates = false
+                val queue = mutableListOf<RankedWhatsPopular>()
+
+                suspend fun flushQueue() {
+                    if (queue.isEmpty()) return
+                    val batch = queue.toList()
+                    queue.clear()
+                    val results = coroutineScope {
+                        batch.map { candidate -> async {
+                            try {
+                                val ids = availabilityPermits.withPermit {
+                                    lookupTolokaAvailability(candidate.title)
+                                }
+                                candidate to ids
+                            } catch (error: CancellationException) {
+                                throw error
+                            } catch (error: Exception) {
+                                Log.d(TAG, "What's Popular Toloka check failed " +
+                                    "tmdb=${candidate.key}: ${error.message}")
+                                candidate to null
+                            }
+                        } }.awaitAll()
+                    }
+                    for ((candidate, ids) in results) {
+                        if (ids == null) {
+                            availabilityInFlight.remove(candidate.key)
+                            unresolvedCandidates = true
+                            continue
+                        }
+                        val old = withContext(Dispatchers.IO) {
+                            homeAvailability.get(candidate.title.type, candidate.title.id)
+                        }
+                        val now = System.currentTimeMillis()
+                        val tolokaIds = ids.take(3)
+                        val refreshed = HomeAvailability(
+                            sources = (old?.sources.orZero() and HomeAvailabilityCache.SOURCE_ANITUBE) or
+                                if (tolokaIds.isNotEmpty()) HomeAvailabilityCache.SOURCE_TOLOKA else 0,
+                            checkedAt = now,
+                            aniTubeIds = old?.aniTubeIds.orEmpty(),
+                            tolokaIds = tolokaIds,
+                        )
+                        checkedInThisRun[candidate.key] = refreshed
+                        enqueueAvailability(candidate.key, refreshed)
+                        if (tolokaIds.any { it.matches(Regex("[0-9]{1,12}")) })
+                            confirmed += candidate.key
+                    }
+                }
+
+                for (candidate in ranked) {
+                    val status = checkedInThisRun[candidate.key] ?: withContext(Dispatchers.IO) {
+                        homeAvailability.get(candidate.title.type, candidate.title.id)
+                    }
+                    val stale = withContext(Dispatchers.IO) {
+                        homeAvailability.needsCheck(candidate.title.type, candidate.title.id)
+                    }
+                    if (!stale) {
+                        if (status?.let(::hasActiveTolokaAvailability) == true)
+                            confirmed += candidate.key
+                    } else {
+                        if (!claimAvailability(candidate.key, AVAILABILITY_LANE_WHATS_POPULAR)) {
+                            unresolvedCandidates = true
+                            continue
+                        }
+                        queue += candidate
+                        if (queue.size >= AVAILABILITY_BATCH_SIZE) flushQueue()
+                    }
+                }
+                if (queue.isNotEmpty()) flushQueue()
+                val cachedBackdrops = withContext(Dispatchers.IO) {
+                    homeRows.read("whats_popular").associateBy { "${it.type.path}:${it.id}" }
+                }
+                val results = WhatsPopularComposer.balanced(ranked, confirmed,
+                    WHATS_POPULAR_LIMIT).map { title ->
+                    cachedBackdrops["${title.type.path}:${title.id}"]
+                        ?.takeIf { it.backdropEnglish }
+                        ?.let { title.copy(backdropUrl = it.backdropUrl,
+                            backdropEnglish = true) } ?: title
+                }
+                val complete = !unresolvedCandidates && ranked.all { candidate ->
+                        checkedInThisRun.containsKey(candidate.key) || withContext(Dispatchers.IO) {
+                            !homeAvailability.needsCheck(candidate.title.type, candidate.title.id)
+                        }
+                    }
+                if (results.isNotEmpty()) {
+                    _state.value = _state.value.copy(whatsPopular =
+                        TmdbPopularState.Results(results))
+                    withContext(Dispatchers.IO) {
+                        homeRows.save("whats_popular", results, markFresh = complete)
+                    }
+                } else if (complete) {
+                    _state.value = _state.value.copy(whatsPopular = TmdbPopularState.Error(
+                        "Немає тайтлів з активною роздачею Toloka"))
+                    withContext(Dispatchers.IO) { homeRows.saveEmpty("whats_popular") }
+                } else {
+                    _state.value = _state.value.copy(whatsPopular = TmdbPopularState.Error(
+                        "Перевірку Toloka продовжимо під час наступного оновлення"))
+                }
+                Log.i(TAG, "What's Popular built candidates=${ranked.size} " +
+                    "available=${results.size} checked=${checkedInThisRun.size} complete=$complete")
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                Log.w(TAG, "What's Popular refresh failed: ${error.message}", error)
+                if (_state.value.whatsPopular !is TmdbPopularState.Results)
+                    _state.value = _state.value.copy(whatsPopular = TmdbPopularState.Error(
+                        error.message ?: "Не вдалося сформувати What's Popular"))
+            } finally {
+                prioritizingWhatsPopularChecks = false
+                scheduleHomeAvailabilityChecks()
+            }
+        }
+    }
+
+    fun refreshMdblistPopularMovies(forceRefresh: Boolean = false) {
+        if (animationOnly || mdblistPopularJob?.isActive == true) return
+        mdblistPopularJob = viewModelScope.launch {
+            try {
+                if (!forceRefresh && withContext(Dispatchers.IO) {
+                        homeRows.isFresh(MDBLIST_POPULAR_CACHE_KEY, WHATS_POPULAR_CACHE_TTL_MS)
+                    }) return@launch
+                val cached = withContext(Dispatchers.IO) {
+                    homeRows.read(MDBLIST_POPULAR_CACHE_KEY).associateBy { it.id }
+                }
+                val feedTitles = mdblistPopularCatalog.fetch().map { title ->
+                    cached[title.id]?.takeIf { it.backdropEnglish }?.let { image ->
+                        title.copy(
+                            originalTitle = image.originalTitle,
+                            ukrainianTitle = image.ukrainianTitle,
+                            posterUrl = image.posterUrl,
+                            backdropUrl = image.backdropUrl,
+                            backdropEnglish = true,
+                        )
+                    } ?: title
+                }
+                if (feedTitles.isEmpty()) {
+                    withContext(Dispatchers.IO) { homeRows.saveEmpty(MDBLIST_POPULAR_CACHE_KEY) }
+                    _state.value = _state.value.copy(mdblistPopularMovies =
+                        TmdbPopularState.Error("MDBList поки не повернув фільмів"))
+                    return@launch
+                }
+
+                val active = linkedSetOf<Int>()
+                val checked = mutableMapOf<Int, HomeAvailability>()
+                val checkedCards = mutableMapOf<Int, TmdbTitle>()
+                var unresolved = false
+                val queue = mutableListOf<TmdbTitle>()
+                suspend fun flush() {
+                    if (queue.isEmpty()) return
+                    val batch = queue.toList()
+                    queue.clear()
+                    val lookedUp = coroutineScope {
+                        batch.map { title -> async {
+                            try {
+                                val metadata = withContext(Dispatchers.IO) {
+                                    workerTmdbConnection(getApplication())
+                                }?.let { connection ->
+                                    runCatching {
+                                        homeNetworkPermits.withPermit {
+                                            connection.client.movieCatalogCard(
+                                                title.id, connection.accessKey)
+                                        }
+                                    }.getOrElse { error ->
+                                        Log.d(TAG, "MDBList TMDB localization failed id=${title.id}: " +
+                                            error.message)
+                                        title
+                                    }
+                                } ?: title
+                                metadata to availabilityPermits.withPermit {
+                                    lookupTolokaAvailability(metadata)
+                                }
+                            } catch (error: CancellationException) {
+                                throw error
+                            } catch (error: Exception) {
+                                Log.d(TAG, "MDBList Toloka check failed tmdb=${title.id}: ${error.message}")
+                                title to null
+                            }
+                        } }.awaitAll()
+                    }
+                    for ((metadata, ids) in lookedUp) {
+                        val title = batch.first { it.id == metadata.id }
+                        checkedCards[title.id] = metadata
+                        mdblistCardResolved += "movie:${title.id}"
+                        if (ids == null) {
+                            availabilityInFlight.remove("movie:${title.id}")
+                            unresolved = true
+                            continue
+                        }
+                        val old = withContext(Dispatchers.IO) {
+                            homeAvailability.get(TmdbMediaType.MOVIE, title.id)
+                        }
+                        val tolokaIds = ids.take(3)
+                        val value = HomeAvailability(
+                            sources = (old?.sources.orZero() and HomeAvailabilityCache.SOURCE_ANITUBE) or
+                                if (tolokaIds.isNotEmpty()) HomeAvailabilityCache.SOURCE_TOLOKA else 0,
+                            checkedAt = System.currentTimeMillis(),
+                            aniTubeIds = old?.aniTubeIds.orEmpty(),
+                            tolokaIds = tolokaIds,
+                        )
+                        checked[title.id] = value
+                        enqueueAvailability("movie:${title.id}", value)
+                        if (hasActiveTolokaAvailability(value)) active += title.id
+                    }
+                }
+
+                for (title in feedTitles) {
+                    val status = checked[title.id] ?: withContext(Dispatchers.IO) {
+                        homeAvailability.get(TmdbMediaType.MOVIE, title.id)
+                    }
+                    val stale = withContext(Dispatchers.IO) {
+                        homeAvailability.needsCheck(TmdbMediaType.MOVIE, title.id)
+                    }
+                    if (!stale) {
+                        if (status?.let(::hasActiveTolokaAvailability) == true) active += title.id
+                    } else if (!claimAvailability("movie:${title.id}", AVAILABILITY_LANE_MDBLIST)) {
+                        unresolved = true
+                    } else {
+                        queue += title
+                        if (queue.size >= AVAILABILITY_BATCH_SIZE) flush()
+                    }
+                }
+                if (queue.isNotEmpty()) flush()
+
+                val cachedCards = feedTitles.filter { it.id in active }.map { title ->
+                    checkedCards[title.id]?.let { return@map it }
+                    cached[title.id]?.takeIf { it.backdropEnglish }?.let { image ->
+                        title.copy(
+                            originalTitle = image.originalTitle,
+                            ukrainianTitle = image.ukrainianTitle,
+                            posterUrl = image.posterUrl,
+                            backdropUrl = image.backdropUrl,
+                            backdropEnglish = true,
+                        )
+                    } ?: title
+                }
+                val complete = !unresolved && feedTitles.all { title ->
+                    checked.containsKey(title.id) || withContext(Dispatchers.IO) {
+                        !homeAvailability.needsCheck(TmdbMediaType.MOVIE, title.id)
+                    }
+                }
+                if (cachedCards.isNotEmpty()) {
+                    _state.value = _state.value.copy(mdblistPopularMovies =
+                        TmdbPopularState.Results(cachedCards))
+                    withContext(Dispatchers.IO) {
+                        homeRows.save(MDBLIST_POPULAR_CACHE_KEY, cachedCards, markFresh = complete)
+                    }
+                } else if (complete) {
+                    _state.value = _state.value.copy(mdblistPopularMovies =
+                        TmdbPopularState.Error("Немає фільмів MDBList з активною роздачею Toloka"))
+                    withContext(Dispatchers.IO) { homeRows.saveEmpty(MDBLIST_POPULAR_CACHE_KEY) }
+                } else {
+                    _state.value = _state.value.copy(mdblistPopularMovies =
+                        TmdbPopularState.Error("Перевірку Toloka для MDBList продовжимо під час наступного оновлення"))
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                Log.w(TAG, "MDBList Popular refresh failed: ${error.message}", error)
+                if (_state.value.mdblistPopularMovies !is TmdbPopularState.Results)
+                    _state.value = _state.value.copy(mdblistPopularMovies =
+                        TmdbPopularState.Error(error.message ?: "Не вдалося завантажити MDBList"))
+            }
+        }
+    }
+
+    private suspend fun fetchWhatsPopularSources(
+        client: ua.any2b.core.tmdb.TmdbClient,
+        accessKey: String,
+    ): List<Pair<String, List<TmdbTitle>>> = coroutineScope {
+        suspend fun pages(language: String,
+            load: suspend (Int, String) -> TmdbPage): List<TmdbTitle> = coroutineScope {
+            (1..WHATS_POPULAR_PAGES).map { page -> async {
+                homeNetworkPermits.withPermit { load(page, language) }
+            } }.awaitAll().sortedBy(TmdbPage::page).flatMap(TmdbPage::titles)
+        }
+        suspend fun localizedPages(
+            load: suspend (Int, String) -> TmdbPage,
+        ): List<TmdbTitle> = coroutineScope {
+            suspend fun safePages(language: String) = try {
+                pages(language, load)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                Log.d(TAG, "What's Popular TMDB locale fetch failed language=$language: ${error.message}")
+                emptyList()
+            }
+            val english = async { safePages("en-US") }
+            val ukrainian = async { safePages("uk-UA") }
+            val englishTitles = english.await()
+            val ukrainianTitles = ukrainian.await()
+            val ukrainianByKey = ukrainianTitles.associateBy { "${it.type.path}:${it.id}" }
+            val englishKeys = englishTitles.mapTo(hashSetOf()) { "${it.type.path}:${it.id}" }
+            englishTitles.map { title ->
+                val uaTitle = ukrainianByKey["${title.type.path}:${title.id}"]
+                title.copy(
+                    ukrainianTitle = uaTitle?.title?.takeIf { it != title.title },
+                    englishTitle = title.title,
+                )
+            } + ukrainianTitles.filterNot { "${it.type.path}:${it.id}" in englishKeys }
+        }
+        suspend fun providerType(type: TmdbMediaType, monetization: String) =
+            localizedPages { page, language ->
+            client.providerPage(type, accessKey, monetization, page, "UA", language)
+        }
+        fun popularOrder(titles: List<TmdbTitle>) = titles.sortedByDescending {
+            it.popularity ?: 0.0
+        }
+
+        val trending = async {
+            popularOrder(localizedPages { page, language ->
+                client.trendingPage(TmdbMediaType.MOVIE, accessKey, "week", page, language)
+            } + localizedPages { page, language ->
+                client.trendingPage(TmdbMediaType.TV, accessKey, "week", page, language)
+            })
+        }
+        val streaming = async {
+            popularOrder(providerType(TmdbMediaType.MOVIE, "flatrate") +
+                providerType(TmdbMediaType.TV, "flatrate"))
+        }
+        val onTv = async {
+            localizedPages { page, language -> client.onTheAirTvPage(accessKey, page, language) }
+        }
+        val forRent = async { providerType(TmdbMediaType.MOVIE, "rent") }
+        listOf("trending" to trending.await(), "streaming" to streaming.await(),
+            "on_tv" to onTv.await(), "rent" to forRent.await())
+    }
+
+    private suspend fun lookupTolokaAvailability(title: TmdbTitle): List<String>? {
+        val names = (listOfNotNull(title.ukrainianTitle, title.title, title.originalTitle,
+            title.englishTitle) + TolokaTmdbMappingStore(getApplication())
+            .aliases(title.type, title.id)).map(String::trim)
+            .filter(String::isNotBlank).distinctBy(String::lowercase)
+        val queries = listOfNotNull(title.ukrainianTitle, title.title,
+            title.originalTitle, title.englishTitle).map(String::trim)
+            .filter(String::isNotBlank).distinctBy(String::lowercase).take(2)
+        if (names.isEmpty() || queries.isEmpty()) return null
+        val matches = linkedMapOf<String, TolokaHit>()
+        var successful = 0
+        var failed = false
+        for (query in queries) {
+            try {
+                TolokaConnections.recentSearch(getApplication(), query)
+                    .results.filter { isActiveTolokaHit(it) && availabilityMatches(title, names, it) }
+                    .forEach { if (it.id !in matches) matches[it.id] = it }
+                successful++
+                if (matches.isNotEmpty()) break
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                failed = true
+                Log.d(TAG, "Toloka availability lookup failed " +
+                    "tmdb=${title.type.path}:${title.id}: ${error.message}")
+            }
+        }
+        if (matches.isEmpty() && (failed || successful != queries.size)) return null
+        return matches.values.sortedByDescending { it.seeders ?: 0 }
+            .map(TolokaHit::id).distinct().take(3)
+    }
+
+    private fun hasActiveTolokaAvailability(value: HomeAvailability): Boolean =
+        value.sources and HomeAvailabilityCache.SOURCE_TOLOKA != 0 &&
+            value.tolokaIds.any { it.matches(Regex("[0-9]{1,12}")) }
+
+    private fun Int?.orZero(): Int = this ?: 0
+
+    /** Queues stale provider checks from cached home rows, oldest and highest rows first. */
+    private fun scheduleHomeAvailabilityChecks() {
+        if (prioritizingWhatsPopularChecks) return
+        val current = _state.value
+        val titles = buildList {
+            fun addTitles(row: List<TmdbTitle>) { addAll(row) }
+            fun addPopular(row: TmdbPopularState) {
+                (row as? TmdbPopularState.Results)?.titles?.let(::addTitles)
+            }
+            fun addAniList(row: AniListHomeState) {
+                (row as? AniListHomeState.Results)?.titles?.let(::addTitles)
+            }
+            fun addMal(row: MalTopState) {
+                (row as? MalTopState.Results)?.titles?.let(::addTitles)
+            }
+            if (animationOnly) {
+                addAniList(current.trending)
+                addAniList(current.popularSeason)
+                addPopular(current.tv)
+                addPopular(current.movies)
+                addMal(current.malTop)
+            } else {
+                addPopular(current.tv)
+                addPopular(current.movies)
+                addAniList(current.trending)
+                addAniList(current.popularSeason)
+            }
+            addTitles(current.recommendations)
+        }.distinctBy { "${it.type.path}:${it.id}" }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            for (title in titles) {
+                val key = "${title.type.path}:${title.id}"
+                if (!homeAvailability.needsCheck(title.type, title.id)) continue
+                if (!claimAvailability(key, AVAILABILITY_LANE_HOME)) continue
+                viewModelScope.launch(Dispatchers.IO) {
+                    var queuedForBatchWrite = false
+                    try {
+                        val result = availabilityPermits.withPermit {
+                            lookupHomeAvailability(title)
+                        }
+                        if (result != null) {
+                            enqueueAvailability(key, result)
+                            queuedForBatchWrite = true
+                        }
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Exception) {
+                        Log.d(TAG, "Provider availability lookup deferred key=$key " +
+                            "error=${error.message}")
+                    } finally {
+                        if (!queuedForBatchWrite) availabilityInFlight.remove(key)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun claimAvailability(key: String, lane: String): Boolean = synchronized(availabilityLock) {
+        val remaining = availabilityChecksRemaining[lane] ?: 0
+        if (remaining <= 0 || key in pendingAvailability ||
+            key in availabilityAttempted || !availabilityInFlight.add(key)) false
+        else {
+            availabilityAttempted.add(key)
+            availabilityChecksRemaining[lane] = remaining - 1
+            true
+        }
+    }
+
+    /** Null means at least one provider request failed; keep the previous checked timestamp. */
+    private suspend fun lookupHomeAvailability(title: TmdbTitle): HomeAvailability? {
+        val names = (listOfNotNull(title.ukrainianTitle, title.title, title.originalTitle,
+            title.englishTitle) + TolokaTmdbMappingStore(getApplication())
+            .aliases(title.type, title.id)).map(String::trim)
+            .filter(String::isNotBlank).distinctBy(String::lowercase)
+        if (names.isEmpty()) return null
+
+        val tolokaQueries = listOfNotNull(title.ukrainianTitle, title.title,
+            title.originalTitle, title.englishTitle).map(String::trim)
+            .filter(String::isNotBlank).distinctBy(String::lowercase).take(2)
+        if (tolokaQueries.isEmpty()) return null
+        val tolokaMatches = linkedMapOf<String, TolokaHit>()
+        var successfulTolokaQueries = 0
+        var failedTolokaQuery = false
+        for (query in tolokaQueries) {
+            try {
+                val hits = TolokaConnections.recentSearch(getApplication(), query).results
+                successfulTolokaQueries++
+                hits.filter { isActiveTolokaHit(it) && availabilityMatches(title, names, it) }
+                    .forEach { if (it.id !in tolokaMatches) tolokaMatches[it.id] = it }
+                if (tolokaMatches.isNotEmpty()) break
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                failedTolokaQuery = true
+                Log.d(TAG, "Toloka availability lookup failed " +
+                    "tmdb=${title.type.path}:${title.id}: ${error.message}")
+            }
+        }
+        if (tolokaMatches.isEmpty() &&
+            (failedTolokaQuery || successfulTolokaQueries != tolokaQueries.size)) return null
+
+        val aniTubeIds = if (title.type == TmdbMediaType.TV || title.type == TmdbMediaType.MOVIE) {
+            val isAnimation = title.matchedAniListId != null || title.genreIds.contains(16)
+            if (!isAnimation) emptyList() else {
+                val resolution = AnitubeResolver(getApplication()).find(title.type, title.id,
+                    title.matchedSeasonNumber, names, title.matchedAniListId)
+                if (resolution.searchError != null ||
+                    resolution.aniListAvailability == AniListAvailability.MISSING) return null
+                resolution.candidates.map { it.release.newsId }.distinct().take(3)
+            }
+        } else emptyList()
+
+        val tolokaIds = tolokaMatches.values.sortedByDescending { it.seeders ?: -1 }
+            .map(TolokaHit::id).take(3)
+        val sources = (if (aniTubeIds.isNotEmpty()) HomeAvailabilityCache.SOURCE_ANITUBE else 0) or
+            (if (tolokaIds.isNotEmpty()) HomeAvailabilityCache.SOURCE_TOLOKA else 0)
+        return HomeAvailability(sources, System.currentTimeMillis(), aniTubeIds, tolokaIds)
+    }
+
+    private fun isActiveTolokaHit(hit: TolokaHit): Boolean =
+        hit.id.matches(Regex("[0-9]{1,12}")) && (hit.seeders ?: 0) > 0
+
+    private fun availabilityMatches(title: TmdbTitle, names: List<String>, hit: TolokaHit): Boolean {
+        if (!TolokaTmdbRanker.isVideoCandidate(hit)) return false
+        val release = TolokaReleaseMetadataParser.parse(hit.title)
+        val candidateNames = (release.titleCandidates + release.cleanTitle)
+            .map(::normalizeAvailabilityTitle).filter(String::isNotBlank)
+        val matchingTitle = names.any { name ->
+            val expected = normalizeAvailabilityTitle(name)
+            if (expected.isBlank()) return@any false
+            val expectedTokens = expected.split(' ').filter { it.length >= 2 }.toSet()
+            candidateNames.any { candidate ->
+                if (candidate == expected || candidate.contains(expected)) true
+                else {
+                    val candidateTokens = candidate.split(' ').filter { it.length >= 2 }.toSet()
+                    val denominator = minOf(expectedTokens.size, candidateTokens.size)
+                    denominator >= 2 && expectedTokens.intersect(candidateTokens).size.toDouble() /
+                        denominator >= 0.8
+                }
+            }
+        }
+        if (!matchingTitle) return false
+        val expectedYear = title.matchedSeasonYear ?: title.year
+        val releaseYears = release.yearRanges.flatMap { listOf(it.first, it.last) }.distinct()
+        return expectedYear == null || releaseYears.isEmpty() ||
+            releaseYears.any { kotlin.math.abs(it - expectedYear) <= 1 }
+    }
+
+    private fun normalizeAvailabilityTitle(value: String): String = value.lowercase()
+        .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
+        .replace(Regex("\\s+"), " ").trim()
+
+    private fun enqueueAvailability(key: String, value: HomeAvailability) {
+        synchronized(availabilityLock) {
+            pendingAvailability[key] = value
+            if (availabilityFlushJob?.isActive != true) startAvailabilityFlushLocked()
+        }
+    }
+
+    private fun startAvailabilityFlushLocked() {
+        availabilityFlushJob = viewModelScope.launch(Dispatchers.IO) {
+            delay(1_500L)
+            val batch = synchronized(availabilityLock) {
+                pendingAvailability.toMap().also { pendingAvailability.clear() }
+            }
+            homeAvailability.saveBatch(batch)
+            availabilityInFlight.removeAll(batch.keys)
+            synchronized(availabilityLock) {
+                availabilityFlushJob = null
+                if (pendingAvailability.isNotEmpty()) startAvailabilityFlushLocked()
+            }
         }
     }
 
@@ -558,6 +1325,12 @@ class TmdbLibraryViewModel(application: Application,
     fun removeFromHistory(title: TmdbTitle) {
         history.removeFromHistory(title)
         refreshPersonalLists()
+    }
+
+    fun toggleFavorite(title: TmdbTitle): Boolean {
+        val isFavorite = favorites.toggle(title)
+        refreshPersonalLists()
+        return isFavorite
     }
 
     private fun refreshWatchlistEpisodes(entries: List<TmdbWatchlistEntry>) {
@@ -771,6 +1544,8 @@ class TmdbLibraryViewModel(application: Application,
         val topicId = selection.topicId ?: return
         val serverUrl = settings.torrServerUrl().trimEnd('/')
         if (serverUrl.isBlank()) return
+        val playlistKey = "torrent_$topicId"
+        if (!watchlist.shouldRefreshPlaylist(title.type, title.id, playlistKey)) return
         val hashKey = "$serverUrl|$topicId"
         try {
             val credentials = TorrServerAuthStore(getApplication()).read()
@@ -801,7 +1576,7 @@ class TmdbLibraryViewModel(application: Application,
                         .distinctBy(String::lowercase).take(4)
                     var refreshed = false
                     for (query in queries) {
-                        val result = TolokaConnections.search(getApplication(), query, forceRefresh = true)
+                        val result = TolokaConnections.recentSearch(getApplication(), query)
                         if (result.results.any { it.id == topicId }) {
                             refreshed = true
                             break
@@ -824,7 +1599,7 @@ class TmdbLibraryViewModel(application: Application,
             if (watchlist.torrentUkrainian(topicId) != true) episodesBySeason.clear()
             episodesBySeason.getOrPut(selectedSeason) { mutableSetOf() }
             run {
-                watchlist.savePlayableEpisodes(title.type, title.id, "torrent_$topicId", episodesBySeason)
+                watchlist.savePlayableEpisodes(title.type, title.id, playlistKey, episodesBySeason)
                 Log.i("WatchlistPlayback", "Rebuilt playlist episode index from TorrServer " +
                     "tmdb=${title.type.path}:${title.id} topic=$topicId " +
                     "seasons=${episodesBySeason.mapValues { it.value.size }}")
@@ -892,6 +1667,16 @@ class TmdbLibraryViewModel(application: Application,
         if ((if (type == TmdbMediaType.TV) _state.value.tv else _state.value.movies)
             !is TmdbPopularState.Results) setRow(type, TmdbPopularState.Loading)
         popularJobs[type] = viewModelScope.launch {
+            val cacheKey = if (animationOnly)
+                if (type == TmdbMediaType.TV) "animation_tv" else "animation_movie"
+            else if (type == TmdbMediaType.TV) "general_tv" else "general_movie"
+            if (withContext(Dispatchers.IO) {
+                    homeRows.isFresh(cacheKey, POPULAR_CACHE_TTL_MS)
+                }) {
+                completeInitialSection(
+                    if (type == TmdbMediaType.TV) "animation_tv" else "animation_movie")
+                return@launch
+            }
             val startedAt = SystemClock.elapsedRealtime()
             val section = if (type == TmdbMediaType.TV) "animation_tv" else "animation_movie"
             Log.i(TAG, "Home section load started section=$section source=TMDB " +
@@ -912,8 +1697,6 @@ class TmdbLibraryViewModel(application: Application,
                             ua.any2b.core.tmdb.TmdbGeneralCatalog.excludedGenreIds)
                 }
                 setRow(type, TmdbPopularState.Results(titles))
-                val cacheKey = if (animationOnly) section else
-                    if (type == TmdbMediaType.TV) "general_tv" else "general_movie"
                 withContext(Dispatchers.IO) { homeRows.save(cacheKey, titles) }
                 Log.i(TAG, "Home section load succeeded section=$section count=${titles.size} " +
                     "elapsedMs=${SystemClock.elapsedRealtime() - startedAt}")
@@ -939,6 +1722,7 @@ class TmdbLibraryViewModel(application: Application,
     private fun setRow(type: TmdbMediaType, row: TmdbPopularState) {
         _state.value = if (type == TmdbMediaType.TV) _state.value.copy(tv = row)
             else _state.value.copy(movies = row)
+        if (row is TmdbPopularState.Results) scheduleHomeAvailabilityChecks()
     }
 
     private fun completeInitialSection(id: String) {
@@ -956,5 +1740,21 @@ class TmdbLibraryViewModel(application: Application,
     private companion object {
         const val TAG = "HomeCatalog"
         const val TOLOKA_VISIBLE_REFRESH_COOLDOWN_MS = 30L * 60L * 1_000L
+        const val POPULAR_CACHE_TTL_MS = 12L * 60L * 60L * 1_000L
+        const val ANILIST_HOME_CACHE_TTL_MS = 6L * 60L * 60L * 1_000L
+        const val MAL_TOP_CACHE_TTL_MS = 24L * 60L * 60L * 1_000L
+        const val RECOMMENDATIONS_CACHE_TTL_MS = 12L * 60L * 60L * 1_000L
+        const val WATCHLIST_SIMILAR_CACHE_TTL_MS = 7L * 24L * 60L * 60L * 1_000L
+        const val AVAILABILITY_LANE_WHATS_POPULAR = "whats_popular"
+        const val AVAILABILITY_LANE_MDBLIST = "mdblist_popular_movies"
+        const val AVAILABILITY_LANE_HOME = "home"
+        const val AVAILABILITY_CHECKS_PER_LIST = 6
+        const val MDBLIST_POPULAR_CACHE_KEY = "mdblist_popular_movies"
+        const val WHATS_POPULAR_PAGES = 2
+        const val WHATS_POPULAR_LIMIT = 100
+        const val WHATS_POPULAR_CACHE_TTL_MS = 12L * 60L * 60L * 1_000L
+        const val AVAILABILITY_BATCH_SIZE = 2
+        val GLOBAL_AVAILABILITY_PERMITS = Semaphore(2)
+        val GLOBAL_AVAILABILITY_IN_FLIGHT = ConcurrentHashMap.newKeySet<String>()
     }
 }

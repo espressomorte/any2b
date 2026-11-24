@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -81,11 +82,14 @@ fun TmdbPeopleRow(state: TmdbPeopleState, selectedPersonId: Int?,
     if (state is TmdbPeopleState.Ready && people.isEmpty()) return
     val rowState = androidx.compose.foundation.lazy.rememberLazyListState()
     val returnFocus = remember { FocusRequester() }
-    LaunchedEffect(returnToken) {
+    val leadingInsetPx = with(LocalDensity.current) { 40.dp.roundToPx() }
+    LaunchedEffect(returnToken, people, selectedPersonId) {
         if (returnToken <= 0 || selectedPersonId == null) return@LaunchedEffect
         val index = people.indexOfFirst { it.id == selectedPersonId }
         if (index >= 0) {
-            rowState.scrollToItem(index)
+            // Item 0 is an explicit leading inset, so the focused person returns
+            // to the same 40dp start position instead of touching the viewport edge.
+            rowState.scrollToItem(index + 1, -leadingInsetPx)
             withFrameNanos { }
             runCatching { returnFocus.requestFocus() }
         }
@@ -104,9 +108,10 @@ fun TmdbPeopleRow(state: TmdbPeopleState, selectedPersonId: Int?,
             }
             is TmdbPeopleState.Ready -> LazyRow(state = rowState,
                 modifier = Modifier.focusGroup(),
-                contentPadding = PaddingValues(horizontal = 40.dp, vertical = 12.dp),
+                contentPadding = PaddingValues(vertical = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(28.dp)) {
-                items(people, key = { it.id }) { person ->
+                item(key = "leading-inset") { Spacer(Modifier.width(40.dp)) }
+                itemsIndexed(people, key = { _, person -> person.id }) { _, person ->
                     val personFocus = remember(person.id) { FocusRequester() }
                     val activeFocus = if (returnToken > 0 && person.id == selectedPersonId)
                         returnFocus else personFocus
