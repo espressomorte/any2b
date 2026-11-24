@@ -33,6 +33,10 @@ class TmdbFavoritesStore(context: Context) {
                     put("originalTitle", item.originalTitle)
                     put("year", item.year)
                     put("posterUrl", item.posterUrl)
+                    put("backdropUrl", item.backdropUrl)
+                    put("ukrainianTitle", item.ukrainianTitle)
+                    put("englishTitle", item.englishTitle)
+                    put("backdropEnglish", item.backdropEnglish)
                     put("rating", item.rating)
                     put("genreIds", JSONArray(item.genreIds.sorted()))
                 })
@@ -53,6 +57,32 @@ class TmdbFavoritesStore(context: Context) {
                 put("originalTitle", item.originalTitle)
                 put("year", item.year)
                 put("posterUrl", item.posterUrl)
+                put("backdropUrl", item.backdropUrl)
+                put("ukrainianTitle", item.ukrainianTitle)
+                put("englishTitle", item.englishTitle)
+                put("backdropEnglish", item.backdropEnglish)
+                put("rating", item.rating)
+                put("genreIds", JSONArray(item.genreIds.sorted()))
+            }) }
+        }.toString()).apply()
+    }
+
+    fun update(title: TmdbTitle) = synchronized(lock) {
+        val updated = read().map { existing ->
+            if (existing.type == title.type && existing.id == title.id) title else existing
+        }
+        prefs.edit().putString("items", JSONArray().apply {
+            updated.forEach { item -> put(JSONObject().apply {
+                put("type", item.type.path)
+                put("id", item.id)
+                put("title", item.title)
+                put("originalTitle", item.originalTitle)
+                put("ukrainianTitle", item.ukrainianTitle)
+                put("englishTitle", item.englishTitle)
+                put("year", item.year)
+                put("posterUrl", item.posterUrl)
+                put("backdropUrl", item.backdropUrl)
+                put("backdropEnglish", item.backdropEnglish)
                 put("rating", item.rating)
                 put("genreIds", JSONArray(item.genreIds.sorted()))
             }) }
@@ -75,6 +105,13 @@ class TmdbFavoritesStore(context: Context) {
                 item.optString("posterUrl").takeUnless { it.isBlank() || it == "null" },
                 null,
                 item.optDouble("rating", Double.NaN).takeIf(Double::isFinite),
+                ukrainianTitle = item.optString("ukrainianTitle")
+                    .takeUnless { it.isBlank() || it == "null" },
+                englishTitle = item.optString("englishTitle")
+                    .takeUnless { it.isBlank() || it == "null" },
+                backdropUrl = item.optString("backdropUrl")
+                    .takeUnless { it.isBlank() || it == "null" },
+                backdropEnglish = item.optBoolean("backdropEnglish"),
                 genreIds = item.optJSONArray("genreIds")?.let { genres ->
                     (0 until genres.length()).map { genres.optInt(it) }.filter { it > 0 }.toSet()
                 }.orEmpty())

@@ -58,7 +58,6 @@ class MainActivity : ComponentActivity() {
                     onOpen = { title ->
                         startActivity(TvNavigation.details(this, title))
                     },
-                    onOpenSpecialListTitle = ::openSpecialListTitle,
                     onOpenFavorite = { title ->
                         openSpecialListTitle(title)
                     },
@@ -68,6 +67,7 @@ class MainActivity : ComponentActivity() {
                             if (added) "Додано в обране" else "Вилучено з обраного",
                             Toast.LENGTH_SHORT).show()
                     },
+                    onResolveFavoriteBackdrop = viewModel::resolveFavoriteBackdrop,
                     onRetry = viewModel::refreshPopular,
                     onMore = { category ->
                         if (category == "trending" || category == "popular_season" ||

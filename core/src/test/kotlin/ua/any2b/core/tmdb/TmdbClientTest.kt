@@ -370,9 +370,10 @@ class TmdbClientTest {
           "crew":[
             {"id":1,"name":"Long Director Name","job":"Director","profile_path":"/one.jpg"},
             {"id":1,"name":"Long Director Name","job":"Screenplay"},
-            {"id":2,"name":"Writer","job":"Writer"}],
+            {"id":2,"name":"Writer","job":"Writer","profile_path":"/writer.jpg"}],
           "cast":[
-            {"id":3,"name":"Voice Actor","character":"Maomao (voice)"},
+            {"id":3,"name":"Voice Actor","character":"Maomao (voice)",
+             "profile_path":"/voice.jpg"},
             {"id":4,"name":"Unlabelled Actor","character":"Maomao"}]
         }""") }
         val people = client.people(TmdbMediaType.MOVIE, 42, "token")
@@ -382,8 +383,9 @@ class TmdbClientTest {
         assertEquals("Maomao · голос", people[2].roleLabel)
         assertEquals("https://image.tmdb.org/t/p/w185/one.jpg", people[0].profileUrl)
         val liveCast = client.people(TmdbMediaType.MOVIE, 42, "token", includeLiveCast = true)
-        assertEquals(listOf(1, 2, 3, 4), liveCast.map { it.id })
-        assertEquals("Maomao", liveCast[3].roleLabel)
+        assertEquals(listOf(1, 2, 3), liveCast.map { it.id })
+        assertEquals("Maomao · голос", liveCast[2].roleLabel)
+        assertTrue(liveCast.none { it.id == 4 })
     }
 
     @Test

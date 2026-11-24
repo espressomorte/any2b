@@ -125,13 +125,11 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
     onRetryAniList: () -> Unit = {},
     onRetryTolokaRss: () -> Unit = {},
     onRetryWhatsPopular: () -> Unit = {},
-    onResolveWhatsPopularBackdrop: (TmdbTitle) -> Unit = {},
-    onOpenSpecialListTitle: (TmdbTitle) -> Unit = onOpen,
     onRetryMdblistPopular: () -> Unit = {},
-    onResolveMdblistPopularCard: (TmdbTitle) -> Unit = {},
     onLoadTolokaRss: () -> Unit = onRetryTolokaRss,
     onOpenFavorite: (TmdbTitle) -> Unit = onOpen,
     onToggleFavorite: (TmdbTitle) -> Unit = {},
+    onResolveFavoriteBackdrop: (TmdbTitle) -> Unit = {},
     onRemoveFromHistory: (TmdbTitle) -> Unit = {},
     onSelectWatchlistSeason: (TmdbTitle, Int) -> Unit = { _, _ -> },
     onSelectWatchlistVoice: (TmdbTitle, Int, Int) -> Unit = { _, _, _ -> },
@@ -338,17 +336,15 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
                 state.mainSections.filter { it.enabled && it.page == PAGE_WATCHLIST }.forEach { section ->
                     when (section.id) {
                         "tmdb_whats_popular" -> item(key = section.id) {
-                            WhatsPopularRow(section.title, state.whatsPopular, onOpenSpecialListTitle,
+                            WhatsPopularRow(section.title, state.whatsPopular, onOpen,
                                 onRetry = onRetryWhatsPopular,
-                                onResolveBackdrop = onResolveWhatsPopularBackdrop,
                                 onSectionFocus = { alignSection(section.id) },
                                 drawerFocusRequester = drawerHomeFocusRequester,
                                 onContentFocusRequester = { drawerReturnFocusRequester = it })
                         }
                         "tmdb_mdblist_popular_movies" -> item(key = section.id) {
-                            WhatsPopularRow(section.title, state.mdblistPopularMovies, onOpenSpecialListTitle,
+                            WhatsPopularRow(section.title, state.mdblistPopularMovies, onOpen,
                                 onRetry = onRetryMdblistPopular,
-                                onResolveBackdrop = onResolveMdblistPopularCard,
                                 onSectionFocus = { alignSection(section.id) },
                                 drawerFocusRequester = drawerHomeFocusRequester,
                                 onContentFocusRequester = { drawerReturnFocusRequester = it })
@@ -385,9 +381,9 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
                                 onContentFocusRequester = { drawerReturnFocusRequester = it })
                         }
                         "favorites", "tmdb_favorites" -> if (state.favorites.isNotEmpty()) item(key = section.id) {
-                            TmdbLibraryRow(section.title, state.favorites, onOpenFavorite,
-                                onMore = { onMore("favorites") },
-                                onLongClick = onToggleFavorite,
+                            FavoriteRow(section.title, state.favorites, onOpenFavorite,
+                                onMore = { onMore("favorites") }, onToggleFavorite = onToggleFavorite,
+                                onResolveBackdrop = onResolveFavoriteBackdrop,
                                 homeEntryFocusRequester = homeEntryFocusRequester.takeIf {
                                     homeFocusTargetKey == section.id
                                 },
@@ -479,7 +475,6 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
                     "tmdb_whats_popular" -> item(key = section.id) {
                         WhatsPopularRow(section.title, state.whatsPopular, onOpen,
                             onRetry = onRetryWhatsPopular,
-                            onResolveBackdrop = onResolveWhatsPopularBackdrop,
                             onSectionFocus = { alignSection(section.id) },
                             drawerFocusRequester = drawerHomeFocusRequester,
                             onContentFocusRequester = { drawerReturnFocusRequester = it })
@@ -487,7 +482,6 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
                     "tmdb_mdblist_popular_movies" -> item(key = section.id) {
                         WhatsPopularRow(section.title, state.mdblistPopularMovies, onOpen,
                             onRetry = onRetryMdblistPopular,
-                            onResolveBackdrop = onResolveMdblistPopularCard,
                             onSectionFocus = { alignSection(section.id) },
                             drawerFocusRequester = drawerHomeFocusRequester,
                             onContentFocusRequester = { drawerReturnFocusRequester = it })
@@ -511,9 +505,9 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
                             onContentFocusRequester = { drawerReturnFocusRequester = it })
                     }
                     "tmdb_favorites", "favorites" -> if (state.favorites.isNotEmpty()) item(key = section.id) {
-                        TmdbLibraryRow(section.title, state.favorites, onOpenFavorite,
-                            onMore = { onMore("favorites") },
-                            onLongClick = onToggleFavorite,
+                        FavoriteRow(section.title, state.favorites, onOpenFavorite,
+                            onMore = { onMore("favorites") }, onToggleFavorite = onToggleFavorite,
+                            onResolveBackdrop = onResolveFavoriteBackdrop,
                             onSectionFocus = { alignSection(section.id) },
                             drawerFocusRequester = drawerHomeFocusRequester,
                             onContentFocusRequester = { drawerReturnFocusRequester = it })
@@ -1558,11 +1552,44 @@ private fun WatchlistSimilarRow(
     }
 }
 
+@Composable
+private fun FavoriteRow(
+    title: String,
+    titles: List<TmdbTitle>,
+    onOpen: (TmdbTitle) -> Unit,
+    onMore: () -> Unit,
+    onToggleFavorite: (TmdbTitle) -> Unit,
+    onResolveBackdrop: (TmdbTitle) -> Unit,
+    onSectionFocus: () -> Unit = {},
+    drawerFocusRequester: FocusRequester? = null,
+    homeEntryFocusRequester: FocusRequester? = null,
+    onContentFocusRequester: (FocusRequester) -> Unit = {},
+) {
+    CompositionLocalProvider(LocalHomeRowPosterWidth provides
+        LocalHomeRowPosterWidth.current * 1.5f) {
+        TmdbLibraryRow(title, titles, onOpen, onMore,
+            onLongClick = onToggleFavorite,
+            homeEntryFocusRequester = homeEntryFocusRequester,
+            drawerFocusRequester = drawerFocusRequester,
+            cardAspectRatio = 16f / 9f,
+            artUrl = { it.backdropUrl ?: it.posterUrl },
+            caption = { item ->
+                val displayTitle = item.ukrainianTitle?.takeIf(String::isNotBlank)
+                    ?: item.englishTitle?.takeIf(String::isNotBlank)
+                    ?: item.originalTitle?.takeIf(String::isNotBlank)
+                    ?: item.title
+                listOfNotNull(displayTitle, item.year?.toString()).joinToString(" · ")
+            },
+            onCardVisible = onResolveBackdrop,
+            onSectionFocus = onSectionFocus,
+            onContentFocusRequester = onContentFocusRequester)
+    }
+}
+
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun WhatsPopularRow(title: String, state: TmdbPopularState,
     onOpen: (TmdbTitle) -> Unit, onRetry: () -> Unit,
-    onResolveBackdrop: (TmdbTitle) -> Unit,
     onSectionFocus: () -> Unit = {}, drawerFocusRequester: FocusRequester? = null,
     onContentFocusRequester: (FocusRequester) -> Unit = {}) {
     when (state) {
@@ -1576,11 +1603,9 @@ private fun WhatsPopularRow(title: String, state: TmdbPopularState,
             Button(onClick = onRetry) { Text("Повторити") }
         }
         is TmdbPopularState.Results -> if (state.titles.isNotEmpty())
-            CompositionLocalProvider(LocalHomeRowPosterWidth provides
-                LocalHomeRowPosterWidth.current * 1.5f) {
-                TmdbLibraryRow(title, state.titles, onOpen, onMore = {}, showMore = false,
-                    maxCards = 100, cardAspectRatio = 16f / 9f,
-                    artUrl = { it.backdropUrl ?: it.posterUrl },
+            TmdbLibraryRow(title, state.titles, onOpen, onMore = {}, showMore = false,
+                    maxCards = 100, cardAspectRatio = 2f / 3f,
+                    artUrl = { it.posterUrl },
                     caption = { item ->
                         val displayTitle = item.ukrainianTitle?.takeIf(String::isNotBlank)
                             ?: item.englishTitle?.takeIf(String::isNotBlank)
@@ -1588,11 +1613,9 @@ private fun WhatsPopularRow(title: String, state: TmdbPopularState,
                             ?: item.title
                         listOfNotNull(displayTitle, item.year?.toString()).joinToString(" · ")
                     },
-                    onCardVisible = onResolveBackdrop,
                     onSectionFocus = onSectionFocus,
                     drawerFocusRequester = drawerFocusRequester,
                     onContentFocusRequester = onContentFocusRequester)
-            }
     }
 }
 

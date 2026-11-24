@@ -176,6 +176,8 @@ class TmdbLibraryViewModel(application: Application,
     private val availabilityLock = Any()
     private val availabilityAttempted = mutableSetOf<String>()
     private val popularBackdropInFlight = ConcurrentHashMap.newKeySet<String>()
+    private val favoriteBackdropInFlight = ConcurrentHashMap.newKeySet<String>()
+    private val favoriteBackdropResolved = ConcurrentHashMap.newKeySet<String>()
     private val similarInFlight = ConcurrentHashMap.newKeySet<String>()
     private val mdblistCardInFlight = ConcurrentHashMap.newKeySet<String>()
     private val mdblistCardResolved = ConcurrentHashMap.newKeySet<String>()
@@ -631,6 +633,35 @@ class TmdbLibraryViewModel(application: Application,
                 Log.d(TAG, "English backdrop lookup failed key=$key: ${error.message}")
             } finally {
                 popularBackdropInFlight.remove(key)
+            }
+        }
+    }
+
+    fun resolveFavoriteBackdrop(title: TmdbTitle) {
+        val key = "${title.type.path}:${title.id}"
+        if (title.backdropUrl != null || key in favoriteBackdropResolved ||
+            !favoriteBackdropInFlight.add(key)) return
+        viewModelScope.launch {
+            try {
+                val connection = withContext(Dispatchers.IO) {
+                    workerTmdbConnection(getApplication())
+                } ?: return@launch
+                val backdrop = homeNetworkPermits.withPermit {
+                    connection.client.englishBackdrop(title.type, title.id, connection.accessKey)
+                }
+                favoriteBackdropResolved += key
+                val updatedTitle = title.copy(backdropUrl = backdrop,
+                    backdropEnglish = backdrop != null)
+                _state.value = _state.value.copy(favorites = _state.value.favorites.map {
+                    if (it.type == title.type && it.id == title.id) updatedTitle else it
+                })
+                withContext(Dispatchers.IO) { favorites.update(updatedTitle) }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                Log.d(TAG, "Favorite backdrop lookup failed key=$key: ${error.message}")
+            } finally {
+                favoriteBackdropInFlight.remove(key)
             }
         }
     }
