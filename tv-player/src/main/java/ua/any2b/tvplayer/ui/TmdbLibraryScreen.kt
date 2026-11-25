@@ -232,9 +232,9 @@ fun TmdbLibraryScreen(state: TmdbLibraryState, onOpen: (TmdbTitle) -> Unit,
         AnimariumLoadingScreen()
     } else BoxWithConstraints(Modifier.fillMaxSize()) {
         if (animationOnly) {
-            AsyncImage(model = R.drawable.animarium_splash, contentDescription = null,
+            AsyncImage(model = R.drawable.animarium_splash_blurred, contentDescription = null,
                 contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize().blur(72.dp))
+                modifier = Modifier.fillMaxSize())
             Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.52f)))
         } else {
             Box(Modifier.fillMaxSize().background(AppColors.BackgroundDark))
